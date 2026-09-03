@@ -1,0 +1,2220 @@
+"""VC 화면 — 3D로 자라는 신경망과 말하는 연출.
+
+처음 켜면 빈 화면에 **VC 항목 하나**만 있다. 쓸수록 기억·스킬이 항목으로 쌓이고
+서로 이어지면서 제2의 두뇌가 된다(결정 29·30).
+
+배치는 3차원이다. 항목이 적을 때는 성기게 퍼져 있다가 **쌓일수록 구에 가까워진다.**
+가운데 VC가 세포체, 뻗어 나간 항목들이 수상돌기 — 뉴런 구조와 같은 모양이다.
+평면에 늘어놓으면 연결이 서로를 가리지만, 구면에서는 깊이로 갈라진다.
+
+VC가 말할 때는 그 말이 딛고 있는 항목들이 **순서대로 밝아진다.** 문장 속도에 맞춰
+순차로 켜야 말하는 것처럼 보인다 — 한꺼번에 깜빡이면 장식으로 보인다.
+
+성능: 발광 효과는 **말하는 항목에만** 건다. 물리 계산은 자리가 잡히면 멈추고,
+그 뒤로는 회전·투영만 돈다. 항목마다 효과를 걸어두면 수백 개에서 무거워진다.
+
+UI는 PC 프로그램의 곁가지다. 본체는 폰이고(결정 25) 여기서는 보고·승인·열람만 한다.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import sys
+import threading
+import time
+from pathlib import Path
+
+from typing import Callable
+
+# **PyQt5 보다 먼저 불러온다.** `paths` 가 시스템 C++ 런타임을 붙드는데, Qt 가 제
+# 낡은 런타임을 DLL 찾는 자리 앞에 끼워 넣기 전에 해야 한다.
+import paths
+import report
+import talklog
+
+from PyQt5.QtCore import QEvent, QFileSystemWatcher, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtGui import QKeySequence, QTextCursor
+from PyQt5.QtWidgets import (
+    QApplication,
+    QShortcut,
+    QComboBox,
+    QFrame,
+    QMessageBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QMenu,
+    QLayout,
+    QScrollArea,
+    QSizePolicy,
+    QToolButton,
+    QStackedWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+import theme
+from panels import (PROPOSAL_AREA_MIN_H, ActivityFeed, Folded, Gaps, HudPanel, Indexer, Legend,
+                    SideReader,
+                    ModelPicker, NoteBody, NoteView, ProposalCard, RemoteGateCard,
+                    Results, ServerLink, Years)
+from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT, GraphView
+import notes as notes_module
+import orders
+from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
+from skills import Skill, SkillStore, analyze
+from store import Store
+
+# --- 화면 상수 ----------------------------------------------------------
+#
+# 색·글꼴은 **여기 없다.** theme.py가 들고 있고 `theme.T.X`로 쓴다 — 통째로 갈아
+# 끼워지므로 `from theme import ACCENT`로 가져가면 테마를 바꿔도 옛 색이 남는다.
+# 그래프는 graph3d.py, 옆칸 부품은 panels.py에 있다.
+
+LINK_MARK = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
+
+# 그래프에 한 번에 올리는 항목 수. 물리 계산이 항목 수에 비례해서 수천 개를
+# 올리면 창이 굳는다(4000개에 한 걸음 0.53초, 실측). 나머지는 검색·목록으로 닿는다.
+GRAPH_LIMIT = 400
+# 밖에서 고친 글이 늦어도 이만큼 안에 화면에 온다. 폴더 감시는 「생김」만 알려 주고
+# 「고쳐짐」은 안 알려 주기 때문에 틈틈이 직접 물어봐야 한다.
+OUTSIDE_POLL_MS = 3000
+
+
+class VoiceWorker(QThread):
+    """마이크를 듣는 별도 실 . 받아쓴 말만 화면 쪽으로 넘긴다.
+
+    **Qt 위젯은 이 실에서 만지지 않는다.** 다른 실에서 위젯을 건드리면 조용히 깨지거나
+    한참 뒤에 엉뚱한 곳에서 터진다 — 신호로만 넘긴다.
+    """
+
+    heard = pyqtSignal(str)  # 받아쓴 지시
+    level = pyqtSignal(float)  # 지금 들어오는 소리 크기(0~1)
+    state = pyqtSignal(str)  # 화면에 보여줄 상태 한 줄
+
+    def __init__(self, vocabulary: list[str]) -> None:
+        super().__init__()
+        self.vocabulary = vocabulary
+        self._stop = threading.Event()
+        self._pending = False
+        self._last: dict = {}  # 방금 들은 것. 답이 나오면 같이 기록한다  # 호출어만 듣고 지시를 기다리는 중
+
+    def run(self) -> None:
+        try:
+            import voice
+        except Exception as e:
+            self.state.emit(f"음성을 못 켰어: {e}")
+            return
+
+        try:
+            ears, mouth = voice.Ears(), voice.Mouth()
+            talk = voice.Talk()  # 답한 직후엔 호출어 없이 이어 말할 수 있다
+            self.mouth = mouth
+            # 받아쓰기 모델을 미리 올린다. 안 그러면 첫 마디를 말하는 동안 모델을
+            # 올리느라 그 말을 통째로 놓치고, 사용자는 "말해도 반응이 없다"고 본다.
+            self.state.emit("귀를 준비하는 중…")
+            ears._load()
+            self.state.emit(f'듣는 중. "{voice.WAKE} …" 라고 말해봐')
+            while not self._stop.is_set():
+                t0 = time.monotonic()
+                heard = ears.listen(mouth, on_level=self.level.emit,
+                                    vocabulary=self.vocabulary)
+                listen_took = time.monotonic() - t0
+                if self._stop.is_set():
+                    continue
+                if not heard:
+                    continue
+                # 무엇을 들었는지 늘 보여준다. 안 깨어났을 때 호출어를 못 알아들은 건지
+                # 아예 소리가 안 들어온 건지 구분할 수 있어야 고칠 수 있다.
+                self.state.emit(("들음: " + heard) if not ears.clipped
+                                else f"들음: {heard}  (소리가 잘려. 마이크를 조금 낮춰줘)")
+
+                if self._pending:
+                    order, woke, self._pending = heard, True, False
+                else:
+                    woke, order = talk.take(heard)
+                    if not woke:
+                        # 안 깨어난 것도 소리째 남긴다 — 호출어를 왜 못 잡았는지는
+                        # 글자만 봐서는 모른다. 원본을 되돌려 봐야 안다.
+                        talklog.record(heard=heard, woke=False,
+                                       took={"듣기": round(listen_took, 2)},
+                                       stt=f"{ears.device}/{ears.model_size}",
+                                       audio=talklog.save_audio(ears.last_audio))
+                        continue
+                    if not order:
+                        # 부르기만 했다. 실행하지 않고 기다린다(결정 11).
+                        self._pending = True
+                        self.state.emit("응, 말해")
+                        talklog.record(heard=heard, woke=True, order="",
+                                       reply="응", kind="wake",
+                                       took={"듣기": round(listen_took, 2)},
+                                       stt=f"{ears.device}/{ears.model_size}")
+                        mouth.say("응")
+                        continue
+                self._last = {"heard": heard, "order": order, "woke": woke,
+                              "listen": round(listen_took, 2),
+                              "spoke_at": ears.spoke_at,
+                              "audio": talklog.save_audio(ears.last_audio),
+                              "peak": round(ears.last_peak, 3),
+                              "clipped": ears.clipped,
+                              "stt": f"{ears.device}/{ears.model_size}"}
+                talk.opened()  # 답이 나가는 동안에도 이어 말할 수 있게 미리 연다
+                self.heard.emit(order)
+        except Exception as e:
+            # 마이크가 빠지거나 모델이 터져도 화면은 살아 있어야 한다.
+            self.state.emit(f"음성이 멈췄어: {e}")
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+class MainWindow(QWidget):
+    def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
+        """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
+        무엇이 무엇을 쓰는지 따라갈 수가 없다. 덩어리를 넘나드는 것은
+        `left`(그래프 판)·`scroll`·`rescan`(제안 칸) 셋뿐이라 그것만 주고받는다."""
+        super().__init__()
+        self.notes = notes
+        self.store = store
+        self.link = link or ServerLink()
+        self.skills = SkillStore(notes)
+        self.proposal_cards: list[ProposalCard] = []
+        self._empty_hint: QLabel | None = None
+        self._total_notes = 0
+        self._all_links = 0
+        self.setWindowTitle("VC")   # 부서는 불칸, 이 프로그램은 VC
+        self.resize(1180, 760)
+        # ★ **제 상태줄도 못 보여 줄 만큼 작아지면 안 된다.** 창 최소가 1049 에
+        # 갇혀 있던 것을 푸니 이제 300 까지 줄어드는데, 거기서는 **아래 띠가 통째로
+        # 사라진다** — 그리고 시험하는 쪽 말대로 **「접힌 것」과 「없는 것」을 사람이
+        # 구별할 길이 없다.** 400 이면 보이고 300 이면 안 보였다(재 봤다).
+        # 여유를 조금 두고 여기서 바닥을 친다.
+        self.setMinimumHeight(430)
+        self._apply_style()
+
+        left = self._build_head()
+        scroll, rescan = self._build_proposals()
+        self._build_body(left, scroll, rescan)
+
+    def _build_head(self) -> QFrame:
+        """이름표·검색칸·마이크·그래프. 돌려주는 것은 그래프가 든 판이다 —
+        본문 판이 그 위에 뜨므로 뒤에서 필요하다."""
+        self.graph = GraphView()
+        self.graph.empty_clicked.connect(lambda: self._later(self.clear_detail))
+        self.graph.node_clicked.connect(self.show_note)
+
+        wordmark = QLabel("VC")
+        wordmark.setStyleSheet(
+            f"color:{theme.T.TEXT.name()}; font-family:{theme.SANS}; font-size:22px;"
+            "font-weight:700; letter-spacing:1px;"
+        )
+        tagline = QLabel("VULCAN  ·  Local-first Ambient AI Workspace")
+        # **글자가 긴 이름표는 창을 밀어낸다.** `QLabel` 의 최소 폭은 글 전체가 들어갈
+        # 폭이다. 이 한 줄이 473px 를 밀어 창 최소 폭이 1624 가 됐고, 그러면
+        # **1366 짜리 노트북에 안 들어간다.** 이름표는 잘려도 되지만 창은 들어가야 한다.
+        tagline.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        tagline.setMinimumWidth(0)
+        tagline.setStyleSheet(
+            theme.small(theme.T.ACCENT, 0.6)
+        )
+        self.stats = QLabel()
+        # 위 띠도 같은 까닭으로 줄어들게 둔다 — 값이 늘 때마다 창이 못 줄어들면 안 된다.
+        self.stats.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.stats.setMinimumWidth(0)
+        self.stats.setStyleSheet(
+            theme.small(theme.T.DIM, 0.4)
+        )
+        # 엔진 상태. 어떤 모델이 지금 올라와 있는지 화면에서 바로 보이게 한다(결정 36).
+        self.engine_label = QLabel()
+        self.engine_label.setStyleSheet(
+            f"color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO}; font-size:10px;")
+        engine_timer = QTimer(self)
+        engine_timer.timeout.connect(self.refresh_engine)
+        engine_timer.start(4000)
+
+        # 밖에서 고친 것을 받아들인다.
+        #
+        # 파일이 원본인 설계라 옵시디언·메모장으로도 고칠 수 있다. 그걸 화면이 모르면
+        # **두 곳의 내용이 갈라진다** — 여기서 고친 것과 밖에서 고친 것 중 나중에 쓴
+        # 쪽이 상대를 조용히 덮는다.
+        #
+        # 폴더 하나만 감시한다. 파일마다 걸면 항목이 수만 개일 때 손잡이가 모자란다.
+        # 윈도우에서는 폴더 감시가 **생성·내용수정·삭제를 다 잡는다**(실측).
+        self._watch = QFileSystemWatcher([str(self.notes.root)], self)
+        self._watch.directoryChanged.connect(lambda _: self._outside_timer.start(400))
+        # 뿌리만 보면 `연/월` 폴더 안에서 고친 것을 놓친다 — 옵시디언으로 고친 글이
+        # 화면에 안 나타났다. 20년을 써도 폴더는 240개 남짓이라 다 봐도 싸다.
+        self._rewatch()
+        # 훑기는 딴 실에서. 끝나면 바뀐 게 있을 때만 다시 그린다.
+        self.indexer = Indexer(self.notes)
+        self.indexer.done.connect(self._indexed)
+        self.indexer.embedder.connect(self.notes.use_embedder)
+        self.indexer.meaning.connect(self._meaning_ready)
+        self.indexer.started.connect(lambda: setattr(self.graph, "indexing", True))
+        # **끝났을 때만** 연출을 깨운다. 한 바퀴 돌 때마다 깨우면, 이어서 도는 두 번째
+        # 바퀴가 그리기에 굶어 몇 배로 늘어진다 — 실제로 7초가 45초 넘게 갔다.
+        self.indexer.finished.connect(lambda: setattr(self.graph, "indexing", False))
+        self._outside_timer = QTimer(self)
+        self._outside_timer.setSingleShot(True)
+        self._outside_timer.timeout.connect(self.pull_outside)
+        # **폴더 감시는 「고쳐짐」을 안 알려 준다.** 파일이 생기고 없어지는 것만
+        # 알려 주기 때문에, 옵시디언으로 글 한 줄 고친 것은 신호가 아예 안 온다 —
+        # 낯선 PC 에서 40초를 기다려도 안 왔고, 아무 파일이나 새로 생기자 그제야
+        # 밀린 것이 한꺼번에 들어왔다. 그래서 틈틈이 직접 물어본다.
+        # 훑기는 안 바뀐 파일을 열지 않으므로(mtime 비교) 2만 개라도 싸다.
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(OUTSIDE_POLL_MS)
+        self._poll_timer.timeout.connect(self.pull_outside)
+        self._poll_timer.start()
+        # 우리가 쓴 것도 감시에 걸린다. 방금 우리가 쓴 거면 다시 읽을 필요가 없다.
+        self._wrote_at = 0.0
+
+        head_left = QVBoxLayout()
+        head_left.setSpacing(3)
+        head_left.addWidget(wordmark)
+        head_left.addWidget(tagline)
+        head_left.addWidget(self.engine_label)
+
+        # 검색·지시가 한 칸이다. 음성 지시도 결국 같은 문(ask)으로 들어온다.
+        self.ask_box = QLineEdit()
+        # 돋보기는 그림이 아니라 단추다 — 붙여 놓고 안 이으면 눌러도 아무 일이 없다.
+        find_act = self.ask_box.addAction(
+            theme.glyph_icon("search", theme.rgba(theme.T.DIM, 110)), QLineEdit.LeadingPosition)
+        find_act.triggered.connect(lambda: self.ask(self.ask_box.text()))
+        self.ask_box.setToolTip("한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다")
+        self.ask_box.setObjectName("ask")
+        self.ask_box.setFixedWidth(240)
+        self.ask_box.returnPressed.connect(lambda: self.ask(self.ask_box.text()))
+
+        # 말로 부르기. 글자 대신 동그란 표시 하나 — 무슨 단추인지는 색과 위치가 말한다.
+        self.mic_button = QPushButton()
+        self.mic_button.setObjectName("mic")
+        self.mic_button.setIcon(theme.glyph_icon("mic", theme.rgba(theme.T.DIM, 140)))
+        self.mic_button.setToolTip('말로 부른다. "브이씨, …" 라고 말하면 된다')
+        self.mic_button.setCursor(Qt.PointingHandCursor)
+        self.mic_button.clicked.connect(self.toggle_voice)
+        self.voice: VoiceWorker | None = None
+        self.mouth: Any = None  # 말로 물으면 말로 답한다. 켤 때 만든다
+        self.mic_level = 0.0
+
+        # **항상 보이는 「새 항목」.** 이것 말고 만드는 자리가 항목 카드 안에만 있었는데,
+        # 그 카드는 항목을 골라야 뜬다 — 기록이 0개인 첫 실행이면 만들 길이 사라진다.
+        self.head_new = QPushButton("＋ 새 항목")
+        self.head_new.setObjectName("quiet")
+        self.head_new.setToolTip("빈 항목을 만들고 바로 제목부터 친다  (Ctrl+N)")
+        self.head_new.setCursor(Qt.PointingHandCursor)
+        self.head_new.clicked.connect(self.new_note)
+
+        head = QHBoxLayout()
+        head.addLayout(head_left)
+        head.addStretch(1)
+        head.addWidget(self.head_new, 0, Qt.AlignBottom)
+        head.addSpacing(8)
+        head.addWidget(self.ask_box, 0, Qt.AlignBottom)
+        head.addSpacing(8)
+        head.addWidget(self.mic_button, 0, Qt.AlignBottom)
+        head.addSpacing(14)
+        head.addWidget(self.stats, 0, Qt.AlignBottom)
+
+        # 말하는 자리. 왼쪽 세로선이 강조색이라 VC가 말하는 중임이 바로 읽힌다.
+        self.say = QLabel()
+        self.say.setWordWrap(True)
+        self.say.setObjectName("say")
+        self._say_text = "준비됐어. 항목을 누르면 그 얘기를 해줄게."
+        self._caret_on = True
+        self._paint_say()
+        # 깜빡이는 커서. 멈춘 화면이 아니라 듣고 있는 중이라는 표시다.
+        caret = QTimer(self)
+        caret.timeout.connect(self._blink)
+        caret.start(600)
+
+        legend_row = QHBoxLayout()
+        legend_row.addWidget(Legend())
+        legend_row.addStretch(1)
+
+        graph_box = QVBoxLayout()
+        graph_box.setContentsMargins(24, 20, 24, 18)
+        graph_box.setSpacing(11)
+        graph_box.addLayout(head)
+        graph_box.addWidget(theme.Divider())
+        graph_box.addWidget(self.graph, 1)
+        graph_box.addLayout(legend_row)
+        graph_box.addWidget(self.say)
+        left = QFrame()
+        left.setLayout(graph_box)
+        self.left = left
+
+        return left
+
+    def _build_proposals(self):
+        """제안 칸. 스크롤과 '다시 훑기' 단추를 돌려준다."""
+        # --- 사이드 ---
+        self.proposal_box = QVBoxLayout()
+        self.proposal_box.setSpacing(8)
+        self.proposal_box.addStretch(1)
+        holder = QWidget()
+        holder.setLayout(self.proposal_box)
+        scroll = QScrollArea()
+        scroll.setWidget(holder)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        # 카드가 반만 보이면 단추를 못 누른다. 한 장은 통째로 들어갈 높이를 보장한다.
+        # 같은 까닭. 카드 한 장이 들어갈 높이는 보장하되, **그보다 더는 창을 안 민다.**
+        scroll.setMinimumHeight(PROPOSAL_AREA_MIN_H)
+        scroll.setMaximumHeight(PROPOSAL_AREA_MIN_H * 3)
+        # 제안이 있고 없고에 따라 이 칸의 최소 높이를 바꾼다().
+        self.proposal_scroll = scroll
+        # 카드는 세로로만 쌓인다. 가로 막대를 켜두면 빈 상자가 하나 떠 있는 꼴이 된다.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        rescan = QPushButton()
+        rescan.setObjectName("quiet")
+        rescan.setIcon(theme.glyph_icon("inspect", theme.rgba(theme.T.DIM, 130), 16))
+        rescan.setToolTip("이력을 훑어 고칠 점을 찾는다.\n"
+                          "15분마다 저절로 돌고, 지금 당장 보고 싶을 때 누른다.\n"
+                          "아무것도 바꾸지 않는다 — 제안만 만든다")
+        rescan.setCursor(Qt.PointingHandCursor)
+        rescan.clicked.connect(self.run_analyze)
+
+
+        return scroll, rescan
+
+    def _build_body(self, left: QFrame, scroll, rescan) -> None:
+        """본문 판과 오른쪽 줄을 짓고 창에 앉힌다."""
+        # --- 항목 칸: 읽기만 하는 게 아니라 여기서 쓰고 고친다 ---
+        #
+        # 저장 단추는 없다. 치는 대로 저장된다 — 저장을 눌러야 남는 물건은 결국
+        # 안 쓰게 된다. 다만 글자 하나마다 파일을 쓰면 색인이 계속 다시 돌아서,
+        # 손을 멈춘 뒤 잠깐 기다렸다가 쓴다.
+        self.editing: str | None = None   # 지금 열려 있는 항목의 원래 제목
+        self.editing_at: str = ""         # 그 항목의 **파일**. 쌍둥이 제목 때문에 꼭 필요하다
+        self._meaning_left = -1           # 뜻 벡터를 아직 못 만든 항목 수(-1 = 모름)
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.save_note)
+
+        self.detail_kind = QComboBox()
+        self.detail_kind.setObjectName("pick")
+        for key, label in theme.KIND_LABEL.items():
+            self.detail_kind.addItem(label, key)
+        self.detail_kind.hide()
+        self.detail_kind.currentIndexChanged.connect(lambda _: self.save_note())
+
+        self.detail_title = QLineEdit()
+        self.detail_title.setPlaceholderText("항목을 눌러봐")
+        self.detail_title.setObjectName("title")
+        self.detail_title.setReadOnly(True)
+        # 스타일시트만으로는 Qt 기본 테두리가 남는다 — 직접 끈다.
+        self.detail_title.setFrame(False)
+        self.detail_title.editingFinished.connect(self.rename_note)
+
+        self.detail_body = NoteBody()
+        self.detail_body.setObjectName("body")
+        self.detail_body.setAcceptRichText(False)  # 붙여넣기가 서식을 끌고 들어오면 안 된다
+        self.detail_body.setPlaceholderText("여기에 내용이 나온다.")
+        self.detail_body.setReadOnly(True)
+        self.detail_body.setMinimumHeight(150)
+        self.detail_body.setFrameShape(QFrame.NoFrame)
+        self.detail_body.viewport().setAutoFillBackground(False)
+        self.detail_body.textChanged.connect(lambda: self._save_timer.start(700))
+        self.detail_body.link_clicked.connect(self.follow_link)
+        # `[[`를 치면 그 자리에서 제목을 물어본다(미리 들고 있지 않는다).
+        self.detail_body.title_source = lambda part: self.notes.titles_like(part, 12)
+        self.detail_body.tag_clicked.connect(self.show_tag)
+        self.detail_body.image_pasted.connect(self.paste_image)
+
+        # 읽는 모습과 고치는 모습을 갈아 끼운다. 평소엔 서식이 입혀 보이고,
+        # 고칠 때만 원문이 뜬다 — 가끔 보고 고치는 용도에 이게 맞는다.
+        self.detail_view = NoteView(find_file=self.notes.attachment_path)
+        self.detail_view.link_clicked.connect(self.follow_link)
+        self.detail_view.tag_clicked.connect(self.show_tag)
+        self.detail_view.task_clicked.connect(self.flip_task)
+        self.detail_stack = QStackedWidget()
+        self.detail_stack.addWidget(self.detail_view)   # 0 = 읽기
+        self.detail_stack.addWidget(self.detail_body)   # 1 = 고치기
+        self.detail_stack.setMinimumHeight(150)
+        # 읽는 글에 숨 쉴 틈. 줄간격 1.0은 20년치를 읽으라고 내놓을 값이 아니다.
+        for box in (self.detail_view, self.detail_body):
+            box.setStyleSheet("line-height:160%;")
+            doc = box.document()
+            doc.setDocumentMargin(14)
+
+        self.side_btn = QPushButton("옆에")
+        self.side_btn.setObjectName("quiet")
+        self.side_btn.setToolTip("이 항목이 가리키는 것을 옆에 띄워 놓고 본다")
+        self.side_btn.setCursor(Qt.PointingHandCursor)
+        self.side_btn.clicked.connect(self.open_side_here)
+        self.side_btn.hide()
+
+        self.back_btn = QPushButton("←")
+        self.back_btn.setObjectName("quiet")
+        self.back_btn.setToolTip("앞서 보던 항목으로 (Alt+←)")
+        self.back_btn.setCursor(Qt.PointingHandCursor)
+        self.back_btn.clicked.connect(self.go_back)
+        self.fwd_btn = QPushButton("→")
+        self.fwd_btn.setObjectName("quiet")
+        self.fwd_btn.setToolTip("다시 앞으로 (Alt+→)")
+        self.fwd_btn.setCursor(Qt.PointingHandCursor)
+        self.fwd_btn.clicked.connect(self.go_forward)
+
+        # **눈에 보이는 닫는 길이 있어야 한다.** Esc 는 있었지만 아는 사람만 쓴다 —
+        # 낯선 PC 실사용에서 「카드를 한 장 열면 닫을 길이 없다. 프로그램을 다시 켜는
+        # 것 말고 그래프로 돌아갈 길을 못 찾았다」로 걸렸다. 그것 때문에 그날 재려던
+        # 것 하나를 통째로 못 쟀다.
+        self.shut_btn = QPushButton("닫기")
+        self.shut_btn.setObjectName("quiet")
+        self.shut_btn.setToolTip("이 항목을 닫고 그래프로 돌아간다  (Esc)")
+        self.shut_btn.setCursor(Qt.PointingHandCursor)
+        self.shut_btn.clicked.connect(self.clear_detail)
+        self.shut_btn.hide()
+
+        self.edit_btn = QPushButton("고치기")
+        self.edit_btn.setObjectName("quiet")
+        self.edit_btn.setToolTip("원문을 열어 고친다. 다시 누르면 입힌 모습으로 돌아온다")
+        self.edit_btn.setCursor(Qt.PointingHandCursor)
+        self.edit_btn.clicked.connect(self.toggle_edit)
+        self.edit_btn.hide()
+
+        # 「새 항목」·「지우기」 단추는 머리줄과 `⋯` 메뉴로 옮겼다. 여기에 만들어
+        # 두던 위젯은 **어느 칸에도 안 들어가 있었다** — 부모 없는 위젯을 `show()`
+        # 하면 그게 그대로 **독립 창**이 된다. 낯선 PC 에서 「지우기」만 든 136x62
+        # 조각 창으로 보였고, 주 창을 닫아도 그것 때문에 프로세스가 안 죽었다.
+        # 목차. 18만 자짜리 기록에서 원하는 자리로 갈 길이 스크롤뿐이면 안 열게 된다.
+        self.toc = QComboBox()
+        self.toc.setObjectName("pick")
+        self.toc.setToolTip("소제목으로 바로 간다")
+        # 남는 폭을 다 먹지 않게 묶는다. 판이 둘로 갈리면 이것들이 늘어나 옆 단추가 잘렸다.
+        self.toc.setMinimumWidth(88)
+        self.toc.setMaximumWidth(132)
+        self.toc.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.toc.hide()
+        self.toc.activated.connect(self._jump_heading)
+
+        detail_tools = QHBoxLayout()
+        detail_tools.setContentsMargins(0, 0, 0, 0)
+        # 지난 판. AI가 대부분을 쓰는 구조라 **어제 것으로 돌아갈 길**이 있어야 한다.
+        self.past = QComboBox()
+        self.past.setObjectName("pick")
+        self.past.setToolTip("지난 판으로 되돌린다")
+        self.past.setMinimumWidth(84)
+        self.past.setMaximumWidth(124)
+        self.past.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.past.hide()
+        self.past.activated.connect(self._restore_past)
+
+        detail_tools.addWidget(self.back_btn)
+        detail_tools.addWidget(self.fwd_btn)
+        detail_tools.addWidget(self.detail_kind)
+        detail_tools.addWidget(self.toc)
+        detail_tools.addWidget(self.past)
+        detail_tools.addStretch(1)
+        detail_tools.addWidget(self.side_btn)
+        detail_tools.addWidget(self.edit_btn)
+        # 자주 안 쓰는 것은 안으로. 판이 둘로 갈리면 폭이 절반이라 단추 열 개가
+        # 겹쳐 글자가 잘렸다.
+        self.more_btn = QToolButton()
+        self.more_btn.setObjectName("quiet")
+        self.more_btn.setText("⋯")
+        self.more_btn.setToolTip("새 항목 · 서식 · 지우기")
+        self.more_btn.setCursor(Qt.PointingHandCursor)
+        self.more_btn.setPopupMode(QToolButton.InstantPopup)
+        self.more_menu = QMenu(self.more_btn)
+        self.more_btn.setMenu(self.more_menu)
+        self.more_menu.aboutToShow.connect(self._build_more)
+        detail_tools.addWidget(self.more_btn)
+        detail_tools.addWidget(self.shut_btn)
+        self.years = Years()
+        # **목록 단추들은 자기 신호 안에서 자기를 다시 짓는다.** 누르면 목록이
+        # 새로 그려지면서 방금 누른 단추가 지워지고, Qt 는 제 밑이 파여 죽는다.
+        # 신호를 받는 자리에서 곧장 미룬다 — 한 곳에서 막아야 새로 잇는 것도 안전하다.
+        self.years.picked.connect(lambda y: self._later(lambda: self.show_year(y)))
+
+        self.results = Results()
+        self.results.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
+        self.results.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
+        self.results_head = theme.section("찾은 것", "검색·태그로 걸린 항목. 눌러서 연다")
+        self.results_head.hide()
+        self.results.hide()
+
+        self.gaps = Gaps()
+        self.gaps.picked.connect(lambda n: self._later(lambda: self.fill_gap(n)))
+
+        # 같은 제목이 둘 이상일 때만 뜬다. 어느 파일을 열었는지 밝히는 줄.
+        self.twin_note = QLabel()
+        self.twin_note.setWordWrap(True)
+        self.twin_note.setStyleSheet(theme.small(theme.T.WARN, 0.85, 10))
+        self.twin_note.hide()
+
+        self.detail_links = QLabel()
+        self.detail_links.setWordWrap(True)
+        self.detail_links.setTextFormat(Qt.RichText)
+        # 밖으로 나가는 주소가 아니라 우리끼리 쓰는 이름표다. 브라우저를 열면 안 된다.
+        self.detail_links.setOpenExternalLinks(False)
+        self.detail_links.linkActivated.connect(self._link_row_clicked)
+        self.detail_links.setStyleSheet(
+            theme.small(theme.T.ACCENT, 0.5)
+        )
+
+        # 끼워 넣은 것. 본문 칸은 고칠 수 있어야 하므로 원문(![[…]])을 그대로 두고,
+        # 그 내용은 아래에 따로 펼친다 — 옵시디언도 편집 모드에서는 원문을 보여준다.
+        self.embeds_head = QLabel("끼워 넣은 것")
+        self.embeds_head.setStyleSheet(
+            f"color:{theme.css(theme.T.ACCENT, 0.5)}; font-family:{theme.MONO};"
+            "font-size:10px; letter-spacing:1px; padding-top:4px;")
+        self.embeds_head.hide()
+        self.embeds = Results(limit=3)
+        self.embeds.picked.connect(self.show_note)
+        self.embeds.hide()
+
+        # 누가 나를 가리키나. 나가는 링크(내가 적은 것)와 섞으면 구분이 안 된다.
+        self.backs_head = QLabel("가리킨 곳")
+        self.backs_head.setStyleSheet(
+            f"color:{theme.css(theme.T.ACCENT, 0.5)}; font-family:{theme.MONO};"
+            "font-size:10px; letter-spacing:1px; padding-top:4px;")
+        self.backs_head.hide()
+        self.backs = Results(limit=4)
+        self.backs.picked.connect(self.show_note)
+        self.backs.hide()
+
+        detail_card = self.detail_card = HudPanel(left)  # 그래프 위에 뜨는 본문 판
+        detail_card.setObjectName("reader")
+
+        # 옆에 띄우는 읽기 전용 판. 딴 글을 곁에 두고 보면서 쓴다.
+        self.side_read = SideReader(left, find_file=self.notes.attachment_path)
+        self.side_read.link_clicked.connect(self.follow_link)   # follow_link 가 이미 미룬다
+        self.side_read.closed.connect(self.close_side)
+
+        # 열어 본 차례. **앞의 것이 닫히는 게 아니라 되돌아갈 수 있어야 한다.**
+        self._trail: list[str] = []
+        self._trail_at = -1
+        # 옆 판을 열어 뒀는지. **`isVisible()`로 판단하지 않는다** — 창이 아직 안 떴을
+        # 때도 자리는 잡혀 있어야 한다.
+        self.side_open = False
+        detail_card.hide()   # 항목을 열 때만 뜬다
+        dbox = QVBoxLayout(detail_card)
+        dbox.setContentsMargins(26, 20, 26, 18)
+        dbox.setSpacing(8)
+        dbox.addLayout(detail_tools)
+        dbox.addWidget(self.detail_title)
+        dbox.addWidget(self.twin_note)
+        dbox.addWidget(self.detail_stack, 1)
+        dbox.addWidget(self.detail_links)
+        dbox.addWidget(self.embeds_head)
+        dbox.addWidget(self.embeds)
+        dbox.addWidget(self.backs_head)
+        dbox.addWidget(self.backs)
+
+        self.footer = QLabel()
+        self.footer.setStyleSheet(
+            theme.small(theme.T.DIM, 0.3, 9)
+        )
+        # ★ **글자가 긴 이름표는 창을 밀어낸다.** `QLabel` 의 최소 폭은 글 전체가
+        # 들어갈 폭이라, 아래 띠에 값을 하나 더할 때마다 **창이 그만큼 못 줄어든다.**
+        # 여기 하나가 473px 를 밀고 있었고 창 최소 폭이 1624 가 됐다 —
+        # 1366 짜리 노트북에는 안 들어간다. **아래 띠는 잘려도 되지만 창은 들어가야 한다.**
+        self.footer.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.footer.setMinimumWidth(0)
+
+        self.feed = ActivityFeed()
+        # 쓸 모델을 고르는 칸. 사양이 다른 PC에서도 각자 맞게 쓴다(결정 42).
+        self.models = ModelPicker(self.link, lambda t: self.report(t, [ROOT]))
+
+        # 외부 PC가 붙으려 할 때만 뜬다. 폰이 없거나 안 들고 있을 때 여기서 승인한다.
+        self.gate_card = RemoteGateCard(self.link, lambda t: self.report(t, [ROOT]))
+        self.gate_card.hide()
+
+        # 매일 보는 것은 펴 두고, 가끔 쓰는 것은 접는다. 예전엔 여섯 칸이 다 펴진 채
+        # 세로로 쌓여 **창 최소 높이가 1375px**이었다 — 1080p 화면에 안 들어갔다.
+        prop_box = QWidget()
+        prop_lay = QVBoxLayout(prop_box)
+        prop_lay.setContentsMargins(0, 0, 0, 0)
+        prop_lay.setSpacing(6)
+        prop_lay.addWidget(rescan, 0, Qt.AlignRight)
+        prop_lay.addWidget(scroll)
+        self.proposals_fold = Folded("제안", "VC가 스스로 찾은 고칠 점. 승인해야 반영된다", prop_box)
+        self.feed_fold = Folded("활동", "방금 한 일. 제안의 근거가 여기 쌓인다", self.feed)
+        self.models_fold = Folded("모델", "이 PC 사양에 맞게 자동. 직접 골라도 된다", self.models)
+
+        side = QVBoxLayout()
+        side.setContentsMargins(18, 20, 18, 16)
+        side.setSpacing(9)
+        side.addWidget(self.gate_card)
+        side.addWidget(self.results_head)
+        side.addWidget(self.results)
+        side.addWidget(theme.section("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다"))
+        side.addWidget(self.gaps)
+        side.addWidget(theme.Divider())
+        side.addWidget(theme.section("언제", "해마다 적은 것. 눌러서 그해를 훑는다"))
+        side.addWidget(self.years)
+        side.addWidget(theme.Divider())
+        side.addWidget(self.proposals_fold)
+        side.addWidget(self.feed_fold)
+        side.addWidget(self.models_fold)
+        side.addStretch(1)
+        side.addWidget(self.footer)
+
+        side_inner = QWidget()
+        side_inner.setLayout(side)
+        # **통째로 스크롤 된다.** 칸이 늘어도 창이 화면 밖으로 자라지 않는다.
+        side_scroll = QScrollArea()
+        side_scroll.setWidget(side_inner)
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setFrameShape(QFrame.NoFrame)
+        side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # ★ **굴림칸은 굴러야지 창을 밀면 안 된다.** `setWidgetResizable(True)` 면
+        # Qt 가 **속 위젯의 최소 높이를 굴림칸의 최소 높이로 삼는다.** 그래서 칸이
+        # 길어질수록 창이 못 줄어들었다 — 낯선 PC 에서 창 최소 높이가 **1049** 가 돼
+        # 1920x1080 화면에서 작업표시줄에 상태줄이 가렸다(쓸 자리는 1032 다).
+        # 여기서 재 보니 못을 박는 것만으로 창 최소가 **636 → 300** 으로 내려간다.
+        side_scroll.setMinimumHeight(160)
+
+        side_frame = QFrame()
+        side_frame.setObjectName("panel")
+        wrap = QVBoxLayout(side_frame)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.addWidget(side_scroll)
+        side_frame.setFixedWidth(348)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(left, 1)
+        outer.addWidget(side_frame)
+
+        # ★★ **뜰 때는 빈 채로 뜬다. 항목은 뜬 뒤에 붙인다.**
+        #
+        # Qt 는 **창이 뜨는 순간 한 번** 레이아웃이 내놓은 최소를 창에 박는다.
+        # 여기서 곧바로 채우면 그 순간 항목이 다 올라와 있어 최소가 크게 잡히고,
+        # **그 뒤로는 무엇을 해도 안 풀린다** — 크기를 흔들어도, 레이아웃을 속까지
+        # 무르게 해도, `setMinimumSize(0, 0)` 을 여러 번 불러도 안 됐다.
+        #
+        # 시험하는 쪽이 갈라 준 값이 이걸 못 박았다:
+        #
+        #     색인 있는 채로 뜸            → 1049 에 갇힌다 (화면 쓸 자리는 1032)
+        #     색인 없이 떠서 나중에 채움    → 318. **718개가 다 들어와도 안 커진다**
+        #
+        # 같은 폴더·같은 파일·같은 판인데 **뜨는 순간에 항목이 있었는지**만으로 갈렸다.
+        # 그러니 **모두가 「색인 없이 뜬 사람」의 길을 걷게 한다.**
+        #
+        # 이건 **오래 쓴 사람에게만 나던 결함**이다 — 갓 깐 사람은 0개로 뜨니 멀쩡하고,
+        # 며칠 쓴 사람만 창이 커진 채 갇힌다. 신고가 와도 재현이 잘 안 될 자리다.
+        #
+        # **다만 「뜨는 일」과 「기록을 손보는 일」은 갈라 둔다.** 가운데 항목을
+        # 만들거나 옛 이름을 옮기는 것은 화면과 상관없이 **지금 해야 한다** —
+        # 미뤘더니 검사가 「안 옮겨졌다」로 걸렸다. 미룰 것은 그리는 것뿐이다.
+        self.ensure_root()
+        QTimer.singleShot(0, self.refresh)
+        # 서버에 거는 첫 전화는 창이 뜬 **뒤로** 미룬다. 꺼져 있으면 연결을 기다리는
+        # 동안 창이 통째로 굳는다 — 켤 때 제일 먼저 보이는 게 굳은 창이면 안 된다.
+        self._bind_keys()
+        QTimer.singleShot(0, self._greet_server)
+
+    def _apply_style(self) -> None:
+        # 선택자 없는 속성과 선택자 규칙을 한 문자열에 섞으면 뒤쪽이 통째로 무시된다.
+        self.setStyleSheet(f"""
+            QWidget {{ background: {theme.T.BG.name()}; color: {theme.T.TEXT.name()};
+                       font-family: {theme.SANS}; font-size: 12px; }}
+            QLabel {{ background: transparent; }}
+            QFrame#panel {{ background: {theme.T.PANEL.name()};
+                            border-left: 1px solid {theme.css(theme.T.ACCENT, 0.12)}; }}
+            QFrame#hud {{ background: {theme.css(theme.T.ACCENT, 0.03)};
+                          border: 1px solid {theme.css(theme.T.ACCENT, 0.12)}; border-radius: 6px; }}
+            QLabel#say {{ color: {theme.T.TEXT.name()}; font-size: 14px; padding: 12px 16px;
+                          background: {theme.css(theme.T.ACCENT, 0.05)};
+                          border-left: 2px solid {theme.T.ACCENT.name()}; border-radius: 3px; }}
+            QLabel#chip {{ color: {theme.T.ACCENT.name()}; background: {theme.css(theme.T.ACCENT, 0.1)};
+                           border: 1px solid {theme.css(theme.T.ACCENT, 0.3)}; border-radius: 3px;
+                           padding: 2px 8px; font-family: {theme.MONO}; font-size: 9px;
+                           font-weight: 600; letter-spacing: 1px; }}
+            QPushButton {{ background: transparent; color: {theme.css(theme.T.DIM, 0.6)};
+                           border: 1px solid {theme.css(theme.T.DIM, 0.2)}; border-radius: 3px;
+                           padding: 5px 12px; font-family: {theme.MONO}; font-size: 10px;
+                           letter-spacing: 1px; }}
+            QPushButton:hover {{ color: {theme.T.TEXT.name()}; border-color: {theme.css(theme.T.ACCENT, 0.5)}; }}
+            QPushButton#primary {{ color: {theme.T.ACCENT.name()};
+                                   border-color: {theme.css(theme.T.ACCENT, 0.4)};
+                                   background: {theme.css(theme.T.ACCENT, 0.08)}; }}
+            QPushButton#primary:hover {{ background: {theme.css(theme.T.ACCENT, 0.18)}; }}
+            /* 곁다리 동작은 테두리를 뺀다. 단추가 여럿이면 뭘 눌러야 할지 헷갈린다. */
+            QPushButton#quiet {{ border: none; background: transparent;
+                                 color: {theme.css(theme.T.DIM, 0.45)}; padding: 5px 8px; }}
+            QPushButton#quiet:hover {{ color: {theme.T.TEXT.name()}; }}
+            QPushButton#mic {{ border: 1px solid {theme.css(theme.T.DIM, 0.25)}; border-radius: 4px;
+                               color: {theme.css(theme.T.DIM, 0.6)}; padding: 6px 9px; }}
+            QPushButton#mic:hover {{ border-color: {theme.css(theme.T.ACCENT, 0.6)};
+                                     color: {theme.T.ACCENT.name()}; }}
+            QPushButton#mic[listening="true"] {{ border-color: {theme.T.ACCENT.name()};
+                                                 color: {theme.T.ACCENT.name()};
+                                                 background: {theme.css(theme.T.ACCENT, 0.12)}; }}
+            QLineEdit#ask {{ background: {theme.css(theme.T.ACCENT, 0.04)};
+                             border: 1px solid {theme.css(theme.T.ACCENT, 0.2)}; border-radius: 3px;
+                             padding: 5px 10px; color: {theme.T.TEXT.name()}; font-size: 12px; }}
+            QLineEdit#ask:focus {{ border-color: {theme.css(theme.T.ACCENT, 0.6)};
+                                   background: {theme.css(theme.T.ACCENT, 0.08)}; }}
+            QComboBox#pick {{ background: {theme.css(theme.T.ACCENT, 0.05)};
+                              border: 1px solid {theme.css(theme.T.ACCENT, 0.18)}; border-radius: 3px;
+                              padding: 3px 8px; color: {theme.css(theme.T.DIM, 0.75)}; font-size: 11px; }}
+            QComboBox#pick:hover {{ border-color: {theme.css(theme.T.ACCENT, 0.5)}; }}
+            QComboBox#pick QAbstractItemView {{ background: {theme.T.PANEL.name()};
+                                                color: {theme.T.TEXT.name()};
+                                                selection-background-color: {theme.css(theme.T.ACCENT, 0.25)}; }}
+            /* `[[` 목록. 콤보 펼침 목록은 입혀 놨는데 여기만 흰 바탕·파란 막대로
+               남아, 검은 화면에서 이것만 튀었다. 같은 옷을 입힌다. */
+            QListView#link_pop {{ background: {theme.T.PANEL.name()};
+                                  color: {theme.T.TEXT.name()};
+                                  border: 1px solid {theme.css(theme.T.ACCENT, 0.22)};
+                                  outline: none; padding: 2px;
+                                  selection-background-color: {theme.css(theme.T.ACCENT, 0.25)};
+                                  selection-color: {theme.T.TEXT.name()}; }}
+            QListView#link_pop::item {{ padding: 3px 8px; }}
+            /* 확인창. 시스템 회색 상자 그대로면 말투만 우리 것이고 모습은 윈도우다. */
+            QMessageBox {{ background: {theme.T.PANEL.name()}; }}
+            QMessageBox QLabel {{ color: {theme.T.TEXT.name()}; font-size: 12px; }}
+            QMessageBox QPushButton {{ background: {theme.css(theme.T.ACCENT, 0.05)};
+                                       border: 1px solid {theme.css(theme.T.ACCENT, 0.22)};
+                                       border-radius: 3px; padding: 5px 16px;
+                                       color: {theme.css(theme.T.DIM, 0.85)}; font-size: 11px; }}
+            QMessageBox QPushButton:hover {{ border-color: {theme.css(theme.T.ACCENT, 0.6)};
+                                             color: {theme.T.TEXT.name()}; }}
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{ background: transparent; width: 5px; margin: 0; }}
+            QScrollBar::handle:vertical {{ background: {theme.css(theme.T.ACCENT, 0.25)}; border-radius: 2px; }}
+            QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+        """)
+
+    # --- 데이터 ---------------------------------------------------------
+
+    def _뿌리파일있나(self) -> bool:
+        """시작 항목이 **파일로** 이미 있나. 색인이 아니라 파일을 본다.
+
+        ★ 색인만 보고 만들었더니 **색인이 없어질 때마다 시작 항목이 하나씩 늘었다.**
+        시험하는 쪽이 잡았다 — 색인을 지우고 띄우니 8월 폴더에 `VC.md` 가 있는데도
+        9월 폴더에 `VC.md` 를 새로 만들었고, 같은 제목 둘이 되어 ⚠ 가 떴다.
+        내용은 글자 하나까지 같았다.
+
+        사람에게도 나는 자리다 — **색인이 깨지거나, 자리를 옮기거나, 기록만
+        백업했다 되살릴 때.** 그때마다 「VC」가 하나씩 는다.
+
+        색인은 언제든 다시 만들 수 있는 것이고 **파일이 원본이다.** 그러니
+        「있나 없나」는 원본에 물어야 한다. 뿌리가 없을 때만 도는 길이라 값도 싸다.
+        """
+        try:
+            for 파일 in self.notes.notes_files():
+                if 파일.stem == ROOT:
+                    return True
+        except OSError:
+            pass          # 못 훑으면 없는 것으로 친다. 하나 더 만드는 편이 낫다
+        return False
+
+    def ensure_root(self) -> None:
+        """빈 화면에 VC 항목 하나. 여기서부터 자란다.
+
+        옛 이름(이비)으로 쌓아 둔 기록이 있으면 한 번 옮긴다 — 이름만 바꾸고 기록을
+        두고 가면, 쓰던 사람의 그래프에서 가운데가 통째로 끊긴다.
+        """
+        # 새 이름이 이미 있으면 rename이 스스로 거절한다 — 덮어써서 기록을 잃느니
+        # 옛 항목을 그대로 남기는 편이 낫다.
+        if self.notes.read(OLD_ROOT) is not None:
+            self._wrote_at = time.monotonic()
+            self.notes.rename(OLD_ROOT, ROOT)
+        if self.notes.read(ROOT) is None and not self._뿌리파일있나():
+            # 우리가 만든 것이다. 감시가 이걸 "밖에서 바뀜"으로 보고 훑기를 또 돌리면
+            # 켤 때마다 훑기를 두 번 한다.
+            self._wrote_at = time.monotonic()
+            self.notes.write(Note(
+                title=ROOT,
+                body="여기서 시작한다. 쓸수록 항목이 늘고 서로 이어진다.",
+                kind="agent",
+                pinned=True,
+            ))
+
+    def refresh(self, scan: bool = True) -> None:
+        """화면을 다시 그린다.
+
+        `scan=True`면 폴더를 훑어 밖에서 바뀐 것을 잡는다. 그 훑기는 **딴 실에서**
+        돈다 — 항목이 쌓이면 훑는 데만 몇 초가 걸려서, 화면 실에서 하면 창이 굳는다.
+        """
+        self.ensure_root()
+        if scan:
+            self.indexer.ask()
+        # 20년치를 다 그리면 창이 굳는다 — 물리 계산이 항목 수에 비례한다.
+        # 고정한 것·최근 본 것부터 채우고, 지금 보고 있는 것은 반드시 남긴다.
+        self._total_notes = self.notes.conn.execute(
+            "SELECT count(*) AS n FROM notes").fetchone()["n"]
+        # 기록 전체에서 사람이 이은 수. 화면에 올라온 것끼리만 세는 값과 나란히 적어
+        # **「화면에 안 보이는 것」과 「아예 없는 것」이 갈리게 한다.**
+        self._all_links = self.notes.conn.execute(
+            "SELECT count(*) AS n FROM links").fetchone()["n"]
+        must = {ROOT} | set(self.graph.focus) | ({self.editing} if self.editing else set())
+        picked = self.notes.working_set(GRAPH_LIMIT, keep=must)
+        # **고른 것의 종류만** 가져온다. 2만 행을 통째로 끌어오면 그것만 0.1초다.
+        self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
+                        self.notes.kin(picked))
+        self.load_proposals()
+
+
+        # 세는 것도 질의 하나로. 행을 다 끌어와 파이썬에서 세면 20년치에서 값이 든다.
+        modules = self.notes.conn.execute(
+            "SELECT count(*) AS n FROM notes WHERE kind = 'skill'").fetchone()["n"]
+        self.stats.setText(
+            f"항목 {self._total_notes:02d}   ·   모듈 {modules:02d}   ·   "
+            f"제안 {len(self.proposal_cards):02d}"
+        )
+        self.years.show_years(self.notes.by_year())
+        self.gaps.show_gaps(self.notes.unresolved())
+        self.feed.show_rows(self.store.recent(9))
+        # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
+        shown = len(self.graph.nodes)
+        seen = (f"보임 {shown}/{self._total_notes}"
+                if shown < self._total_notes else f"항목 {self._total_notes}")
+        # 같은 제목이 두 폴더에 있으면 **어느 쪽을 여는지 우리가 고른다** — 사용자가
+        # 2027년 회의를 열었다고 믿고 2026년 것을 고칠 수 있다. 조용히 두면 안 된다.
+        dup = self.notes.duplicates()
+        if dup:
+            # ★ **사람이 알고 싶은 것은 「지울 것이 몇 개인가」다.**
+            # 앞서는 `len(dup)`, 곧 **겹친 제목의 가짓수**를 찍었다 — 파일이 둘인데
+            # 「1개」로 나왔다. 「제목이 하나 있다」로도 「하나가 겹친다」로도 읽히고,
+            # 사람이 「1개」를 보고 파일 하나만 지우면 될 줄 안다. 우연히 맞지만
+            # **뜻이 어긋난다.** `duplicates()` 는 (제목, 그 제목의 파일 수)를 준다.
+            # **남는 하나를 뺀 나머지**, 곧 손이 갈 수를 적는다.
+            군더더기 = sum(n - 1 for _, n in dup)
+            이름 = dup[0][0] if len(dup) == 1 else f"{dup[0][0]} 등"
+            warn = f"⚠ 이름이 겹친다 — {이름}, 지울 것 {군더더기}개  /  "
+        elif self._meaning_left > 0:
+            # 뜻 벡터를 만드는 중이라고 말해 준다. 2만 개면 50분짜리 일이라
+            # **말없이 돌면 뭐가 잘못된 줄 안다.**
+            warn = f"뜻 익히는 중 {self._meaning_left}개 남음  /  "
+        else:
+            # ★ **아무 일 없을 때는 아무 말도 안 한다.** 「시스템 정상」은 자리만
+            # 차지하고 아무것도 안 알린다 — 좁은 창에서는 그것 때문에 **정작 읽어야 할
+            # 값이 잘렸다.** 이상할 때만 말하면 그 말이 눈에 띈다.
+            warn = ""
+        # **무엇을 센 값인지 밝힌다.** 이 수는 화면에 올라온 것들 사이의 선만 센다.
+        # 그냥 「연결 75」로 두었더니 `--이음선` 이 뽑아 준 125 와 안 맞아 헷갈렸다 —
+        # 둘이 다른 것을 세는데 이름이 같으면 사람이 못 가린다.
+        # ★ **같은 낱말이 두 자리에서 다른 수를 내면 사람이 못 읽는다.**
+        # 진단 묶음의 「연결 수」는 기록 전체를 세고, 여기 「적은 것」은 **화면에
+        # 올라온 것들 사이**만 센다. 그래서 8 대 4, 2 대 0 처럼 갈렸고,
+        # 화면만 본 사람은 **「내가 적은 것이 안 세어졌다」**로 읽었다.
+        # 이제 **둘을 나란히 적는다** — 「적은 것 0/2」면 「전체엔 둘 있는데 지금
+        # 화면에는 안 보인다」로 읽힌다.
+        굳은 = len(self.graph.edges) - len(self.graph.soft)
+        모두 = self._all_links
+        선 = (f"연결 {len(self.graph.edges)} (보이는 것끼리)"
+              if shown < self._total_notes else
+              f"연결 {len(self.graph.edges)}")
+        # ★ **좁아지면 뒤엣것부터 잘린다. 그러니 값진 것을 앞에 둔다.**
+        # 앞서는 「보임 → 연결 → 적은 것」 차례라 **사람이 손으로 이은 수가 제일 먼저
+        # 사라졌다.** 시험하는 쪽이 짚었다 — 셋 중 그것만이 **사람이 적은 것**이고,
+        # 나머지 둘은 프로그램이 센 것이다. 「보임 400/718」은 창을 보면 대충 알지만
+        # **「적은 것 0/2」는 다른 데서 볼 길이 없다.**
+        # ★ **경고를 맨 앞에 둔다.** 뒤엣것부터 잘리는데 경고가 끝에 있어서,
+        # 좁은 창에서 **「⚠」만 남고 무엇이 이상한지는 잘려 나갔다.** 시험하는 쪽이
+        # 「⚠ 를 띄웠으면 무엇이 이상한지 볼 길이 하나는 있어야 한다」고 짚었는데,
+        # 길은 이미 있었고 **그 길이 잘리고 있었던 것**이다.
+        # 값진 것을 앞에 두는 규칙을 아래 띠 가운데에만 쓰고 경고에는 안 썼다.
+        self.footer.setText(f"{warn}적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+
+    # --- 말로 부르기 -----------------------------------------------------
+
+    def _set_mic(self, listening: bool) -> None:
+        """색과 이름을 함께 바꾼다. 색은 빨리 읽히고 이름은 확실하다 — 둘 다 쓴다."""
+        self.mic_button.setProperty("listening", "true" if listening else "false")
+        self.mic_button.setToolTip("듣는 중. 다시 누르면 끈다"
+                                   if listening else '말로 부른다. "브이씨, …" 라고 말하면 된다')
+        self.mic_button.setIcon(theme.glyph_icon("mic", theme.T.ACCENT if listening else theme.rgba(theme.T.DIM, 140)))
+        self.mic_button.style().unpolish(self.mic_button)
+        self.mic_button.style().polish(self.mic_button)
+        self._light_mark()
+
+    def _light_mark(self, speaking: bool = False) -> None:
+        """표식의 상태를 맞춘다 — 쉴 때·들을 때·말할 때.
+
+        소리를 못 듣는 상황에서도 지금 무엇을 하는 중인지 화면만 보고 알아야 한다.
+        """
+        if speaking:
+            state = "speaking"
+        elif self.voice is not None:
+            state = "listening"
+        else:
+            state = "idle"
+        self.graph.mark.set_state(state)
+
+    def toggle_voice(self) -> None:
+        if self.voice is not None:
+            self.voice.stop()
+            self.voice = None
+            self._set_mic(False)
+            self.mic_level = 0.0
+            self.report("키보드로 돌아왔어.", [ROOT])
+            return
+
+        # 아는 낱말을 넘겨준다. 실측에서 이게 결정적이었다 — "볼륨"이 "울렴"으로
+        # 흘리던 게 어휘를 일러주자 대부분 제대로 잡혔다. **한글만** 넘긴다:
+        # 영어 모듈 이름을 넣으면 받아쓰기 결과에 "volume"이 그대로 튀어나온다.
+        vocab = [n.title for n in self.graph.nodes.values()]
+        out = self.link.call("GET", "/eb/v1/triggers")
+        vocab += (out or {}).get("triggers", [])
+        vocab = [w for w in dict.fromkeys(vocab) if re.search(r"[가-힣]", w)]
+        if self.mouth is None:
+            try:
+                from voice import Mouth
+
+                self.mouth = Mouth()
+            except Exception:
+                self.mouth = None  # 목소리가 없어도 듣기는 된다
+
+        self.voice = VoiceWorker(vocab)
+        self.voice.heard.connect(self.ask)
+        self.voice.state.connect(lambda t: self.report(t, [ROOT]))
+        self.voice.level.connect(self._on_level)
+        self.voice.finished.connect(lambda: self._set_mic(False))
+        self.voice.start()
+        self._set_mic(True)
+
+    def _meaning_ready(self, left: int) -> None:
+        """뜻 벡터가 더 만들어졌다. 올려 둔 벡터 덩어리를 버려서 다음 검색에 새로 읽게 한다."""
+        self.notes._vec_cache = None
+        self._meaning_left = left
+
+    _waiting: list = []
+
+    def _later(self, fn) -> None:
+        """신호가 끝난 뒤에 한다.
+
+        글상자·콤보의 신호 **안에서** 그 위젯의 내용을 갈아 끼우면 Qt 가 제 밑을
+        파고 죽는다(무작위로 눌러 보다 실제로 세그폴트가 났다). 한 박자 미룬다.
+
+        검사에서는 `settle()` 로 그 한 박자를 돌려 준다 — 미룬 일까지 끝내고 봐야
+        "눌렀는데 아무 일도 안 났다"는 헛것을 안 본다.
+        """
+        self._waiting.append(fn)
+        QTimer.singleShot(0, self._run_waiting)
+
+    def _run_waiting(self) -> None:
+        """미뤄 둔 일을 차례로 한다. 하다가 하나가 터져도 나머지는 한다.
+
+        **다시 들어오지 않게 막는다.** 미룬 일이 또 미루면 여기가 겹쳐 돌고,
+        그 안에서 위젯을 다시 지으면 Qt 가 제 밑을 판다.
+        """
+        if getattr(self, "_draining", False):
+            return
+        self._draining = True
+        try:
+            while self._waiting:
+                fn = self._waiting.pop(0)
+                try:
+                    fn()
+                except Exception:
+                    pass   # 화면 조작 하나가 창을 죽이면 안 된다
+        finally:
+            self._draining = False
+
+    def settle(self) -> None:
+        """미뤄 둔 일을 **지금** 끝낸다. 검사와 시험에서 쓴다.
+
+        `processEvents` 를 부르지 않는다 — 그건 신호 처리 도중에 부르면 되레
+        재진입을 만들어, 막으려던 그 죽음을 다시 부른다.
+        """
+        self._run_waiting()
+
+    def _bind_keys(self) -> None:
+        """손이 마우스로 안 가게 한다. 하루에 수십 번 하는 것만 묶는다."""
+        for keys, act in (
+            ("Ctrl+O", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll())),
+            ("Ctrl+F", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll())),
+            ("Ctrl+E", self.toggle_edit),
+            ("Ctrl+N", self.new_note),
+            # 치는 대로 저장되지만 Ctrl+S를 누르는 손버릇은 안 없어진다. 눌리면
+            # 기다리지 않고 그 자리에서 쓴다 — **아무 일도 안 일어나면 불안하다.**
+            ("Ctrl+S", self.save_note),
+            ("Ctrl+D", self.open_daily),
+            ("Alt+Left", self.go_back),
+            ("Alt+Right", self.go_forward),
+            ("Ctrl+\\", self.open_side_here),
+            ("Esc", self.escape),
+        ):
+            QShortcut(QKeySequence(keys), self, activated=act)
+        # **Esc 는 앱 전체에서 먼저 본다.** 목록이 뜬 동안 키가 어느 길로 오든
+        # 우리가 먼저 잡는다 — 위 `eventFilter` 설명 참고.
+        QApplication.instance().installEventFilter(self)
+
+    def escape(self) -> None:
+        """Esc. **`[[` 목록이 떠 있으면 그것부터 닫는다.**"""
+        if self.detail_body.pop_open():
+            self.detail_body.close_pop()
+            return
+        self.clear_detail()
+
+    def eventFilter(self, obj, event) -> bool:
+        """앱 전체에서 Esc 를 먼저 본다. **`[[` 목록을 닫는 마지막 그물이다.**
+
+        여기까지 온 이유: 낯선 PC 에서 `[[` 목록이 Esc 로 **네 번 연속** 안 닫혔다.
+        세 자리를 고쳤는데 셋 다 안 걸렸다 — 글상자의 `keyPressEvent`, 목록에 건
+        거름망, 창 단축키. 만든 PC 에서는 세 길 모두 잘 돌아서 **검사는 계속 초록불**
+        이었다. 키가 어느 길로 오든 걸리도록 가장 낮은 자리에 하나 더 깐다.
+
+        (이래도 안 닫히면 키가 Qt 까지 오지도 않는 것이다 — 그건 입력기 쪽이다.)
+        """
+        # ★ **손이 어디에 닿든 그래프를 깨운다.** 그래프는 아무도 안 만지면 잠든다
+        # (네 시간을 안 만졌는데 코어 하나를 91% 태우고 있었다). 그런데 사람이 창
+        # 어딘가를 만지는데 그래프만 자고 있으면 **화면이 굳은 것으로 보인다.**
+        # 깨우는 자리를 여기 하나로 모은다 — 위젯마다 걸면 한 군데를 반드시 빠뜨린다.
+        if event.type() in (QEvent.KeyPress, QEvent.MouseButtonPress,
+                            QEvent.MouseMove, QEvent.Wheel):
+            self.graph.깨우기()
+        if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
+                and self.detail_body.pop_open()):
+            self.detail_body.close_pop()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _on_level(self, level: float) -> None:
+        self.mic_level = level
+        self.graph.mark.set_level(level)  # 목소리 크기만큼 불티가 튄다
+        self.stats.setStyleSheet(
+            theme.small(theme.T.ACCENT if level > 0.012 else theme.T.DIM, 0.4 + min(level * 8, 0.5))
+        )
+
+    def closeEvent(self, event) -> None:
+        # 훑던 실이 남으면 프로그램이 안 꺼진다.
+        self.indexer.again = False
+        self.indexer.wait(3000)
+        # 창을 닫아도 마이크 실이 남으면 프로그램이 안 꺼진다.
+        if self.voice is not None:
+            self.voice.stop()
+            self.voice.wait(2000)
+        super().closeEvent(event)
+
+    def _greet_server(self) -> None:
+        """서버가 떠 있는지 처음 확인한다. 창이 다 뜬 뒤에 부른다."""
+        self.refresh_engine()
+        self.gate_card.refresh()
+        self.models.refresh()
+
+    def refresh_engine(self) -> None:
+        """엔진이 뭘 올려놨는지. 서버가 꺼져 있으면 그 사실을 그대로 보여준다."""
+        out = self.link.call("GET", "/eb/v1/engine")
+        if out is None:
+            self.engine_label.setText("엔진 —  서버 꺼짐")
+            return
+        if out.get("loaded"):
+            # 사진을 보는 모델인지 표시한다. 글자 모델이면 제품 검색이 안 된다.
+            eye = "  ·  사진 봄" if out.get("sees_images") else ""
+            self.engine_label.setText(f"엔진 {out['kind']}  ·  {out['loaded']} 올라옴{eye}")
+        elif out.get("models"):
+            self.engine_label.setText(f"엔진 {out['kind']}  ·  모델 {len(out['models'])}개 대기")
+        else:
+            self.engine_label.setText(f"엔진 {out['kind']}  ·  모델 없음")
+
+    def load_proposals(self) -> None:
+        for card in self.proposal_cards:
+            card.setParent(None)
+        self.proposal_cards.clear()
+        if self._empty_hint is not None:
+            self._empty_hint.setParent(None)  # 안 지우면 제안이 생겨도 "없음"이 남는다
+            self._empty_hint = None
+
+        for row in self.store.pending_proposals():
+            card = ProposalCard(row)
+            card.decided.connect(self.decide)
+            self.proposal_box.insertWidget(self.proposal_box.count() - 1, card)
+            self.proposal_cards.append(card)
+
+        if not self.proposal_cards:
+            empty = QLabel("아직 제안 없어. 쓰다 보면 내가 먼저 찾아낼게.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.3)}; font-size:11px; padding:14px 4px;")
+            self.proposal_box.insertWidget(0, empty)
+            self._empty_hint = empty
+
+        # ★ **빈 칸이 250px 을 차지하면 안 된다.** 카드 한 장이 통째로 들어갈 높이를
+        # 보장하려고 못을 박아 뒀는데, **제안이 하나도 없을 때까지 그 높이를 썼다** —
+        # 「아직 제안 없어」 한 줄에 250px 이다. 그것이 옆칸을 길게 만들고,
+        # 굴림칸을 거쳐 **창 최소 높이까지 밀어 올렸다**(낯선 PC 에서 1049).
+        # 지킬 것은 「카드가 있을 때 반만 보이지 않기」지 빈 자리가 아니다.
+        self.proposal_scroll.setMinimumHeight(
+            PROPOSAL_AREA_MIN_H if self.proposal_cards else 56)
+
+    def ask(self, text: str) -> None:
+        """검색 입구. **여기서 터지면 프로그램이 죽는다** — 그래서 막는다.
+
+        신호(엔터·마이크) 안에서 처리 안 된 예외가 나면 PyQt5 는 `qFatal()` 로
+        프로세스를 끝낸다. 낯선 PC 에서 검색 엔터 한 번에 여섯 번 죽었다.
+        **찾다 실패하는 것과 프로그램이 죽는 것은 하늘과 땅 차이다.**
+        """
+        try:
+            self._ask(text)
+        except Exception as err:
+            report.log_crash(err)
+            report.trail(f"찾다 실패: {type(err).__name__}: {err}")
+            self.report(f"'{text}' 찾다가 문제가 생겼어. 진단 묶음에 남겼어.", [ROOT])
+
+    def _ask(self, text: str) -> None:
+        """검색이든 지시든 여기로 들어온다. 음성도 이 문을 쓴다.
+
+        찾은 것에 초점을 맞춘다 — 관련된 것만 남고 나머지는 가라앉는다.
+        일정 시간이 지나거나 빈 곳을 누르면 저절로 풀려 전체 모습으로 돌아간다.
+        """
+        text = text.strip()
+        if not text:
+            self.graph.clear_focus()
+            self.show_results([])
+            return
+        started = time.monotonic()
+
+        # **시키는 말이면 그대로 한다.** 검색칸이 곧 지시칸이다 — 따로 두면 어느 칸에
+        # 쳐야 하는지를 사람이 외워야 한다. 못 알아들으면 `None` 이라 그냥 검색으로 간다.
+        # 알아듣는 일은 `orders.py` 가 하고 여기는 시키기만 한다 — 나중에 말로 시킬 때
+        # 같은 길을 쓴다.
+        order = orders.read_order(text)
+        if order is not None and self.do_order(order, started):
+            return
+
+        # 먼저 시켜본다. VC는 찾아주는 물건이 아니라 시키는 물건이다 —
+        # 모듈이 처리할 수 있는 말이면 검색으로 새지 않고 그대로 실행돼야 한다.
+        done = self.link.call("POST", "/eb/v1/ask", {"text": text})
+        if done and done.get("kind") == "result":
+            module = (done.get("module") or "").strip()
+            self.graph.focus_on([module] if module in self.graph.nodes else [ROOT],
+                                zoom=FOCUS_ZOOM if module in self.graph.nodes else None)
+            self.report(done["text"], [module] if module in self.graph.nodes else [ROOT])
+            self._log_turn(text, done["text"], "result", started)
+            return
+        rows = self.notes.search(text)
+        hits = [r["title"] for r in rows]
+        self.show_results([(r["title"], r["body"], r["path"]) for r in rows], text)
+
+        # 되묻는다는 건 시킬 말이 아니라는 뜻이다. 찾을 것이 있으면 찾아준다 —
+        # "카페"라고 쳤는데 "어느 쪽이야?"가 나오면 검색칸이 아니게 된다.
+        if done and done.get("kind") == "clarify" and not hits:
+            self.report(done["text"], [ROOT])
+            self._log_turn(text, done["text"], "clarify", started)
+            return
+
+        if not hits:
+            # 시키지도 못하고 찾지도 못했다. 실행이 실패했으면 그 이유를 그대로 전한다.
+            miss = done["text"] if done else f"'{text}'로는 못 찾겠어."
+            self.report(miss, [ROOT])
+            self._log_turn(text, miss, done.get("kind", "miss") if done else "miss", started)
+            return
+
+        # 이미 초점이 잡힌 상태에서 또 찾는 건 좁히려는 것이다 — 그때 내용을 펼쳐 보여준다.
+        narrowing = bool(self.graph.focus)
+
+        # 맞는 것만 남긴다. 이웃까지 밝히면 좁힌 게 아니라 덩어리를 옮긴 것이 된다.
+        self.ensure_on_graph(hits)
+        self.graph.focus_on(hits, zoom=FOCUS_ZOOM if narrowing else None)
+
+        if narrowing:
+            self.show_note(hits[0], focus=False)
+            said = f"{hits[0]} 얘기야."
+        elif len(hits) > 1:
+            said = f"'{text}' 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
+        else:
+            said = f"'{text}'는 {hits[0]} 하나야. 한 번 더 치면 열어줄게."
+        self.report(said, hits[:3])
+        self._log_turn(text, said, "search", started)
+
+    def do_order(self, order: "orders.Order", started: float = 0.0) -> bool:
+        """시킨 것을 한다. 못 하면 `False` — 그러면 부르는 쪽이 검색으로 넘긴다.
+
+        **되돌릴 수 없는 것은 되묻는다.** 말로 시킬 때는 더 그렇다 —
+        잘못 알아들은 한마디로 글이 사라지면 안 된다.
+        """
+        what, name, extra = order.what, order.target, order.extra
+        started = started or time.monotonic()
+
+        def done(said: str, who: list[str] | None = None) -> bool:
+            self.report(said, who or [ROOT])
+            self._log_turn(self.ask_box.text() or what, said, "지시", started)
+            # **「활동」 칸에도 남긴다.** 그 칸은 서버가 남긴 것만 받고 있어서,
+            # 타자로 수십 번 시켜도 한 줄도 안 쌓였다 — 「시켜본 게 여기 쌓인다」고
+            # 적어 놓고 안 쌓이면 그 칸은 거짓말을 하는 것이다.
+            self._log_deed(what, said, started)
+            return True
+
+        if what == "무르기":
+            # **잘못 시킨 것을 되돌린다.** 되묻기까지 거쳐 「지워」를 다시 치게 하면
+            # 잘못 시키는 것이 무섭다 — 무를 길이 있어야 마음 놓고 시킨다.
+            undo, self._undo = getattr(self, "_undo", None), None
+            if undo is None:
+                return done("무를 게 없어.")
+            kind, first, second = undo
+            if kind == "만들기":
+                self.notes.delete(first)
+                self.clear_detail()
+                self.refresh()
+                return done(f"'{first}' 만든 걸 물렀어.")
+            if kind == "이름바꾸기":
+                self.notes.rename(second, first)
+                self.show_note(first)
+                return done(f"이름을 '{first}'로 되돌렸어.", [first])
+            if kind == "덧붙이기":
+                note = self.notes.read(first)
+                if note is not None:
+                    note.body = second
+                    self._wrote_at = time.monotonic()
+                    self.notes.write(note, str(self.notes.path_of(first)))
+                    self.show_note(first)
+                return done(f"'{first}'에 덧붙인 걸 물렀어.", [first])
+            return done("무를 게 없어.")
+
+        if what == "찾기":
+            # **꼬리말을 뗀 알맹이로 찾는다.** 안 그러면 「찾아줘」가 검색어에 그대로
+            # 들어가 낱말 검색이 헛돈다 — 낯선 PC 에서 그렇게 나왔다.
+            self.ask_box.setText(name)
+            self._ask(name)
+            return True
+        if what == "닫기":
+            self.clear_detail()
+            return done("닫았어.")
+        if what == "오늘일지":
+            self.open_daily()
+            return done("오늘 일지 열었어.", [self.editing or ROOT])
+        if what == "언제":
+            hits = self.notes.written_when(name)
+            if not hits:
+                return done(f"{name} 쓴 게 없어.")
+            self.show_results([(t, b, p) for t, b, p in hits], name)
+            self.ensure_on_graph([t for t, _, _ in hits])
+            self.graph.focus_on([t for t, _, _ in hits], zoom=FOCUS_ZOOM)
+            return done(f"{name} 쓴 것 {len(hits)}개야.", [t for t, _, _ in hits][:3])
+        if what == "태그":
+            self.show_tag(name)
+            return True
+        if what == "이어진것":
+            hit = self.notes.resolve(name)
+            if hit is None:
+                return done(f"'{name}'{orders.tail(name, '이/가')} 없어.")
+            near = self.notes.neighbors(hit)
+            if not near:
+                return done(f"'{hit}'에 이어진 게 없어.")
+            self.ensure_on_graph([hit] + near)
+            self.graph.focus_on([hit] + near, zoom=FOCUS_ZOOM)
+            return done(f"'{hit}'에 이어진 것 {len(near)}개야.", [hit] + near[:2])
+
+        # 여기부터는 대상이 있어야 한다.
+        if what == "만들기":
+            if self.notes.read(name) is not None:
+                self.show_note(name)
+                return done(f"'{name}'{orders.tail(name, '은/는')} 이미 있어서 열었어.", [name])
+            self.fill_gap(name)
+            self._undo = ("만들기", name, "")
+            return done(f"'{name}' 만들었어. (무르려면 「무르고」)", [name])
+
+        if what == "덧붙이기":
+            # **진짜 있는 제목을 고른다.** 제목 안에 「에」가 있으면 어디서 잘라야
+            # 할지 글자만으로는 못 정한다 — 항목 목록을 아는 우리가 정한다.
+            for 제목, 내용 in (order.alts or ((name, extra),)):
+                if self.notes.resolve(제목):
+                    name, extra = 제목, 내용
+                    break
+
+        hit = self.notes.resolve(name) if name else None
+        if what in ("열기", "곁에", "덧붙이기", "이름바꾸기", "지우기", "되돌리기"):
+            if hit is None and name:
+                # **없는 것을 시키면 지어내지 않는다.** 찾아 주는 편이 낫다.
+                return False
+        if what == "열기":
+            self.show_note(hit)
+            return done(f"{hit} 열었어.", [hit])
+        if what == "곁에":
+            if hit:
+                self.show_note(hit)
+            self.open_side_here()
+            return done("곁에 띄웠어.", [hit or ROOT])
+        if what == "덧붙이기":
+            self._wrote_at = time.monotonic()
+            was = self.notes.read(hit)
+            self._undo = ("덧붙이기", hit, was.body if was else "")
+            self.notes.append(hit, extra)
+            self.show_note(hit)
+            # **어디에 무엇을 붙였는지 그대로 보여 준다.** 「학교에 안 갔다 적어줘」가
+            # 「학교」에 「안 갔다」만 쌓는 일이 있다 — 새 글로 적으려던 것인데
+            # 「학교」라는 항목이 있다는 이유만으로 잘린다. 사람 뜻과 글자만으로는
+            # 못 가르는 자리라, **틀렸을 때 바로 알아채고 무를 수 있게** 하는 쪽을 택했다.
+            return done(f"'{hit}'에 「{extra}」 적었어. 새 글로 적으려던 거면 「무르고」",
+                        [hit])
+        if what == "이름바꾸기":
+            if not extra:
+                return False
+            self.show_note(hit)
+            self.detail_title.setText(extra)
+            self.rename_note()
+            self._undo = ("이름바꾸기", hit, extra)
+            return done(f"'{hit}'{orders.tail(hit, '을/를')} "
+                        f"'{extra}'{orders.tail(extra, '으로/로')} 바꿨어.", [extra])
+        if what == "지우기":
+            # **되돌릴 수 없다.** 시킨 말이 맞는지 눈으로 보고 누르게 한다.
+            if not self._agreed("지울까?", orders.spoken(order), "지운다"):
+                return done("안 지웠어.")
+            self.notes.delete(hit)
+            self.clear_detail()
+            self.refresh()
+            return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어.")
+        if what == "되돌리기":
+            past = self.notes.history(hit) if hit else []
+            if not past:
+                return done(f"'{hit}'{orders.tail(hit, '은/는')} 지난 판이 없어.")
+            when, where = past[-1]
+            if not self._agreed("되돌릴까?", f"'{hit}'을 {when} 판으로 되돌린다. "
+                                            "지금 글도 한 판 남는다.", "되돌린다"):
+                return done("그대로 뒀어.")
+            self.notes.restore(hit, where)
+            self.show_note(hit)
+            return done(f"{when} 판으로 되돌렸어.", [hit])
+        return False
+
+    def follow_link(self, name: str, heading: str = "") -> None:
+        """본문의 [[링크]]를 따라간다. **신호가 끝난 뒤에** 움직인다.
+
+        이 함수는 글상자의 마우스 처리 **안에서** 나온 신호로 불린다. 그 자리에서
+        같은 글상자의 문서를 갈아 끼우면 Qt 가 제 밑을 파고 죽는다 — 무작위로
+        눌러 보다 실제로 났다. 사용자가 링크를 누르는 흔한 길이다.
+        """
+        self._later(lambda: self._do_follow_link(name, heading))
+
+    def _do_follow_link(self, name: str, heading: str = "") -> None:
+        """아직 없는 이름이면 그 자리에서 만든다.
+
+        `[[노트#소제목]]`으로 불렀으면 그 소제목 자리까지 데려간다 — 긴 문서에서
+        맨 위만 보여주면 어디를 보라는 건지 알 수 없다.
+        """
+        hit = self.notes.resolve(name)
+        if hit is None:
+            self.fill_gap(name)
+            return
+        self.show_note(hit)
+        if heading:
+            self.detail_body.go_to_heading(heading)
+
+    def show_year(self, year: str) -> None:
+        """그해에 처음 적은 것들을 늘어놓는다."""
+        rows = self.notes.in_year(year)
+        self.show_results(rows, "")
+        if rows:
+            titles = [t for t, _ in rows]
+            self.ensure_on_graph(titles[:12])
+            self.graph.focus_on(titles[:12])
+            self.report(f"{year}년에 적은 게 {len(rows)}개야.", titles[:3])
+        else:
+            self.report(f"{year}년엔 적은 게 없어.", [ROOT])
+
+    def show_tag(self, tag: str) -> None:
+        # 태그도 글상자의 마우스 처리 안에서 눌린다. 같은 이유로 미룬다.
+        self._later(lambda: self._do_show_tag(tag))
+
+    def _do_show_tag(self, tag: str) -> None:
+        """태그로 묶어 본다. 하위 태그(#할일/출근)는 상위로도 걸린다."""
+        titles = self.notes.by_tag(tag)
+        rows = [(t, (self.notes.read(t) or Note(title=t, body="")).body) for t in titles]
+        self.show_results(rows, "#" + tag)
+        if titles:
+            self.ensure_on_graph(titles[:GRAPH_LIMIT // 2])
+            self.graph.focus_on(titles)
+            self.report(f"#{tag} 붙은 게 {len(titles)}개야.", titles[:3])
+        else:
+            self.report(f"#{tag} 붙은 게 없어.", [ROOT])
+
+    def show_results(self, hits: list[tuple[str, str]], query: str = "") -> None:
+        """찾은 것을 옆에 늘어놓는다. 없으면 칸 자체를 접는다 — 빈 상자는 자리만 먹는다."""
+        self.results.show_hits(hits, query)
+        self.results_head.setVisible(bool(hits))
+        self.results.setVisible(bool(hits))
+
+    def ensure_on_graph(self, titles) -> None:
+        """찾은 것이 그래프에 없으면 올린다.
+
+        보이는 수를 묶어 두었으니 **방금 찾은 것이 잘려 나갈 수 있다.** 그러면
+        "찾았다"고 해 놓고 화면에는 없는 꼴이 된다 — 정확하지 않다.
+        """
+        missing = [t for t in titles if t and t not in self.graph.nodes]
+        if not missing:
+            return
+        keep = set(missing) | {ROOT} | set(list(self.graph.nodes)[:GRAPH_LIMIT // 2])
+        picked = self.notes.working_set(GRAPH_LIMIT, keep=keep)
+        self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
+                        self.notes.kin(picked))
+
+    def show_note(self, title: str, focus: bool = True, trail: bool = True) -> None:
+        note = self.notes.read(title)
+        if note is None:
+            return
+        if trail:
+            self._mark_trail(title)
+        self.ensure_on_graph([title])
+        if focus:
+            # 항목을 직접 누른 것도 내용을 펼치는 일이다 — 그 항목만 남기고 다가간다.
+            self.graph.focus_on([title], zoom=FOCUS_ZOOM)
+        self._fill_detail(note)
+        self.report(f"{title} 얘기야.", [title] + self.notes.neighbors(title)[:3])
+
+    def _fill_detail(self, note: Note, where: str = "") -> None:
+        """항목을 칸에 올린다.
+
+        **대괄호를 벗기지 않는다.** 고칠 수 있는 칸이라, 보이는 글과 저장되는 글이
+        다르면 한 번 고치는 순간 링크가 통째로 날아간다.
+        """
+        self._save_timer.stop()
+        self.editing = None            # 채우는 동안의 신호는 저장으로 안 센다
+        # 연 **파일**을 들고 있는다. 제목으로 다시 찾으면 쌍둥이 중 엉뚱한 쪽에 쓴다.
+        self.editing_at = str(where) if where else str(self.notes.path_of(note.title))
+        self.open_reader()
+        self.detail_kind.show()
+        # **모르는 종류라도 그 값을 지우지 않는다.** 없는 값이면 맨 앞(에이전트)으로
+        # 떨어지고, 다음 저장에 그것이 파일에 쓰여 **남이 적어 둔 값이 사라진다.**
+        # 자리를 하나 만들어 그대로 돌려보낸다.
+        for spare in range(self.detail_kind.count() - 1, len(theme.KIND_LABEL) - 1, -1):
+            self.detail_kind.removeItem(spare)          # 앞 항목이 남긴 자리
+        at = self.detail_kind.findData(note.kind)
+        if at < 0 and note.kind:
+            self.detail_kind.addItem(note.kind, note.kind)
+            at = self.detail_kind.count() - 1
+        self.detail_kind.setCurrentIndex(max(at, 0))
+        self.detail_title.setReadOnly(False)
+        self.detail_title.setText(note.title)
+        self.detail_body.setReadOnly(False)
+        self.detail_body.setPlainText(note.body.strip())
+        self._opened_body = note.body.strip()   # 저장할 때 밖에서 바뀌었는지 견줄 것
+        self.detail_view.show_note(note.body.strip())
+        self._fill_toc(note.body)
+        self._fill_past(note.title)
+        self.side_btn.show()
+        self._show_trail_buttons()
+        self._show_twin(note.title, where)
+        self.detail_stack.setCurrentIndex(0)      # 열 때는 읽는 모습
+        self.edit_btn.setText("고치기")
+        self.edit_btn.show()
+        self.shut_btn.show()
+        self.editing = note.title
+        self._fill_links(note.title)
+
+    def _link_row_clicked(self, href: str) -> None:
+        kind, _, name = href.partition(":")
+        (self.show_tag if kind == "tag" else self.show_note)(name)
+
+    # 본문에서 Ctrl로 누른 링크는 (대상, 소제목) 둘을 준다.
+
+
+    def _fill_links(self, title: str) -> None:
+        """이어진 것과 태그를 아래 줄에. **눌러서 갈 수 있어야** 연결이 쓸모가 있다."""
+        links = sorted({self.notes.resolve(r["dst"]) or r["dst"]
+                        for r in self.notes.conn.execute(
+                            "SELECT dst FROM links WHERE src = ?", (title,))} - {title})
+        tags = [r["tag"] for r in self.notes.conn.execute(
+            "SELECT tag FROM tags WHERE title = ? ORDER BY tag", (title,))]
+        color = theme.css(theme.T.ACCENT, 0.75)
+
+        def chip(text, href):
+            return f'<a href="{href}" style="color:{color}; text-decoration:none">{text}</a>'
+
+        # 다 늘어놓으면 카드를 밀어낸다. 넷까지만 보이고 나머지는 개수로 접는다.
+        parts = []
+        if links:
+            shown = " · ".join(chip(t, f"note:{t}") for t in links[:4])
+            if len(links) > 4:
+                shown += f" +{len(links) - 4}"
+            parts.append("적어둔 것 " + shown)
+        if tags:
+            parts.append("태그 " + " ".join(chip("#" + t, f"tag:{t}") for t in tags[:5]))
+        # **손으로 안 이어도 곁가지가 있어야 한다.** 이것이 나무위키의 「관련 문서」 자리다 —
+        # 여기서 눌러 들어가는 것이 「찾을 낱말을 모를 때」의 유일한 길이다.
+        # 이미 적어 둔 것과 겹치는 것은 뺀다 — 같은 말을 두 줄로 하면 둘 다 안 읽는다.
+        # 카드는 **단언이 아니라 길**이다. 양쪽이 동의 안 해도 내가 꼽은 1등을 보여 준다 —
+        # 갈 길이 하나도 없는 것이 어중간한 길 하나보다 나쁘다. (그래프 선은 맞짝만 긋는다)
+        near = [t for t in self.notes.kin([title], 맞짝만=False).get(title, [])
+                if t not in links and t != title]
+        if near:
+            잔한 = theme.css(theme.T.DIM, 0.55)
+
+            def 곁(text):
+                return (f'<a href="note:{text}" '
+                        f'style="color:{잔한}; text-decoration:none">{text}</a>')
+
+            parts.append("비슷한 것 " + " · ".join(곁(t) for t in near[:3]))
+        self.detail_links.setText("&nbsp;&nbsp;&nbsp;".join(parts))
+
+        note = self.notes.read(title)
+        shown = []
+        for name, heading in (note.embeds() if note else []):
+            hit = self.notes.resolve(name)
+            target = self.notes.read(hit) if hit else None
+            if target is None:
+                shown.append((name, "아직 없는 항목이야"))
+                continue
+            body = section(target.body, heading) if heading else target.body
+            label = f"{hit}#{heading}" if heading else hit
+            shown.append((label, body or "그 소제목이 비어 있어"))
+        self.embeds.show_hits(shown, "", width=110)
+        self.embeds_head.setVisible(bool(shown))
+        self.embeds.setVisible(bool(shown))
+
+        backs = self.notes.backlinks(title)
+        self.backs.show_hits(backs)
+        self.backs_head.setVisible(bool(backs))
+        self.backs.setVisible(bool(backs))
+
+    def _indexed(self, changed: int) -> None:
+        """훑기가 끝났다. 바뀐 게 있을 때만 다시 그린다 — 없으면 화면을 건드릴 이유가 없다."""
+        if changed:
+            self.refresh(scan=False)
+            self._reload_open()
+            self._rewatch()          # 새로 생긴 폴더도 지켜본다
+
+    def _rewatch(self) -> None:
+        """기록이 든 폴더를 모두 지켜본다. 뿌리만 보면 `연/월` 안의 변화를 놓친다."""
+        want = {str(self.notes.root)}
+        try:
+            for d in self.notes.root.rglob("*"):
+                if d.is_dir() and not d.name.startswith("."):
+                    want.add(str(d))
+        except OSError:
+            pass                     # 훑는 사이 누가 지웠다 — 다음 바퀴에 다시 본다
+        now = set(self._watch.directories())
+        if add := sorted(want - now):
+            self._watch.addPaths(add)
+        if gone := sorted(now - want):
+            self._watch.removePaths(gone)
+
+    def _reload_open(self) -> None:
+        """열어 놓은 항목이 밖에서 바뀌었으면 받아들인다. 치던 중이면 안 덮는다."""
+        if self.editing is None:
+            return
+        fresh = self.notes.read(self.editing)
+        if fresh is None:
+            self.clear_detail()
+            return
+        if fresh.body.strip() == self.detail_body.toPlainText().strip():
+            return
+        if self._save_timer.isActive() or self.detail_stack.currentIndex() == 1:
+            # **고치는 중이면 화면을 안 건드린다.** 갈아 끼우면 읽기로 튕겨 나가
+            # 사용자는 왜 편집이 끝났는지 모른다 — 낯선 PC 에서 그렇게 보였다.
+            self.report(f"{self.editing}을 밖에서도 고쳤어. 네가 치던 게 우선이야. "
+                        "밖에서 온 것은 「지난 판」에 남겨 둘게.", [ROOT])
+            return
+        self._fill_detail(fresh, self.editing_at)
+
+    def pull_outside(self) -> None:
+        """밖에서 고친 파일을 읽어 들인다.
+
+        **열어 놓고 고치던 중이면 안 덮는다.** 사용자가 치던 글을 밖에서 온 내용으로
+        갈아 끼우면 방금 쓴 문장이 소리 없이 사라진다 — 그건 되돌릴 수도 없다.
+        대신 알려만 주고, 손을 뗀 뒤에 눌러서 받게 한다.
+        """
+        if time.monotonic() - self._wrote_at < 1.5:
+            return                       # 방금 우리가 쓴 것이다
+        self.indexer.ask()               # 훑기는 딴 실에서. 끝나면 _indexed가 받는다
+
+    def paste_image(self, data: bytes, suffix: str) -> None:
+        """붙여넣은 그림을 파일로 저장하고 본문에 표기를 끼운다.
+
+        그림을 본문 안에 통째로 넣지 않는다(base64). 파일이 원본인 설계라, 그림도
+        파일이어야 옵시디언·탐색기에서 그대로 열린다.
+        """
+        if self.editing is None:
+            return
+        self._wrote_at = time.monotonic()
+        name = self.notes.save_attachment(data, suffix, f"{self.editing} 붙임")
+        self.detail_body.insertPlainText(f"![[{name}]]")
+        self.save_note()
+        self.report(f"그림을 넣었어 — {name}", [self.editing])
+
+    def toggle_edit(self) -> None:
+        """읽기 ↔ 고치기. 고치기에서 나올 때 반드시 저장한다."""
+        if self.detail_stack.currentIndex() == 1:
+            self.save_note()
+            note = self.notes.read(self.editing) if self.editing else None
+            self.detail_view.show_note(note.body.strip() if note else "")
+            self.detail_stack.setCurrentIndex(0)
+            self.edit_btn.setText("고치기")
+            return
+        self.detail_stack.setCurrentIndex(1)
+        self.edit_btn.setText("읽기")
+        self.detail_body.setFocus()
+
+    def save_note(self) -> None:
+        """치는 대로 저장한다. 열린 항목이 없으면 아무 일도 안 한다."""
+        if self.editing is None:
+            return
+        note = self.notes.read_at(self.editing_at)
+        if note is None:
+            return
+        body = self.detail_body.toPlainText()
+        kind = self.detail_kind.currentData() or note.kind
+        if body == note.body.strip() and kind == note.kind:
+            return                      # 바뀐 게 없으면 파일을 안 건드린다
+        # **밖에서 바뀐 글을 말없이 덮지 않는다.** 열어 둔 사이 옵시디언이나 동기화가
+        # 고쳐 놨으면, 우리 글로 덮기 **전에** 그쪽을 한 판 남긴다 — 낯선 PC 에서
+        # 밖에서 온 줄이 파일에도 이력에도 없이 사라졌다(2/2 재현).
+        if note.body.strip() not in (getattr(self, "_opened_body", ""), body):
+            try:
+                self.notes.keep_history(Path(self.editing_at),
+                                        read_text(Path(self.editing_at)), always=True)
+                self.report(f"{note.title}을 밖에서도 고쳤길래 그쪽은 「지난 판」에 남겼어.",
+                            [note.title])
+            except (OSError, ValueError):
+                pass
+        note.body, note.kind = body, kind
+        # 사람이 손댄 표시. AI가 나중에 통째로 덮어쓰려 하면 서버가 막는다.
+        note.edited_by = "사람"
+        self._wrote_at = time.monotonic()
+        try:
+            self.notes.write(note, self.editing_at)
+        except WriteBlocked:
+            # 사람이 잠가 둔 파일이다. 글은 옆에 남았으니 어디 있는지 말해 준다.
+            self.report(f"'{note.title}' 파일이 잠겨 있어 못 썼어. "
+                        f"쓰던 글은 옆에 '(못 쓴 글)' 로 남겨 뒀어.", [note.title])
+            return
+        # **방금 쓴 것이 이제 「연 순간의 글」이다.** 안 고치면 두 번째 저장부터
+        # 디스크에 있는 내 글이 `_opened_body`(맨 처음 것)와도 `body`(새로 친 것)와도
+        # 달라서, **자기가 쓴 것을 남이 쓴 것으로 본다** — 낯선 PC 에서 아무도 안
+        # 건드렸는데 "밖에서도 고쳤길래"가 세 번 중 두 번 떴다(1회차만 정상).
+        self._opened_body = body
+        self._fill_links(note.title)
+        self.refresh()
+
+    # --- 오간 자취 ------------------------------------------------------
+
+    def _mark_trail(self, title: str) -> None:
+        """열어 본 차례를 남긴다. 되돌아간 뒤 새로 열면 그 앞의 앞길은 지운다 —
+        브라우저와 같다. 안 그러면 '앞으로'가 엉뚱한 데로 간다."""
+        if 0 <= self._trail_at < len(self._trail) and self._trail[self._trail_at] == title:
+            return
+        del self._trail[self._trail_at + 1:]
+        self._trail.append(title)
+        # 20년을 켜 둬도 자취가 무한정 자라면 안 된다.
+        if len(self._trail) > 100:
+            self._trail = self._trail[-100:]
+        self._trail_at = len(self._trail) - 1
+        self._show_trail_buttons()
+
+    def _show_trail_buttons(self) -> None:
+        self.back_btn.setEnabled(self._trail_at > 0)
+        self.fwd_btn.setEnabled(self._trail_at < len(self._trail) - 1)
+
+    def _walk_trail(self, step: int) -> None:
+        at = self._trail_at + step
+        if not 0 <= at < len(self._trail):
+            return
+        self._trail_at = at
+        self.show_note(self._trail[at], trail=False)
+        self._show_trail_buttons()
+
+    def go_back(self) -> None:
+        self._walk_trail(-1)
+
+    def go_forward(self) -> None:
+        self._walk_trail(1)
+
+    # --- 옆 판 ----------------------------------------------------------
+
+    def open_side_here(self) -> None:
+        """지금 글이 가리키는 것 중 첫째를 옆에 띄운다. 없으면 앞서 보던 것."""
+        if self.editing is None:
+            return
+        out = [d for d, _ in self.notes.links_of(self.editing)] if hasattr(
+            self.notes, "links_of") else []
+        if not out:
+            note = self.notes.read(self.editing)
+            out = [d for d, _ in (note.links() if note else [])]
+        want = next((t for t in out if self.notes.read(t) is not None), "")
+        if not want and self._trail_at > 0:
+            want = self._trail[self._trail_at - 1]
+        if want:
+            self.open_side(want)
+
+    def open_side(self, title: str) -> None:
+        note = self.notes.read(title)
+        if note is None:
+            return
+        self.side_open = True
+        self.side_read.show_note(title, note.body.strip())
+        self._place_reader()
+
+    def close_side(self) -> None:
+        self.side_open = False
+        self.side_read.hide()
+        self._place_reader()
+
+    def show_note_at(self, where: str) -> None:
+        """**그 파일**을 연다. 제목이 겹칠 때 우리가 몰래 고르지 않는다."""
+        note = self.notes.read_at(where)
+        if note is None:
+            return
+        self._mark_trail(note.title)
+        self.ensure_on_graph([note.title])
+        self._fill_detail(note, where)
+        self.report(f"{note.title} 얘기야.", [note.title])
+
+    def _fill_toc(self, body: str) -> None:
+        """목차를 채운다. 소제목이 둘 미만이면 안 띄운다 — 한 줄짜리 목차는 짐이다."""
+        heads = headings(body)
+        self.toc.clear()
+        if len(heads) < 2:
+            self.toc.hide()
+            return
+        self.toc.addItem(f"목차 ({len(heads)})", "")
+        for depth, text in heads:
+            self.toc.addItem("   " * (depth - 1) + text, text)
+        self.toc.setCurrentIndex(0)
+        self.toc.show()
+
+    def open_daily(self) -> None:
+        """오늘 일지. 없으면 서식대로 만들어 연다."""
+        note = self.notes.daily()
+        self.notes.reindex()
+        self.show_note(note.title)
+
+    def make_report(self) -> None:
+        """진단 묶음을 만들고 어디 뒀는지 말해 준다.
+
+        **딴 PC 에서 난 일은 우리가 못 본다.** 쓰는 사람이 폴더를 뒤질 필요 없이
+        파일 하나를 보내면 되게 한다. 기록 내용·토큰·사용자 이름은 안 담는다.
+        """
+        try:
+            made = report.bundle()
+        except OSError as err:
+            self.report(f"진단 묶음을 못 만들었어: {err}", [ROOT])
+            return
+        self.report(f"진단 묶음을 만들었어 → {made.name}  (기록 폴더에 있어)", [ROOT])
+        # `QMessageBox.information` 은 **손도 안 댄 윈도우 기본 대화상자**로 뜬다 —
+        # 파란 i 아이콘·기본 고딕·「OK」. VC 안에서 제일 이질적이라는 지적을 받았다.
+        # 확인창과 같은 길로 보낸다.
+        self._told("진단 묶음",
+                   "이 파일 하나만 보내면 된다:" + chr(10) * 2 + str(made) + chr(10) * 2
+                   + "기록 내용·토큰·사용자 이름은 안 들어 있다.")
+
+    def _build_more(self) -> None:
+        """`⋯` 차림표. 열 때마다 새로 짓는다 — 서식이 늘거나 줄 수 있다."""
+        self.more_menu.clear()
+        self.more_menu.addAction("새 항목  (Ctrl+N)", self.new_note)
+        self.more_menu.addAction("오늘 일지  (Ctrl+D)", self.open_daily)
+        names = self.notes.templates()
+        if names and self.editing is not None:
+            forms = self.more_menu.addMenu("서식 넣기")
+            for name in names:
+                forms.addAction(name, lambda n=name: self._put_template(n))
+        if self.editing is not None:
+            self.more_menu.addSeparator()
+            gone = self.more_menu.addAction("지우기", self.drop_note)
+            gone.setToolTip("이 항목을 지운다. 파일이 사라진다")
+        self.more_menu.addSeparator()
+        self.more_menu.addAction("문제 알리기 (진단 묶기)", self.make_report)
+
+    def _put_template(self, name: str) -> None:
+        # 차림표에서 불린다. 여기서 글을 갈아 끼우면 차림표가 제 밑을 파므로 미룬다.
+        self._later(lambda: self._do_put_template(name))
+
+    def _do_put_template(self, name: str) -> None:
+        """서식을 지금 글 **끝에** 끼운다. 덮어쓰지 않는다 — 쓰던 글이 사라지면
+        되돌릴 길을 찾느라 서식을 다시는 안 쓴다."""
+        if not name or self.editing is None:
+            return
+        text = self.notes.fill_slots(self.notes.template(name), self.editing)
+        if not text:
+            return
+        if self.detail_stack.currentIndex() != 1:
+            self.toggle_edit()
+        cur = self.detail_body.textCursor()
+        cur.movePosition(QTextCursor.End)
+        self.detail_body.setTextCursor(cur)
+        self.detail_body.insertPlainText(chr(10) * 2 + text + chr(10))
+        self.save_note()
+
+    def _show_twin(self, title: str, where: str = "") -> None:
+        """같은 제목이 둘 이상이면 **어느 파일인지 밝힌다.**
+
+        조용히 하나를 골라 열면, 2027년 회의를 열었다고 믿고 2026년 것을 고친다.
+        """
+        twins = self.notes.twins(title)
+        if not twins:
+            self.twin_note.hide()
+            return
+        here = Path(where) if where else self.notes.path_of(title)
+        try:
+            shown = here.relative_to(self.notes.root).as_posix()
+        except ValueError:
+            shown = here.name
+        self.twin_note.setText(f"⚠ 같은 제목 {len(twins)}개 · 지금 연 것: {shown}")
+        self.twin_note.setToolTip(chr(10).join(str(t) for t in twins))
+        self.twin_note.show()
+
+    def _fill_past(self, title: str) -> None:
+        """지난 판 목록을 채운다. 없으면 안 띄운다."""
+        self.past.clear()
+        rows = self.notes.history(title)
+        if not rows:
+            self.past.hide()
+            return
+        self.past.addItem(f"지난 판 ({len(rows)})", "")
+        for when, path in rows:
+            self.past.addItem(when, str(path))
+        self.past.setCurrentIndex(0)
+        self.past.show()
+
+    def _restore_past(self, at: int) -> None:
+        """되돌리기는 **신호가 끝난 뒤에** 한다.
+
+        이 함수는 콤보의 `activated` 신호로 불린다. 그 안에서 항목을 다시 열면
+        `_fill_past` 가 같은 콤보를 `clear()` 하는데, **자기 신호를 처리하는 중에
+        자기를 비우면 Qt 가 접근 위반으로 죽는다.** 무작위로 눌러 보다 실제로
+        세그폴트가 났다. 한 박자 미뤄서 신호를 먼저 끝낸다.
+        """
+        self._later(lambda: self._do_restore_past(at))
+
+    def _do_restore_past(self, at: int) -> None:
+        where = self.past.itemData(at)
+        self.past.setCurrentIndex(0)
+        if not where or self.editing is None:
+            return
+        when = self.past.itemText(at)
+        if not self._agreed(
+                "지난 판으로 되돌리기",
+                f"'{self.editing}'을 {when} 판으로 되돌린다. "
+                "지금 글도 한 판 남으니 다시 돌아올 수 있다.", "되돌린다"):
+            return
+        title = self.editing
+        if self.notes.restore(title, Path(where)):
+            self.show_note(title)
+            self.report(f"{when} 판으로 되돌렸어.", [title])
+
+    def _jump_heading(self, at: int) -> None:
+        # 콤보의 신호 안에서 콤보를 건드리지 않는다(위 `_restore_past` 설명 참고).
+        self._later(lambda: self._do_jump_heading(at))
+
+    def _do_jump_heading(self, at: int) -> None:
+        want = self.toc.itemData(at)
+        if not want:
+            return
+        box = (self.detail_body if self.detail_stack.currentIndex() == 1
+               else self.detail_view)
+        box.go_to_heading(want)
+        self.toc.setCurrentIndex(0)     # 다음에 또 같은 데를 고를 수 있어야 한다
+
+    def flip_task(self, nth: int) -> None:
+        """읽는 화면에서 할 일 표를 눌렀다. 신호가 끝난 뒤에 뒤집는다."""
+        self._later(lambda: self._do_flip_task(nth))
+
+    def _do_flip_task(self, nth: int) -> None:
+        """원문을 뒤집고 바로 저장한다.
+
+        `고치기`로 들어가 글자를 바꾸게 하면 할 일 목록은 안 쓰게 된다.
+        """
+        if self.editing is None:
+            return
+        note = self.notes.read_at(self.editing_at)
+        if note is None:
+            return
+        out = flip_task(note.body, nth)
+        if out is None:
+            return
+        note.body, note.edited_by = out[0], "사람"
+        self._wrote_at = time.monotonic()
+        self.notes.write(note, self.editing_at)
+        # 보이는 것도 같이 바꾼다. 눌렀는데 그대로면 안 먹은 줄 안다.
+        at = self.detail_view.verticalScrollBar().value()
+        self.detail_view.show_note(note.body)
+        self.detail_view.verticalScrollBar().setValue(at)
+        # **고치는 칸도 같이 고친다.** 안 하면 다음에 「고치기」로 들어갔다 나올 때
+        # 네모를 모르는 옛 글이 덮어써서 체크가 풀린다 — 낯선 PC 에서 그렇게 났다.
+        self.detail_body.setPlainText(note.body.strip())
+
+    def rename_note(self) -> None:
+        """제목을 바꾸면 **가리키던 링크도 같이 옮긴다**(notes.rename)."""
+        new = self.detail_title.text().strip()
+        if self.editing is None or not new or new == self.editing:
+            return
+        if not self.notes.rename(self.editing, new):
+            self.detail_title.setText(self.editing)   # 이미 있는 이름이면 되돌린다
+            self.report(f"'{new}'는 이미 있어. 다른 이름으로 해줘.", [ROOT])
+            return
+        self.editing = new
+        # **연 파일도 같이 옮겨졌다.** 옛 자리를 계속 들고 있으면 그 뒤로 저장이
+        # 조용히 실패한다 — `read_at()` 이 없는 파일에 None 을 주고 그대로 돌아선다.
+        # 낯선 PC 에서 "쓴 글이 디스크에 안 내려간다"로 잡힌 자리다.
+        self.editing_at = str(self.notes.path_of(new))
+        self.refresh()
+        self._fill_links(new)
+
+    def _told(self, head: str, body: str) -> None:
+        """알리기만 하는 창. Qt 기본 것은 파란 아이콘·영문 단추로 혼자 튄다."""
+        box = QMessageBox(QMessageBox.NoIcon, head, body, QMessageBox.NoButton, self)
+        box.addButton("알았어", QMessageBox.AcceptRole)
+        box.exec_()
+
+    def _agreed(self, head: str, body: str, yes_word: str) -> bool:
+        """한국어 확인창. Qt 기본 단추는 `Yes`/`No` 영문이라 여기만 튀었다.
+
+        단추에 **무슨 일이 일어나는지**를 적는다 — "예/아니오"보다 "지운다/그만둔다"가
+        누르기 전에 읽힌다.
+        """
+        box = QMessageBox(QMessageBox.NoIcon, head, body, QMessageBox.NoButton, self)
+        go = box.addButton(yes_word, QMessageBox.AcceptRole)
+        box.addButton("그만둔다", QMessageBox.RejectRole)
+        box.setDefaultButton(box.buttons()[1])
+        box.exec_()
+        return box.clickedButton() is go
+
+    def new_note(self) -> None:
+        """빈 항목을 만들고 제목부터 치게 한다."""
+        title, n = "새 항목", 2
+        while self.notes.read(title) is not None:
+            title, n = f"새 항목 {n}", n + 1
+        self.notes.write(Note(title=title, body="", kind="note"))
+        self.refresh()
+        self._fill_detail(self.notes.read(title))
+        self.detail_title.setFocus()
+        self.detail_title.selectAll()
+        self.graph.focus_on([title], zoom=FOCUS_ZOOM)
+
+    def fill_gap(self, title: str) -> None:
+        """비어 있던 이름으로 항목을 만든다.
+
+        가리키던 링크가 곧바로 이어진다 — 제목이 열쇠라서 만들기만 하면 붙는다.
+        """
+        if self.notes.read(title) is not None:
+            self.show_note(title)
+            return
+        self._wrote_at = time.monotonic()
+        self.notes.write(Note(title=title, body="", kind="note"))
+        self.refresh()
+        self._fill_detail(self.notes.read(title))
+        self.detail_body.setFocus()
+        self.graph.focus_on([title], zoom=FOCUS_ZOOM)
+        self.report(f"{title} 만들었어. 뭘 적을까?", [title])
+
+    def drop_note(self) -> None:
+        """지운다. 파일이 사라지므로 한 번 묻는다."""
+        if self.editing is None:
+            return
+        gone = self.editing
+        if not self._agreed("지울까?", f"'{gone}' 항목을 지운다. 파일이 사라진다.", "지운다"):
+            return
+        self._save_timer.stop()
+        self.editing = None
+        self._wrote_at = time.monotonic()
+        self.notes.delete(gone)
+        self.clear_detail()
+        self.refresh()
+        self.report(f"{gone} 지웠어.", [ROOT])
+
+    def open_reader(self) -> None:
+        """본문 판을 그래프 위에 띄운다."""
+        self._place_reader()
+        self.detail_card.show()
+        self.detail_card.raise_()
+
+    def _place_reader(self) -> None:
+        """그래프 한가운데 자리를 잡는다.
+
+        폭은 **읽을 수 있는 폭**에서 끊는다. 창을 넓힌다고 글줄이 같이 넓어지면
+        눈이 줄 끝에서 다음 줄 앞을 못 찾는다(65~75자).
+        """
+        g = self.graph.geometry()
+        if g.width() < 40:
+            return
+        h = max(280, int(g.height() * 0.88))
+        top = g.y() + (g.height() - h) // 2
+        if self.side_open:
+            # 둘로 나눈다. 글줄 폭은 각자 620에서 끊는다 — 좁아도 읽을 수는 있어야 한다.
+            span = min(1300, int(g.width() * 0.94))
+            gap = 12
+            each = max(300, (span - gap) // 2)
+            x = g.x() + (g.width() - (each * 2 + gap)) // 2
+            self.detail_card.setGeometry(x, top, each, h)
+            self.side_read.setGeometry(x + each + gap, top, each, h)
+            self._trim_tools(each)
+        else:
+            w = min(880, max(420, int(g.width() * 0.74)))
+            # 좌표는 부모(left) 기준이다 — graph.geometry()가 그 기준이라 그대로 쓴다.
+            self.detail_card.setGeometry(g.x() + (g.width() - w) // 2, top, w, h)
+            self._trim_tools(w)
+
+    def _trim_tools(self, width: int) -> None:
+        """카드가 좁으면 위 줄에서 덜 급한 것부터 접는다.
+
+        곁에 띄우면 폭이 절반이 되는데, 그때 위 줄 항목들이 서로 밀려 **글자가
+        겹쳐 잘린다** — 낯선 PC 에서 「지난 판 (2」로 괄호가 잘리고 「열매」가
+        「열애」로 보였다. 넓을 때는 안 드러나고 좁힐 때만 드러나는 자리다.
+
+        접는 차례는 **덜 쓰는 것부터**다. 「고치기」와 `⋯` 는 끝까지 남긴다.
+        """
+        tight = width < 560
+        for widget in (self.past, self.toc):
+            widget.setVisible(widget.count() > 1 and not tight)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.detail_card.isVisible() or self.side_open:
+            self._place_reader()
+
+    def clear_detail(self) -> None:
+        self.detail_card.hide()
+        self.shut_btn.hide()
+        self.toc.clear()
+        self.toc.hide()
+        self.past.clear()
+        self.past.hide()
+        self.side_btn.hide()
+        self.side_open = False
+        self.side_read.hide()
+        self.twin_note.hide()
+        self._save_timer.stop()
+        self.editing = None
+        self.editing_at = ""
+        self.detail_kind.hide()
+        self.detail_title.clear()
+        self.detail_title.setReadOnly(True)
+        self.detail_body.clear()
+        self.detail_body.setReadOnly(True)
+        self.detail_view.clear()
+        self.detail_stack.setCurrentIndex(0)
+        self.edit_btn.hide()
+        self.detail_links.clear()
+        self.embeds.show_hits([])
+        self.embeds_head.hide()
+        self.embeds.hide()
+        self.backs.show_hits([])
+        self.backs_head.hide()
+        self.backs.hide()
+
+    def _paint_say(self) -> None:
+        self.say.setText(self._say_text + ("  ▍" if self._caret_on else "   "))
+
+    def _blink(self) -> None:
+        self._caret_on = not self._caret_on
+        self._paint_say()
+
+    def _log_deed(self, what: str, said: str, started: float) -> None:
+        """시킨 것을 「활동」 칸에 한 줄 남긴다. 화면이 하는 일도 활동이다."""
+        try:
+            self.store.add_log({
+                "instruction_id": f"손-{int(started * 1000)}",
+                "seq": 0,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "phase": "done",
+                "tier": "pc",
+                "outcome": "success",
+                "module": what,
+                "step": said[:60],
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "detail": {},
+            })
+            # **써 넣기만 하면 화면은 모른다.** 그 칸은 훑기가 끝날 때 다시 그려지는데,
+            # 시킴말은 훑기를 안 거치는 길이라 영영 안 그려졌다 — 기록은 쌓이는데
+            # 화면만 빈 채로 남았다. 여기서 바로 넘긴다.
+            self.feed.show_rows(self.store.recent(9))
+        except Exception as err:
+            # **말없이 삼키지 않는다.** 이 칸이 빈 채로 남았을 때, 못 쓴 것인지 쓰고도
+            # 화면이 안 읽은 것인지 갈 길이 없어서 한 판을 헛돌았다. 시킨 일은 그대로
+            # 두되(남기다 실패했다고 무를 이유는 없다) **왜 못 썼는지는 남긴다.**
+            report.log_crash(err)
+
+    def _log_turn(self, order: str, reply: str, kind: str, started: float) -> None:
+        """무엇을 듣고 뭐라 답했는지 남긴다. 음성이 이상할 때 여기만 보면 갈린다."""
+        last = getattr(self.voice, "_last", {}) if self.voice is not None else {}
+        took = {"처리": round(time.monotonic() - started, 2)}
+        if last.get("spoke_at"):
+            # 말이 끝난 뒤 답까지 — 사용자가 느끼는 지연은 이것 하나다.
+            took["지연"] = round(time.monotonic() - last["spoke_at"], 2)
+        if last.get("listen"):
+            took["대기+듣기"] = last["listen"]
+        talklog.record(
+            heard=last.get("heard", order), woke=last.get("woke", True),
+            order=order, reply=reply, kind=kind, took=took,
+            stt=last.get("stt", "키보드"), audio=last.get("audio", ""),
+            peak=last.get("peak"), clipped=last.get("clipped"),
+        )
+        if self.voice is not None:
+            self.voice._last = {}
+
+    def report(self, text: str, touching: list[str], aloud: bool = True) -> None:
+        """VC가 말한다. 딛고 있는 항목들이 순서대로 밝아진다.
+
+        음성으로 켜져 있으면 소리로도 답한다 — 말로 물었는데 글자로만 답하면
+        화면을 봐야 하고, 그럼 손을 안 쓰는 의미가 없다.
+        """
+        self._say_text = text
+        self._caret_on = True
+        self._paint_say()
+        self.graph.speak(touching)
+
+        # 말하는 동안만 달아오른다. 글자 길이로 시간을 어림한다 — 실제 말이 끝나는
+        # 시각은 딴 실에 있고, 그걸 기다리자고 화면을 붙잡을 수는 없다.
+        self._light_mark(speaking=True)
+        QTimer.singleShot(max(1200, 90 * len(text)), self._light_mark)
+
+        if aloud and self.voice is not None and self.mouth is not None:
+            # UI를 붙잡지 않게 딴 실에서 말한다. 입은 하나라 겹쳐 말하지 않는다.
+            threading.Thread(target=self.mouth.say, args=(text,), daemon=True).start()
+
+    # --- 동작 -----------------------------------------------------------
+
+    def run_analyze(self) -> None:
+        found = analyze(self.store.conn)
+        made = 0
+        for p in found:
+            if self.store.same_proposal_pending(p["type"], p["title"]):
+                continue
+            self.store.add_proposal(p)
+            made += 1
+        self.refresh()
+        self.report(
+            f"점검했어. 고칠 만한 걸 {made}개 찾았어." if made else "점검했어. 지금은 고칠 게 없어.",
+            [ROOT],
+        )
+
+    def decide(self, pid: str, decision: str) -> None:
+        row = self.store.proposal(pid)
+        if row is None:
+            return
+
+        applied = None
+        decl = json.loads(row["declaration"] or "{}")
+        if decision.startswith("pick:"):
+            # 사용자가 고른 모듈에 그 말을 배운다. 후보 목록은 버린다.
+            chosen = decision.split(":", 1)[1]
+            applied = self.skills.save(
+                Skill(name=chosen, examples=decl.get("examples", []))
+            )
+        elif decision == "approve" and decl.get("name"):
+            applied = self.skills.save(Skill(**{k: v for k, v in decl.items()
+                                                if k in Skill.__dataclass_fields__}))
+        self.store.decide(pid, decision)
+        self.refresh()
+
+        if applied and applied.examples:
+            self.report(f"'{applied.examples[-1]}'는 {applied.name}. 이제 안 물어볼게.",
+                        [applied.name, ROOT])
+        elif applied:
+            self.report(f"{applied.name}, 다음부터 그렇게 할게.", [applied.name, ROOT])
+        else:
+            self.report("알겠어, 넘어갈게.", [ROOT])
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+    notes = Notes("data/notes", "notes_index.db")
+    win = MainWindow(notes, Store("eb.db"))
+    win.show()
+    sys.exit(app.exec_())
+
+
+def _self_check() -> None:
+    """자체점검은 `ui_check.py` 에 있다 — 여기 두면 722줄이라 정작 돌아가는 코드가
+    안 보인다. 부르는 길은 그대로다(`python ui.py --check`)."""
+    import ui_check
+
+    ui_check.run()
+
+
+if __name__ == "__main__":
+    if "--check" in sys.argv:
+        _self_check()
+    else:
+        main()

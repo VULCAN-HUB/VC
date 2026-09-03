@@ -1,0 +1,947 @@
+"""EB PC 서버 — 폰이 붙는 창구 (protocol.md).
+
+폰이 오케스트레이터 본체이고 PC는 서버다(결정 25). PC가 하는 일은 셋뿐이다:
+로컬 AI 구동(창구 제공), 분석·성장, 기억 창고.
+
+표준 라이브러리만 쓴다. 붙는 클라이언트가 사용자 본인의 폰 하나뿐이라
+웹 프레임워크를 더할 이유가 없다. 동시 접속이 문제가 되면 그때 바꾼다.
+전송 보안·NAT 통과는 Tailscale이 담당한다(결정 16).
+"""
+
+from __future__ import annotations
+
+import base64
+import hmac
+import json
+import queue
+import time
+from dataclasses import asdict
+import secrets
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+import paths
+
+import backends
+import brain
+import model_store
+import models_config
+import notes
+import remote
+import skills
+from eb_protocol import PROTOCOL_VERSION, Hello, LogEvent
+from modules import build_modules
+from notes import Notes
+from orchestrator import Orchestrator
+from skills import SkillStore
+from store import Store
+
+CONFIG_PATH = paths.config_path()
+MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 폰 사진 한 장이 이보다 크면 줄여서 보내야 한다
+
+
+def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+    """설정이 없으면 페어링 토큰을 만들어 저장한다. 이 토큰이 QR에 실린다(결정 16)."""
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    cfg = {
+        "pair_token": secrets.token_urlsafe(32),
+        # 기본은 VC 자체 엔진(결정 36). 사용자는 Ollama를 따로 깔지 않는다.
+        # 클라우드로 바꾸려면 kind를 anthropic·gemini·openai_compatible로.
+        "backend": {"kind": "local", "model_dir": str(paths.models_dir())},
+        # 역할별 모델. **비우면 사양을 재서 자동으로 고른다**(결정 42).
+        # 사용자가 고른 값이 있으면 그게 이긴다. 새 모델은 파일만 넣고 이름을 적으면 된다.
+        "models": {"chat": "", "vision": "", "stt": "", "voice": ""},
+    }
+    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cfg
+
+
+class Hub:
+    """폰으로 밀어 보낼 제안 큐. 폰이 SSE로 붙어 있으면 바로, 아니면 다음 접속 때."""
+
+    def __init__(self) -> None:
+        self._subs: list[queue.Queue] = []
+        self._lock = threading.Lock()
+
+    def subscribe(self) -> queue.Queue:
+        q: queue.Queue = queue.Queue()
+        with self._lock:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        with self._lock:
+            if q in self._subs:
+                self._subs.remove(q)
+
+    def publish(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            subs = list(self._subs)
+        for q in subs:
+            q.put(event)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "EB/" + PROTOCOL_VERSION
+
+    # --- 공통 -----------------------------------------------------------
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        pass  # 접근 로그는 안 남긴다. 학습 로그가 따로 있다.
+
+    def _bearer(self) -> str:
+        header = self.headers.get("Authorization", "")
+        return header[7:] if header.startswith("Bearer ") else ""
+
+    def _authorized(self, path: str = "") -> bool:
+        """폰·내 PC는 페어링 토큰으로, 외부 PC는 폰이 승인한 원격 토큰으로 들어온다.
+
+        원격 토큰은 허용된 경로에서만 통한다 — 검사는 remote.RemoteGate가 한다.
+        """
+        token = self._bearer()
+        if token and hmac.compare_digest(token, self.server.cfg["pair_token"]):
+            self.session = None
+            return True
+
+        # 브라우저는 헤더를 못 붙이는 자리(내려받기 링크)가 있어 ?t= 도 받는다.
+        token = token or (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
+        self.session = self.server.gate.check(token, path or urlparse(self.path).path,
+                                              self._client_ip())
+        return self.session is not None
+
+    def _client_ip(self) -> str:
+        """토큰을 묶을 주소. 폰이 중계 중이면 폰 IP가 아니라 진짜 손님 주소를 쓴다.
+
+        폰 IP로 묶으면 같은 핫스팟에 붙은 다른 기기까지 통과한다. 헤더를 믿되,
+        **폰의 페어링 토큰을 함께 제시했을 때만** 믿는다 — 안 그러면 외부 PC가
+        헤더 한 줄로 IP 고정을 무력화한다.
+        """
+        relay = self.headers.get("X-EB-Relay", "")
+        claimed = self.headers.get("X-EB-Client", "")
+        if claimed and relay and hmac.compare_digest(relay, self.server.cfg["pair_token"]):
+            return claimed
+        return self.client_address[0]
+
+    def _send(self, code: int, payload: Any = None) -> None:
+        body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def _send_html(self, body: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # 원격 화면은 바깥에서 아무것도 안 받아온다. 그걸 브라우저에도 못 박아 둔다.
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; style-src 'unsafe-inline'; "
+                         "script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:")
+        self.end_headers()
+        self.wfile.write(body)
+
+    # 한 번에 받는 본문의 한도. 서버는 0.0.0.0에 열려 있어서 **같은 공유기의 누구든**
+    # 말을 걸 수 있다. 예전엔 Content-Length를 그대로 믿고 읽어서, 4GB라고 적어 보내면
+    # 그만큼 읽으려다 굳었다. 기록 하나가 8MB를 넘을 일은 없다.
+    MAX_BODY = 8 * 1024 * 1024
+
+    class TooBig(ValueError):
+        """본문이 한도를 넘었다."""
+
+    def _body(self) -> Any:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > self.MAX_BODY:
+            raise self.TooBig(length)
+        # 적어 낸 길이보다 적게 오는 경우도 있다 — read는 오는 만큼만 준다.
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    # --- 라우팅 ---------------------------------------------------------
+
+    def do_GET(self) -> None:
+        url = urlparse(self.path)
+
+        # 인증 앞에 오는 둘. 여기서 QR을 받아 폰에 보여주는 게 원격의 시작이다.
+        if url.path in ("/", "/remote"):
+            session = self.server.gate.open(self._client_ip())
+            via_phone = (parse_qs(url.query).get("via") or [""])[0] == "phone"
+            return self._send_html(remote.page(session, via_phone))
+
+        if url.path == "/eb/v1/remote/status":
+            sid = (parse_qs(url.query).get("s") or [""])[0]
+            return self._send(200, self.server.gate.status(sid))
+
+        if not self._authorized(url.path):
+            return self._send(401, {"error": "unauthorized"})
+
+        if url.path == "/eb/v1/hello":
+            cfg = self.server.cfg
+            hello = Hello(
+                models=[m for m in self.server.picked["using"].values() if m],
+                capabilities=["inference", "log", "memory", "skills"],
+            )
+            return self._send(200, hello.__dict__)
+
+        if url.path == "/eb/v1/memory/search":
+            args = parse_qs(url.query)
+            q = (args.get("q") or [""])[0]
+            k = int((args.get("k") or ["8"])[0])
+            rows = self.server.notes.search(q, k)
+            return self._send(
+                200,
+                {
+                    "results": [
+                        {
+                            "title": r["title"],
+                            "kind": r["kind"],
+                            "pinned": bool(r["pinned"]),
+                            "created": r["created"],
+                            "body": r["body"],
+                            "links": self.server.notes.neighbors(r["title"]),
+                        }
+                        for r in rows
+                    ]
+                },
+            )
+
+        if url.path == "/eb/v1/graph":
+            return self._send(200, {"nodes": self.server.notes.graph()})
+
+        if url.path == "/eb/v1/proposals":
+            return self._send(
+                200, {"proposals": [dict(r) for r in self.server.store.pending_proposals()]}
+            )
+
+        if url.path == "/eb/v1/skills":
+            # 폰이 받아 오케스트레이터에 반영한다. 승인된 것만 여기 있다.
+            return self._send(200, {"skills": [asdict(s) for s in self.server.skills.all()]})
+
+        if url.path == "/eb/v1/events":
+            return self._stream_events()
+
+        if url.path.startswith("/eb/v1/artifacts/"):
+            return self._artifact(url.path[len("/eb/v1/artifacts/"):])
+
+        if url.path == "/eb/v1/artifacts":
+            return self._send(200, {"files": sorted(
+                p.name for p in self.server.artifacts.glob("*") if p.is_file())})
+
+        if url.path == "/eb/v1/triggers":
+            # 받아쓰기에 일러줄 낱말. 아는 말을 미리 알면 오인식이 크게 준다.
+            # 모듈마다 대표 낱말 하나씩만. 많이 주면 조용할 때 지어낸 말까지 확신한다.
+            words = [m.triggers[0] for m in self.server.eb.modules.values() if m.triggers]
+            return self._send(200, {"triggers": words})
+
+        if url.path == "/eb/v1/models/download":
+            pr = self.server.downloader.progress
+            return self._send(200, {
+                "catalog": model_store.listing(self.server.downloader.model_dir,
+                                               self.server.picked["hardware"]["vram_mb"]),
+                "state": pr.state, "key": pr.key, "label": pr.label,
+                "percent": pr.percent, "done_mb": round(pr.done_mb),
+                "total_mb": round(pr.total_mb), "error": pr.error,
+                "busy": self.server.downloader.busy,
+            })
+
+        if url.path == "/eb/v1/models":
+            # 화면이 목록을 보여주고 사용자가 고른다. 사양과 자동 추천도 같이 준다.
+            p = self.server.picked
+            return self._send(200, {"installed": p["installed"], "using": p["using"],
+                                    "auto": p["auto"], "hardware": p["hardware"]})
+
+        if url.path == "/eb/v1/engine":
+            # 화면이 "지금 뭐가 올라와 있나"를 본다. 자체 엔진일 때만 값이 찬다.
+            eng = self.server.backend
+            return self._send(200, {
+                "kind": eng.name,
+                "models": getattr(eng, "available", lambda: [])(),
+                "loaded": getattr(eng, "loaded", ""),
+                "sees_images": getattr(eng, "sees_images", True),
+            })
+
+        if url.path == "/eb/v1/remote/pending":
+            # 폰이 "누가 붙으려 하나"를 본다. **코드는 안 준다** — 폰은 외부 PC 화면을
+            # 눈으로 보고 대조해야 한다. 코드를 내려주면 그 자리에 없어도 승인된다.
+            if self.session is not None:
+                return self._send(403, {"error": "폰에서만 볼 수 있다"})
+            return self._send(200, {"sessions": [
+                {"id": s.id, "from": s.from_ip, "waiting": round(time.time() - s.created)}
+                for s in self.server.gate.pending()]})
+
+        if url.path == "/eb/v1/remote/sessions":
+            # 폰이 "지금 누가 붙어 있나"를 본다. 원격에서는 못 본다.
+            if self.session is not None:
+                return self._send(403, {"error": "폰에서만 볼 수 있다"})
+            return self._send(200, {"sessions": [
+                {"id": s.id, "from": s.from_ip, "bound": s.bound_ip, "log": s.log}
+                for s in self.server.gate.active()]})
+
+        return self._send(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        url = urlparse(self.path)
+
+        # 인증보다 먼저 본문을 읽어 비운다. 안 읽고 401을 보내면 남은 바이트가 소켓에
+        # 남아 다음 요청이 그걸 요청줄로 읽고 연결이 끊긴다(keep-alive라 더 잘 터진다).
+        try:
+            body = self._body()
+        except self.TooBig:
+            # 크다고 읽어 비우지 않는다 — 그게 바로 상대가 노리는 것이다. 연결을 끊는다.
+            self.close_connection = True
+            return self._send(413, {"error": "본문이 너무 크다"})
+        except json.JSONDecodeError:
+            body = None
+
+        if not self._authorized(url.path):
+            return self._send(401, {"error": "unauthorized"})
+        if body is None:
+            return self._send(400, {"error": "bad json"})
+
+        # --- 원격 문지기 ---
+        if url.path == "/eb/v1/remote/approve":
+            # 폰만 승인할 수 있다. 원격 토큰으로 자기 자신을 승인시키면 문이 무너진다.
+            if self.session is not None:
+                return self._send(403, {"error": "폰에서만 승인할 수 있다"})
+            by = body.get("by") or "폰"
+            if body.get("code"):
+                ok = self.server.gate.approve_code(body["code"], by)  # 폰 중계 경로
+            else:
+                ok = self.server.gate.approve(body.get("session", ""),
+                                              body.get("nonce", ""), by)  # QR 경로
+            return self._send(200 if ok else 400, {"ok": bool(ok)})
+
+        if url.path == "/eb/v1/remote/deny":
+            if self.session is not None:
+                return self._send(403, {"error": "폰에서만 거절할 수 있다"})
+            return self._send(200, {"ok": self.server.gate.deny(body.get("session", ""))})
+
+        if url.path == "/eb/v1/remote/close":
+            # 외부 PC는 자기 세션만 끊을 수 있다. 폰은 어느 것이든 끊는다.
+            sid = body.get("session", "")
+            if self.session is not None and self.session.id != sid:
+                return self._send(403, {"error": "남의 연결이다"})
+            return self._send(200, {"ok": self.server.gate.close(sid, "끊음")})
+
+        if url.path == "/eb/v1/models/download":
+            # 몇 GB를 받는 일이라 원격에서는 못 시킨다. 남의 디스크를 채우면 안 된다.
+            if self.session is not None:
+                return self._send(403, {"error": "여기서는 못 받는다"})
+            if body.get("cancel"):
+                self.server.downloader.cancel()
+                return self._send(200, {"ok": True})
+            if not self.server.downloader.start(body.get("key", "")):
+                busy = self.server.downloader.busy
+                return self._send(409 if busy else 400,
+                                  {"ok": False,
+                                   "error": "받는 중이다" if busy else "그런 모델이 없다"})
+            return self._send(202, {"ok": True})
+
+        if url.path == "/eb/v1/models":
+            # 모델 바꾸기는 폰·내 PC에서만. 원격에서 남의 엔진을 갈아 끼우면 안 된다.
+            if self.session is not None:
+                return self._send(403, {"error": "여기서는 못 바꾼다"})
+            if not self.server.set_model(body.get("role", ""), body.get("name", "")):
+                return self._send(400, {"ok": False, "error": "그런 모델이 없다"})
+            return self._send(200, {"ok": True, "using": self.server.picked["using"]})
+
+        if url.path == "/eb/v1/ask":
+            return self._ask(body)
+
+        if url.path == "/v1/chat/completions":
+            return self._chat(body)
+
+        if url.path == "/eb/v1/log":
+            try:
+                event = LogEvent(**body)
+            except (TypeError, ValueError) as e:
+                # 형식이 어긋난 로그는 받지 않는다. 조용히 삼키면 분석이 거짓말을 한다.
+                return self._send(400, {"error": str(e)})
+            self.server.store.add_log(event)
+            return self._send(202)
+
+        if url.path == "/eb/v1/memory":
+            title = body.get("title", "").strip()
+            text = body.get("text", "").strip()
+            if not title or not text:
+                return self._send(400, {"error": "title and text required"})
+            # 기본은 **덧붙이기**다. 덮어쓰기를 기본으로 하면 어제 적은 것이 오늘
+            # 적은 것에 조용히 지워져, 기억이 아니라 최신값 저장소가 된다.
+            mode = body.get("mode", "append")
+            if mode not in ("append", "replace"):
+                return self._send(400, {"error": "mode must be append or replace"})
+            old = self.server.notes.read(title)
+
+            # **사람이 고쳐 놓은 것을 관찰이 덮으면 안 된다.** 틀린 걸 바로잡았는데
+            # 다음 기록이 되돌려 놓으면 사람은 이 물건을 못 믿는다(결정 22와 같은 결).
+            if (mode == "replace" and old is not None
+                    and old.edited_by == "사람" and not body.get("force")):
+                return self._send(409, {"error": "사람이 고친 항목이다. force가 필요하다",
+                                        "title": title, "edited_by": old.edited_by})
+
+            if mode == "append" and old is not None:
+                path = self.server.notes.append(title, text, body.get("kind", old.kind))
+            else:
+                note = notes.Note(
+                    title=title,
+                    body=text,
+                    kind=body.get("kind", old.kind if old else "note"),
+                    pinned=bool(body.get("pinned")) or bool(old and old.pinned),
+                    aliases=old.aliases if old else [],
+                )
+                path = self.server.notes.write(note)
+            return self._send(201, {"title": title, "path": str(path), "mode": mode})
+
+        if url.path == "/eb/v1/analyze":
+            return self._analyze()
+
+        parts = url.path.strip("/").split("/")
+        if len(parts) == 5 and parts[:3] == ["eb", "v1", "proposals"] and parts[4] == "decision":
+            decision = body.get("decision") or ""
+            # "pick:번역" 은 후보 중 하나를 고른 것이다(되묻던 표현을 그 모듈에 배운다).
+            if decision not in ("approve", "reject", "revert") and not decision.startswith("pick:"):
+                return self._send(400, {"error": "bad decision"})
+            return self._decide(parts[3], decision)
+
+        return self._send(404, {"error": "not found"})
+
+    # --- 성장 루프 (결정 17·18) -----------------------------------------
+
+    def _ask(self, body: Any) -> None:
+        """지시를 받아 실제로 돌린다. 결과는 파일로도 남겨 어디서든 내려받게 한다."""
+        text = (body.get("text") or "").strip()
+        if not text:
+            return self._send(400, {"error": "text required"})
+
+        context = {}
+        if body.get("image"):
+            try:
+                raw = base64.b64decode(body["image"], validate=True)
+            except (ValueError, TypeError):
+                return self._send(400, {"error": "image must be base64"})
+            if len(raw) > MAX_IMAGE_BYTES:
+                # 큰 사진은 받아 봐야 모델이 거절한다. 메모리만 먹기 전에 막는다.
+                return self._send(413, {"error": "사진이 너무 크다"})
+            context["image"] = raw
+
+        reply = self.server.eb.handle(text, context)
+        # 어느 모듈이 처리했는지 같이 준다 — 화면이 그 항목을 비추는 데 쓴다.
+        out = {"text": reply.text, "kind": reply.kind, "module": reply.module}
+
+        if reply.kind == "result":
+            name = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.txt"
+            (self.server.artifacts / name).write_text(
+                f"{text}\n\n{reply.text}\n", encoding="utf-8"
+            )
+            out["artifact"] = name
+        return self._send(200, out)
+
+    def _artifact(self, name: str) -> None:
+        """결과물 내려받기. 이름에 경로가 섞여 들어오면 디스크 전체가 열린다."""
+        safe = Path(name).name  # 디렉터리 성분을 전부 버린다
+        path = self.server.artifacts / safe
+        if not safe or not path.is_file():
+            return self._send(404, {"error": "not found"})
+
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _analyze(self) -> None:
+        """이력을 훑어 제안을 만든다. 자동 적용은 없다 — 만들어서 큐에 넣을 뿐이다."""
+        found, fresh = self.server.analyze()
+        return self._send(200, {"created": fresh, "found": found})
+
+    def _decide(self, proposal_id: str, decision: str) -> None:
+        row = self.server.store.proposal(proposal_id)
+        if row is None:
+            return self._send(404, {"ok": False})
+
+        applied = None
+        decl = json.loads(row["declaration"] or "{}")
+        name = decl.get("name")
+
+        if decision.startswith("pick:"):
+            chosen = decision.split(":", 1)[1].strip()
+            if chosen not in (decl.get("candidates") or []):
+                return self._send(400, {"ok": False, "error": "후보에 없는 모듈이다"})
+            applied = asdict(self.server.skills.save(
+                skills.Skill(name=chosen, examples=decl.get("examples", []))
+            ))
+        elif decision == "approve" and row["type"] in ("skill_proposal", "skill_update") and name:
+            applied = asdict(self.server.skills.save(skills.Skill(**decl)))
+        elif decision == "revert" and name:
+            reverted = self.server.skills.revert(name)
+            if reverted is None:
+                return self._send(409, {"ok": False, "error": "되돌릴 이전 버전이 없다"})
+            applied = asdict(reverted)
+
+        self.server.store.decide(proposal_id, decision)
+        return self._send(200, {"ok": True, "applied": applied})
+
+    # --- 처리 -----------------------------------------------------------
+
+    def _chat(self, body: dict[str, Any]) -> None:
+        """OpenAI 호환 창구. 폰에게 PC는 백엔드 하나로 보인다(결정 25)."""
+        messages = body.get("messages")
+        if not messages:
+            return self._send(400, {"error": "messages required"})
+        # 요청이 모델을 지정하지 않으면 지금 쓰기로 정해진 글자 모델을 쓴다(결정 42).
+        model = body.get("model") or self.server.picked["using"]["chat"]
+        try:
+            text = self.server.backend.chat(messages, model)
+        except backends.BackendError as e:
+            # 폰이 이걸 보고 3단(API)으로 승격할지 정한다(결정 24).
+            return self._send(502, {"error": str(e)})
+        return self._send(
+            200,
+            {
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}}],
+            },
+        )
+
+    def _stream_events(self) -> None:
+        """SSE. 밀린 제안을 먼저 보내고 그다음부터 실시간으로 흘린다."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        q = self.server.hub.subscribe()
+        try:
+            for row in self.server.store.pending_proposals():
+                self._sse(dict(row))
+            while True:
+                try:
+                    self._sse(q.get(timeout=15))
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")  # 유휴 연결이 끊기지 않게
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # 폰이 끊었다. 정상이다.
+        finally:
+            self.server.hub.unsubscribe(q)
+
+    def _sse(self, payload: dict[str, Any]) -> None:
+        data = json.dumps(payload, ensure_ascii=False)
+        self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+
+class EBServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, cfg: dict[str, Any], store: Store, note_store: Notes) -> None:
+        super().__init__(addr, Handler)
+        self.cfg = cfg
+        self.store = store
+        self.notes = note_store
+        self.skills = SkillStore(note_store)
+        self.hub = Hub()
+        self.backend = backends.build(cfg["backend"])
+        # 자체 엔진이면 가진 모델을 설정보다 우선한다 — 모델 이름을 손으로 적게 하면
+        # 파일명을 그대로 옮겨야 해서 오타 한 번에 "모델이 없다"가 뜬다.
+        # 무엇을 쓸지 여기서 정한다. 사용자 선택 > 사양 자동 (결정 42)
+        model_dir = (cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
+        self.picked = models_config.resolve(cfg, model_dir)
+        self.downloader = model_store.Downloader(model_dir)
+        if hasattr(self.backend, "n_gpu_layers"):
+            self.backend.n_gpu_layers = self.picked["gpu_layers"]
+        self.gate = remote.RemoteGate()
+        self.artifacts = Path(cfg.get("artifact_dir") or "data/artifacts")
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+
+        # 원격에서 들어온 지시를 처리할 오케스트레이터. 폰과 같은 부품·같은 1단 모델을 쓴다.
+        mods = build_modules(self.backend, self.picked["using"]["vision"]
+                             or self.picked["using"]["chat"])
+        self.eb = Orchestrator(mods, brain=brain.build(mods, self.skills.all()),
+                               log=self.store.add_log)
+        self.eb.load_skills(self.skills.all())
+
+    def set_model(self, role: str, name: str) -> bool:
+        """사용자가 고른 모델을 저장하고 바로 반영한다.
+
+        받아쓰기·목소리는 다음에 켤 때 잡히고, 글자·비전 모델은 다음 호출에 올라온다 —
+        지금 올라와 있는 걸 내리기만 하면 된다(상주 제어가 알아서 다시 올린다).
+        """
+        model_dir = (self.cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
+        if not models_config.choose(self.cfg, role, name, model_dir):
+            return False
+        CONFIG_PATH.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+        self.picked = models_config.resolve(self.cfg, model_dir)
+        if role in ("chat", "vision"):
+            unload = getattr(self.backend, "unload", None)
+            if unload:
+                unload()
+            self.eb = Orchestrator(
+                build_modules(self.backend, self.picked["using"]["vision"]
+                              or self.picked["using"]["chat"]),
+                brain=self.eb.brain, log=self.store.add_log)
+            self.eb.load_skills(self.skills.all())
+        return True
+
+    def analyze(self) -> tuple[int, list[str]]:
+        """이력을 훑어 새 제안만 큐에 넣는다. 반환은 (찾은 수, 새로 만든 제목들)."""
+        found = skills.analyze(self.store.conn)
+        fresh = []
+        for p in found:
+            if self.store.same_proposal_pending(p["type"], p["title"]):
+                continue  # 같은 제안을 매번 다시 띄우지 않는다
+            self.store.add_proposal(p)
+            self.hub.publish(p)
+            fresh.append(p["title"])
+        return len(found), fresh
+
+    def start_housekeeping(self, every_sec: int = 60) -> None:
+        """놀고 있는 모델을 내리고 죽은 원격 세션을 치운다.
+
+        `sweep()`을 아무도 안 부르면 VRAM을 영영 붙들고 있어서 다른 모델이 못 올라온다.
+        """
+        sweep = getattr(self.backend, "sweep", None)
+
+        def loop() -> None:
+            while True:
+                time.sleep(every_sec)
+                try:
+                    self.gate.sweep()
+                    # 다 받은 모델이 목록에 바로 뜨게 한다.
+                    if self.downloader.progress.state == "done" and not self.downloader.busy:
+                        self.downloader.progress.state = "idle"
+                        model_dir = (self.cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
+                        self.picked = models_config.resolve(self.cfg, model_dir)
+                        print("[모델] 새로 받은 것을 목록에 넣었다")
+                    if sweep is not None and sweep():
+                        print("[엔진] 놀아서 모델을 내렸다")
+                except Exception as e:  # 청소가 실패해도 서버는 계속 떠 있어야 한다
+                    print(f"[청소 실패] {e}")
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def start_analyzer(self, every_sec: int = 900) -> None:
+        """주기적으로 스스로 돌아본다. 사용자가 시키지 않아도 성장은 계속된다.
+
+        ponytail: 고정 주기 스레드. 지시가 뜸한 시간대를 학습해 그때 돌리는 것은
+        개입 등급(결정 23)이 자리 잡은 뒤에 붙인다.
+        """
+
+        def loop() -> None:
+            while True:
+                time.sleep(every_sec)
+                try:
+                    self.analyze()
+                except Exception as e:  # 분석이 실패해도 서버는 계속 떠 있어야 한다
+                    print(f"[분석 실패] {e}")
+
+        threading.Thread(target=loop, daemon=True).start()
+
+
+def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
+    cfg = load_config()
+    store = Store()
+    note_store = Notes(cfg.get("notes_dir", "data/notes"), "notes_index.db")
+    server = EBServer((host, port), cfg, store, note_store)
+    server.start_analyzer(cfg.get("analyze_every_sec", 900))
+    server.start_housekeeping()
+    print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
+    print(f"페어링 토큰: {cfg['pair_token']}")
+    server.serve_forever()
+
+
+def _self_check() -> None:
+    """서버를 실제로 띄우고 폰이 하는 호출을 그대로 해본다."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    cfg = {
+        "pair_token": "test-token",
+        "backend": {"kind": "openai_compatible", "base_url": "http://unused/v1"},
+        "models": {"chat": "", "vision": "", "stt": "", "voice": ""},
+    }
+    import tempfile
+
+    tmp = tempfile.TemporaryDirectory()
+    store = Store(":memory:")
+    note_store = Notes(Path(tmp.name) / "notes")
+    server = EBServer(("127.0.0.1", 0), cfg, store, note_store)
+
+    class FakeBackend(backends.Backend):
+        fail = False
+
+        def chat(self, messages, model):
+            if self.fail:
+                raise backends.BackendError("engine down")
+            return f"echo:{messages[-1]['content']}"
+
+    fake = FakeBackend()
+    server.backend = fake
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def call(method, path, payload=None, token="test-token"):
+        req = urllib.request.Request(
+            base + path,
+            data=None if payload is None else json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                raw = r.read().decode()
+                return r.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            return e.code, (json.loads(raw) if raw else None)
+
+    # 토큰은 헤더에 실리므로 ASCII다(token_urlsafe). 틀린 값도 ASCII로 시험한다.
+    assert call("GET", "/eb/v1/hello", token="wrong-token")[0] == 401
+    assert call("GET", "/eb/v1/hello", token="")[0] == 401
+
+    # 큰 본문을 **적어 내기만** 해도 굳으면 안 된다. 서버가 0.0.0.0에 열려 있어서
+    # 같은 공유기의 누구든 이걸 보낼 수 있다.
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    conn.putrequest("POST", "/eb/v1/memory")
+    conn.putheader("Authorization", "Bearer test-token")
+    conn.putheader("Content-Length", str(4 * 1024 * 1024 * 1024))
+    conn.endheaders()
+    conn.send(b'{"text":"x"}')
+    began = time.time()
+    assert conn.getresponse().status == 413
+    assert time.time() - began < 2.0, "413을 늦게 주면 막은 게 아니다"
+    conn.close()
+    # 막고 나서도 멀쩡해야 한다
+    assert call("GET", "/eb/v1/hello")[0] == 200
+
+    status, hello = call("GET", "/eb/v1/hello")
+    assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
+    # 지금 쓰기로 정해진 모델들이 나온다(사양 자동 또는 사용자 선택).
+    assert isinstance(hello["models"], list)
+
+    status, out = call("POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "안녕"}]})
+    assert status == 200 and out["choices"][0]["message"]["content"] == "echo:안녕"
+    assert call("POST", "/v1/chat/completions", {})[0] == 400
+
+    fake.fail = True
+    assert call("POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "x"}]})[0] == 502
+    fake.fail = False
+
+    good = dict(instruction_id="01J", seq=1, phase="intent", tier="phone", outcome="success")
+    assert call("POST", "/eb/v1/log", good)[0] == 202
+    assert call("POST", "/eb/v1/log", good)[0] == 202  # 재전송
+    assert len(store.instruction("01J")) == 1
+    bad = dict(good, seq=2, outcome="failure")  # failure_point 없음
+    assert call("POST", "/eb/v1/log", bad)[0] == 400, "형식 어긋난 로그가 저장됐다"
+
+    # 연결이 실려 오는지 보려면 가리키는 쪽이 실제로 있어야 한다. 없는 것을 가리키는
+    # 링크는 이제 연결이 아니라 **미해결**로 따로 샌다(notes.unresolved).
+    assert call("POST", "/eb/v1/memory", {"title": "VC", "text": "여기서 시작한다."})[0] == 201
+    mem = {"title": "카페 단골", "text": "난 아이스만 마신다. [[VC]]", "pinned": True}
+    assert call("POST", "/eb/v1/memory", mem)[0] == 201
+    assert call("POST", "/eb/v1/memory", {"text": "제목 없음"})[0] == 400
+    # 검색어는 퍼센트 인코딩(UTF-8)해서 보낸다. URL은 ASCII만 실을 수 있다.
+    status, found = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아이스"))
+    assert status == 200 and len(found["results"]) == 1
+    assert found["results"][0]["links"] == ["VC"], "연결이 안 실려 온다"
+
+    # 기본은 덧붙이기다 — 어제 적은 것이 오늘 것에 지워지면 기억이 아니다.
+    assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "요즘은 따뜻한 것도 마신다"})[0] == 201
+    grown = note_store.read("카페 단골")
+    assert "아이스만" in grown.body and "따뜻한" in grown.body, grown.body
+
+    # 다시 써도 신원(식별자·만든 날짜)은 그대로다. 20년 뒤 "언제 처음 적었나"에 답해야 한다.
+    first = note_store.read("카페 단골")
+    call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "한 줄 더"})
+    assert note_store.read("카페 단골").created == first.created
+    assert note_store.read("카페 단골").id == first.id
+
+    # 사람이 고친 항목은 관찰이 덮지 못한다.
+    fixed = note_store.read("카페 단골")
+    fixed.body, fixed.edited_by = "정정: 나는 라떼만 마신다", "사람"
+    note_store.write(fixed)
+    blocked = call("POST", "/eb/v1/memory",
+                   {"title": "카페 단골",
+                    "text": "관찰: 아메리카노", "mode": "replace"})
+    assert blocked[0] == 409, blocked
+    assert note_store.read("카페 단골").body.startswith("정정"), "사람 손질이 덮였다"
+    # 정말 덮어야 할 때는 force로 뚫는다 — 다만 눌러서 뚫는 길이 있어야 한다.
+    assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "새로 씀",
+                                          "mode": "replace", "force": True})[0] == 201
+
+    status, graph = call("GET", "/eb/v1/graph")
+    assert status == 200 and "카페 단골" in graph["nodes"]
+
+    assert call("POST", "/eb/v1/proposals/p1/decision", {"decision": "그만"})[0] == 400
+    assert call("POST", "/eb/v1/proposals/nope/decision", {"decision": "approve"})[0] == 404
+
+    # --- 성장 루프: 낭비 감지 → 제안 → 승인 → 스킬로 남는다 (결정 17·18) ---
+    assert call("POST", "/eb/v1/analyze", {}) == (200, {"created": [], "found": 0})
+
+    for i in range(3):
+        ev = dict(instruction_id=f"i{i}", phase="module_run", module="product_search")
+        assert call("POST", "/eb/v1/log", dict(ev, seq=1, tier="phone",
+                                               outcome="failure", failure_point="vision_model"))[0] == 202
+        assert call("POST", "/eb/v1/log", dict(ev, seq=2, tier="pc", outcome="success"))[0] == 202
+
+    status, made = call("POST", "/eb/v1/analyze", {})
+    assert status == 200 and len(made["created"]) == 1, made
+    # 두 번 돌려도 같은 제안이 또 쌓이지 않는다.
+    assert call("POST", "/eb/v1/analyze", {})[1]["created"] == []
+
+    pending = store.pending_proposals()
+    assert len(pending) == 1
+    pid = pending[0]["proposal_id"]
+
+    # 승인 전에는 스킬이 없다 — 자동 적용이 없다는 뜻이다.
+    assert server.skills.load("product_search") is None
+    status, out = call("POST", f"/eb/v1/proposals/{pid}/decision", {"decision": "approve"})
+    assert status == 200 and out["applied"]["start_tier"] == "pc"
+    saved = server.skills.load("product_search")
+    assert saved is not None and saved.start_tier == "pc" and saved.version == 1
+
+    # 되돌릴 이전 버전이 없으면 거부한다 — 조용히 성공했다고 하지 않는다.
+    assert call("POST", f"/eb/v1/proposals/{pid}/decision", {"decision": "revert"})[0] == 409
+
+    # 후보 중 하나를 고르면 그 모듈이 그 말을 배운다. 후보에 없는 걸 고르면 막는다.
+    store.add_proposal(dict(
+        proposal_id="pk", type="intervention_proposal", title="매번 되묻는 표현",
+        summary="'그거 좀 해줘'를 3번 되물었어.", based_on=["c1", "c2", "c3"],
+        declaration={"candidates": ["product_search", "translate"], "examples": ["그거 좀 해줘"]},
+    ))
+    assert call("POST", "/eb/v1/proposals/pk/decision", {"decision": "pick:없는모듈"})[0] == 400
+    status, out = call("POST", "/eb/v1/proposals/pk/decision", {"decision": "pick:translate"})
+    assert status == 200 and out["applied"]["examples"] == ["그거 좀 해줘"], out
+
+    # --- 모델 선택: 사용자가 고르고, 없는 건 못 고른다 (결정 42) ---
+    status, out = call("GET", "/eb/v1/models")
+    assert status == 200 and set(out) == {"installed", "using", "auto", "hardware"}, out
+    assert out["hardware"]["tier"] in ("high", "mid", "low", "cpu")
+    assert set(out["using"]) == {"chat", "vision", "stt", "voice"}
+    # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
+    assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
+    assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"
+    # 없는 것·없는 역할은 막는다.
+    assert call("POST", "/eb/v1/models", {"role": "stt", "name": "huge-v9"})[0] == 400
+    assert call("POST", "/eb/v1/models", {"role": "없는역할", "name": "x"})[0] == 400
+    # 빈 값은 자동으로 되돌리기.
+    assert call("POST", "/eb/v1/models", {"role": "stt", "name": ""})[0] == 200
+
+    # 모델 받기: 목록이 나오고, 없는 건 못 받고, 원격은 못 시킨다.
+    status, dl = call("GET", "/eb/v1/models/download")
+    assert status == 200 and dl["catalog"] and dl["state"] == "idle", dl
+    assert {"key", "role", "label", "size_mb", "installed", "heavy"} <= set(dl["catalog"][0])
+    assert call("POST", "/eb/v1/models/download", {"key": "없는모델"})[0] == 400
+
+    # 놀고 있는 모델을 내리고 죽은 세션을 치운다 — 안 부르면 VRAM이 안 풀린다.
+    class SweepBackend(FakeBackend):
+        swept = False
+
+        def sweep(self):
+            # 진짜 엔진처럼 한 번만 내려간다. 매번 True면 로그가 도배된다.
+            already, SweepBackend.swept = SweepBackend.swept, True
+            return not already
+
+    housekeeper = EBServer(("127.0.0.1", 0), cfg, Store(":memory:"),
+                           Notes(Path(tmp.name) / "hk"))
+    housekeeper.backend = SweepBackend()
+    housekeeper.start_housekeeping(every_sec=0.05)
+    dead = housekeeper.gate.open("1.2.3.4")
+    dead.created -= remote.QR_TTL + 1
+    time.sleep(0.3)
+    assert SweepBackend.swept, "엔진 청소가 안 돌았다"
+    assert dead.id not in housekeeper.gate.sessions, "죽은 세션이 안 치워졌다"
+    housekeeper.server_close()
+
+    # --- 원격 접속: 외부 PC → 폰 승인 → 직접 연결 ---
+    import re
+
+    def raw(method, path, payload=None, token=None):
+        req = urllib.request.Request(
+            base + path, method=method,
+            data=None if payload is None else json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    # 외부 PC가 페이지를 연다 — 인증 없이 QR만 받는다.
+    status, html = raw("GET", "/remote")
+    assert status == 200 and b"<svg" in html, "QR 페이지가 안 나온다"
+    sid = re.search(r"const SID = '([\w-]+)'", html.decode()).group(1)
+
+    # 승인 전에는 아무것도 못 한다.
+    assert raw("POST", "/eb/v1/ask", {"text": "볼륨 올려"})[0] == 401
+    assert json.loads(raw("GET", f"/eb/v1/remote/status?s={sid}")[1])["state"] == "pending"
+
+    # 폰이 QR을 찍어 승인한다. nonce가 있어야 한다.
+    nonce = server.gate.sessions[sid].nonce
+    assert raw("POST", "/eb/v1/remote/approve", {"session": sid, "nonce": "틀림"},
+               cfg["pair_token"])[0] == 400
+    assert raw("POST", "/eb/v1/remote/approve", {"session": sid, "nonce": nonce},
+               cfg["pair_token"])[0] == 200
+
+    # 외부 PC가 토큰을 받아 직접 연결한다.
+    remote_token = json.loads(raw("GET", f"/eb/v1/remote/status?s={sid}")[1])["token"]
+    status, out = raw("POST", "/eb/v1/ask", {"text": "볼륨 올려"}, remote_token)
+    assert status == 200, out
+    result = json.loads(out)
+    assert result["text"] == "볼륨 올렸어" and result["artifact"]
+
+    # 결과물은 외부 PC에서도 내려받을 수 있다.
+    status, blob = raw("GET", f"/eb/v1/artifacts/{result['artifact']}", token=remote_token)
+    assert status == 200 and "볼륨 올렸어" in blob.decode()
+
+    # 원격은 허용된 경로만. 스킬 승인·설정은 폰과 내 PC에서만 한다.
+    assert raw("POST", "/eb/v1/proposals/p1/decision", {"decision": "approve"},
+               remote_token)[0] == 401
+    assert raw("GET", "/eb/v1/remote/sessions", token=remote_token)[0] == 401
+    # 몇 GB를 남의 디스크에 받게 하면 안 된다.
+    assert raw("POST", "/eb/v1/models/download", {"key": "qwen3-8b"}, remote_token)[0] == 401
+    assert raw("POST", "/eb/v1/models", {"role": "chat", "name": ""}, remote_token)[0] == 401
+    # 원격 토큰으로 자기 자신을 승인시킬 수 없다.
+    s2 = server.gate.open("9.9.9.9")
+    assert raw("POST", "/eb/v1/remote/approve",
+               {"session": s2.id, "nonce": s2.nonce}, remote_token)[0] == 401
+
+    # 경로를 섞어 넣어도 디스크가 안 열린다.
+    assert raw("GET", "/eb/v1/artifacts/../../eb_config.json", token=remote_token)[0] in (400, 404)
+
+    # 끊으면 길이 사라진다.
+    assert raw("POST", "/eb/v1/remote/close", {"session": sid}, remote_token)[0] == 200
+    assert raw("POST", "/eb/v1/ask", {"text": "볼륨 올려"}, remote_token)[0] == 401
+
+    # 폰이 승인된 스킬을 받아 간다 — 여기서 학습이 실제 동작으로 넘어간다.
+    status, got = call("GET", "/eb/v1/skills")
+    assert status == 200 and got["skills"][0]["start_tier"] == "pc"
+
+    tmp.cleanup()
+
+    server.shutdown()
+    print("server self-check 통과")
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--check" in sys.argv:
+        _self_check()
+    else:
+        serve()

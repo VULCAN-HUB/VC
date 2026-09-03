@@ -1,0 +1,163 @@
+# EB 프로토콜 v0.1 (폰 ↔ PC)
+
+폰이 오케스트레이터 본체이고 PC는 서버다(결정 25). 따라서 **폰이 클라이언트, PC가 서버**다.
+PC가 꺼져 있어도 폰은 동작해야 하므로, 모든 호출은 실패해도 이비가 죽지 않는 것을 전제로 한다.
+
+## 설계 원칙
+
+1. **OS 중립**(결정 20). HTTP/1.1 + JSON. 안드로이드 전용 IPC나 애플 전용 프레임워크를 쓰지 않는다.
+2. **PC는 하나의 백엔드처럼 보인다**(결정 25). 추론은 **OpenAI 호환 규격**을 그대로 쓰므로
+   폰 입장에서 내 PC와 클로드·제미나이는 같은 모양이다. 어댑터가 늘지 않는다(결정 3).
+3. **EB 고유 기능만 별도 경로**를 쓴다. 학습 루프·기억·스킬 승인이 여기 해당한다.
+4. **전송은 Tailscale 위**(결정 16). 프로토콜 자체는 전송을 가정하지 않는다.
+
+## 인증
+
+페어링 시 QR로 교환한 토큰을 헤더에 싣는다.
+
+```
+Authorization: Bearer <pair_token>
+```
+
+토큰은 페어링 1회로 생성되며 폰·PC 양쪽에만 저장된다. 계정 서버는 없다(결정 16).
+
+## 엔드포인트
+
+### 추론 — OpenAI 호환
+
+```
+POST /v1/chat/completions
+```
+
+규격을 새로 만들지 않는다. PC는 로컬 엔진(외부 엔진 연결, 결정 27) 앞의 얇은 창구다.
+
+### 핸드셰이크
+
+```
+GET /eb/v1/hello
+```
+
+```json
+{
+  "protocol": "0.1",
+  "models": ["qwen2.5-vl-7b", "llama3.1-8b"],
+  "capabilities": ["inference", "log", "memory", "skills"],
+  "busy": false
+}
+```
+
+폰은 이 응답으로 **PC를 2단으로 쓸 수 있는지** 판단한다. 실패하면 3단(API)으로 내려간다.
+
+### 학습 로그 — 지시 시작 시점부터 전송
+
+```
+POST /eb/v1/log
+```
+
+결정 17에 따라 **지시가 시작된 순간부터** 흘려보낸다. 배치가 아니라 이벤트 단위다.
+PC가 꺼져 있으면 폰이 버퍼에 쌓아 두었다가 다음 연결 때 보낸다.
+
+```json
+{
+  "instruction_id": "01J...",
+  "seq": 3,
+  "ts": "2026-08-05T12:34:56.789Z",
+  "phase": "module_run",
+  "tier": "pc",
+  "module": "product_search",
+  "step": "vision_query",
+  "latency_ms": 820,
+  "tokens_in": 1150,
+  "tokens_out": 96,
+  "cost_krw": 0,
+  "retries": 0,
+  "clarify_count": 0,
+  "outcome": "success",
+  "failure_point": null,
+  "detail": {}
+}
+```
+
+**계측 필드는 처음부터 들어간다**(결정 17). 성공 사례를 최적화하려면 비교할 숫자가 있어야 하고,
+계측은 나중에 못 붙인다.
+
+- `phase`: `instruction_start` · `intent` · `module_select` · `module_run` · `render` · `done`
+- `tier`: `phone` · `pc` · `api`
+- `outcome`: `success` · `failure` · `clarified` · `cancelled`
+- `failure_point`: 실패한 단계 이름. 성공이면 `null`
+- 개입 반응(결정 23)은 `phase: "intervention"` + `outcome`에 `accepted`/`ignored`/`blocked`로 기록
+
+미디어는 기본으로 보내지 않는다. **실패 원인 규명에 필요할 때만 프레임 1장**을 첨부하며,
+그 프레임은 이미 얼굴 모자이크를 거친 것이다(결정 2).
+
+### 기억 — 항목(노트)
+
+```
+GET  /eb/v1/memory/search?q=<질의>&k=8
+POST /eb/v1/memory       { "title": "카페 단골", "text": "...", "kind": "preference", "pinned": true }
+GET  /eb/v1/graph
+```
+
+항목은 **마크다운 파일이 원본**이고 SQLite는 인덱스다(결정 30). 본문의 `[[제목]]`이 연결이 되며,
+검색 결과에는 그 항목의 연결 목록이 함께 실린다. `/eb/v1/graph`는 전체 연결 관계를 준다 —
+빈 페이지에서 이비 하나로 시작해 자라는 그 그래프다(결정 29).
+
+폰은 구조화 프로필을 스스로 들고 있고, **깊은 회상만 PC에 묻는다**(결정 22).
+PC가 없으면 폰 프로필만으로 동작한다.
+
+검색어 `q`는 **퍼센트 인코딩(UTF-8)** 해서 보낸다. URL에는 ASCII만 실을 수 있다.
+같은 이유로 `Authorization` 토큰도 ASCII다(헤더는 latin-1).
+
+### PC → 폰 이벤트 (스킬·개입 제안)
+
+```
+GET /eb/v1/events        (Server-Sent Events)
+```
+
+PC가 분석해서 만든 제안을 폰으로 밀어 넣는다. **자동 적용은 없다**(결정 18).
+
+```json
+{
+  "type": "skill_proposal",
+  "proposal_id": "01J...",
+  "title": "출근 준비",
+  "summary": "평일 아침 경로 확인 + 날씨 + 일정 브리핑을 한 번에",
+  "based_on": ["01J...", "01J..."],
+  "declaration": {}
+}
+```
+
+`type`은 `skill_proposal` · `skill_update` · `intervention_proposal` 중 하나다.
+제안은 즉시 띄우지 않고 **사용자가 한가할 때 모아서** 제시한다(결정 18·23).
+
+### 분석 실행
+
+```
+POST /eb/v1/analyze
+```
+
+이력을 훑어 제안을 만든다. 같은 제안이 이미 대기 중이면 다시 만들지 않는다.
+**자동 적용은 없다** — 만들어서 큐에 넣을 뿐이고, 승인은 아래에서 별도로 받는다(결정 18).
+
+### 제안에 대한 응답
+
+```
+POST /eb/v1/proposals/{proposal_id}/decision
+```
+
+```json
+{ "decision": "approve" }
+```
+
+`decision`: `approve` · `reject` · `revert`. `revert`는 이전 버전으로 되돌린다(결정 18).
+
+## 버전 협상
+
+`GET /eb/v1/hello`의 `protocol` 값이 폰이 아는 것보다 높으면 **폰은 자기가 아는 범위로만 쓴다**.
+낮으면 없는 기능을 안 부른다. 어느 쪽도 오류가 아니다 — 폰과 PC는 따로 업데이트된다.
+
+## 이 문서가 정하지 않는 것
+
+- 글래스 ↔ 폰 구간. 그쪽은 Android XR SDK가 정하며 이 프로토콜 밖이다.
+- 모듈별 요청 형식. 모듈 계약(결정 10)이 따로 정한다.
+- 전송 계층 보안. Tailscale이 담당한다(결정 16).
