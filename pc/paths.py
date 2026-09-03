@@ -172,6 +172,8 @@ def data_dir() -> Path:
     """
     if env := os.environ.get("VC_DATA"):
         here = Path(env)
+    elif (적힌 := _적어둔자리()) is not None:
+        here = 적힌
     elif frozen():
         here = documents_dir() / APP_NAME
         # 예전 판이 만들어 둔 자리에 기록이 있으면 **그걸 계속 쓴다.**
@@ -183,6 +185,42 @@ def data_dir() -> Path:
         here = Path.cwd()
     here.mkdir(parents=True, exist_ok=True)
     return here
+
+
+SPOT = "기록자리.txt"
+
+
+def _적어둔자리() -> Path | None:
+    """딸린 것 옆의 `기록자리.txt` 에 적힌 자리. 없으면 `None`.
+
+    **기록이 어디 살지는 사람마다 다르다.** 이 PC 는 작업물을 D 하드에만 두는데
+    설치본 기본값은 문서 폴더(C)다. 환경 변수는 바탕화면 아이콘으로 켜면 안 붙고,
+    코드에 `D:` 를 박으면 딴 PC 와 맥에서 깨진다. 그래서 **파일 한 장으로 가리킨다.**
+
+    설정에 못 넣는 이유: 설정 자체가 이 자리 안에 산다 — 먼저 자리를 알아야 한다.
+    """
+    try:
+        쪽지 = app_dir() / SPOT
+        적힌 = 쪽지.read_text(encoding="utf-8").strip() if 쪽지.is_file() else ""
+    except OSError:
+        return None
+    # 첫 줄만 본다. 아래에 왜 그리 했는지 적어 둘 수 있게.
+    적힌 = 적힌.splitlines()[0].strip() if 적힌 else ""
+    if not 적힌 or 적힌.startswith("#"):
+        return None
+    자리 = Path(적힌).expanduser()
+    # ★ **못 쓰는 자리면 조용히 따르지 않는다.** 외장이 빠졌거나 오타면 그 자리에
+    # 새 빈 기록이 생기고, 쓰는 사람 눈에는 **기록이 통째로 사라진 것**이 된다.
+    # ★ 만들 수 있는 것과 쓸 수 있는 것은 다르다. 폴더는 멀쩡히 있는데 못 쓰는
+    #   자리가 있다 — 끊긴 공유 폴더, 읽기 전용 외장. **이 PC 에서는 그 경우를
+    #   못 만들어서 검사로 못 재고 있다**(못 만드는 자리는 mkdir 이 먼저 막는다).
+    try:
+        자리.mkdir(parents=True, exist_ok=True)
+        (자리 / ".써지나").write_text("", encoding="utf-8")
+        (자리 / ".써지나").unlink()
+    except OSError:
+        return None
+    return 자리
 
 
 _LOCK = None            # 붙들고 있어야 잠금이 유지된다. 놓으면 풀린다
@@ -322,6 +360,50 @@ def _self_check() -> None:
         # 이 검사는 Qt 없이 도는 자리라 붙들기가 되어야 한다.
         assert pin_runtime() is True, "제 순서인데 못 붙들었다"
         assert _qt_runtime_first() is False
+
+    # 쪽지로 기록 자리 옮기기. **못 쓰는 자리는 안 따라간다** — 따라가면
+    # 빈 기록이 새로 생겨서 쓰는 사람 눈엔 기록이 사라진 것이 된다.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as 잠깐:
+        잠깐 = Path(잠깐)
+        쪽지 = app_dir() / SPOT
+        원래 = 쪽지.read_text(encoding="utf-8") if 쪽지.is_file() else None
+        환경 = os.environ.pop("VC_DATA", None)
+        적기 = lambda 글: 쪽지.write_text(글, encoding="utf-8")
+        try:
+            # 첫 줄이 자리, 그 아래는 사람이 왜 그리 했는지 적는 자리다
+            적기(str(잠깐 / "기록") + chr(10) + "# 여기 둔 까닭을 적어 둔다" + chr(10))
+            assert data_dir() == 잠깐 / "기록", data_dir()
+            # 못 쓰는 자리를 가리키면 무시하고 원래 자리로 돌아간다.
+            # ★ 파일 **밑**을 가리킨다. 처음엔 없는 드라이브(Z:)를 썼는데
+            # 이 PC 에 Z: 가 실제로 있어서 **시험이 구별을 못 했다.**
+            막힌길 = 잠깐 / "이건파일이다"
+            막힌길.write_text("", encoding="utf-8")
+            못쓸 = str(막힌길 / "VC")
+            적기(못쓸)
+            assert data_dir() != Path(못쓸), "못 쓰는 자리를 따라갔다"
+            # 주석만 있거나 비면 안 적은 것으로 친다.
+            # ★ 안 거르면 **`# 아직 안 정했다` 라는 이름의 폴더가 생긴다** —
+            #   처음엔 `Path("#")` 과 비교해서 이걸 못 잡았다.
+            군소리 = "# 아직 안 정했다"
+            적기(군소리 + chr(10))
+            assert data_dir() != Path(군소리).absolute(), data_dir()
+            assert not (Path.cwd() / 군소리).exists(), "군소리 이름으로 폴더가 생겼다"
+            적기("")
+            assert data_dir() == Path.cwd() or frozen(), data_dir()
+            # 환경 변수가 쪽지를 이긴다 — 시험할 때 쪽지를 안 건드려도 되게
+            os.environ["VC_DATA"] = str(잠깐 / "환경")
+            적기(str(잠깐 / "기록"))
+            assert data_dir() == 잠깐 / "환경", data_dir()
+        finally:
+            os.environ.pop("VC_DATA", None)
+            if 환경 is not None:
+                os.environ["VC_DATA"] = 환경
+            if 원래 is None:
+                쪽지.unlink(missing_ok=True)
+            else:
+                쪽지.write_text(원래, encoding="utf-8")
 
     print("paths self-check 통과")
 
