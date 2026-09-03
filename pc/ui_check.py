@@ -135,17 +135,58 @@ def run() -> None:
         # 가장 흔한 길이라 새로 받은 사람이 첫 글부터 잃는다.
         first.new_note()
         first.settle()
+        # ★ **새로 만든 글은 고치기 모드로 열린다.** 읽기로 열면 「고치기」를 한 번 더
+        #   눌러야 본문을 칠 수 있다 — 매일 하는 동작이라 거기가 제일 먼저 지겨워진다
+        #   (시험 쪽 다-1·7). 옵시디언은 Ctrl+N 하면 바로 쓴다.
+        assert first.detail_stack.currentIndex() == 1, "새 글이 읽기 모드로 열렸다"
         first.detail_title.setText("이름 바꾼 것")
         first.rename_note()
         first.settle()
         assert Path(first.editing_at).exists(), first.editing_at
-        first.toggle_edit()
-        first.settle()
         first.detail_body.setPlainText("고친 본문")
         first.toggle_edit()          # 읽기로 나오면서 저장된다
         first.settle()
         wrote = fresh.read("이름 바꾼 것")
         assert wrote is not None and wrote.body.strip() == "고친 본문", "이름 바꾼 뒤 저장이 샌다"
+        # ── 읽기 모드에서 친 글자·붙여넣기를 버리지 않는다 ────────────────────
+        # ★★ **조용히 버려지던 자리다.** 읽는 칸은 읽기 전용이라 Ctrl+V 가 아무 일도
+        #    안 했다 — 화면도 안 바뀌고 말도 없었다. 시험하는 쪽이 「왜 안 들어가지」로
+        #    몇 번 더 눌렀다(다-2). **사람이 넣은 것을 말없이 버리는 것**이 이 프로그램
+        #    에서 제일 나쁜 짓이라, 모드를 눈치채게 하는 대신 모드가 비키게 했다.
+        from PyQt5.QtGui import QKeyEvent
+
+        def 읽기로():
+            """어느 모드에 있든 읽기로 맞춘다. toggle 로만 다루면 앞 시험이 어느
+            모드로 끝났느냐에 시험이 매달린다."""
+            if first.detail_stack.currentIndex() == 1:
+                first.toggle_edit()
+            first.settle()
+
+        읽기로()
+        assert first.detail_stack.currentIndex() == 0, "읽기 모드가 아니다"
+        # ★ **메서드를 직접 부르면 배선을 안 잰다.** 앱 거름망(eventFilter)에서 빼도
+        #   통과해 버렸다 — 실제로 그랬다. 그래서 **진짜 길**(sendEvent)로 보낸다.
+        쳤다 = QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.NoModifier, "가")
+        QApplication.sendEvent(first.detail_view, 쳤다)
+        first.settle()
+        assert first.detail_stack.currentIndex() == 1, "치면 고치기로 넘어가야 한다"
+        assert "가" in first.detail_body.toPlainText(), "친 글자가 버려졌다"
+
+        # 붙여넣기도 같다. 클립보드에 넣고 실제로 들어오는지 본다.
+        읽기로()
+        QApplication.clipboard().setText("붙인 글")
+        붙임 = QKeyEvent(QEvent.KeyPress, Qt.Key_V, Qt.ControlModifier, "\x16")
+        QApplication.sendEvent(first.detail_view, 붙임)
+        first.settle()
+        assert "붙인 글" in first.detail_body.toPlainText(), "붙여넣은 글이 버려졌다"
+
+        # 단축키는 그대로 흘려보낸다 — Ctrl+F 가 글자로 박히면 안 된다.
+        읽기로()
+        찾기 = QKeyEvent(QEvent.KeyPress, Qt.Key_F, Qt.ControlModifier, "\x06")
+        QApplication.sendEvent(first.detail_view, 찾기)
+        first.settle()
+        assert first.detail_stack.currentIndex() == 0, "단축키에 고치기로 넘어갔다"
+
         fresh.delete("이름 바꾼 것")
         first.refresh()
 

@@ -1071,6 +1071,13 @@ class MainWindow(QWidget):
                 and self.detail_body.pop_open()):
             self.detail_body.close_pop()
             return True
+        # 읽는 칸에 대고 치거나 붙여넣으면 고치기로 넘긴다. **버리지 않는다.**
+        if (event.type() == QEvent.KeyPress
+                and self.detail_stack.currentIndex() == 0
+                and (obj is self.detail_view or obj is self.detail_stack)
+                and self.editing is not None
+                and self.읽다가치면(event)):
+            return True
         return super().eventFilter(obj, event)
 
     def _on_level(self, level: float) -> None:
@@ -1627,6 +1634,37 @@ class MainWindow(QWidget):
         self.save_note()
         self.report(f"그림을 넣었어 — {name}", [self.editing])
 
+    def _고치기로(self) -> None:
+        """읽기 → 고치기. 이미 고치기면 아무 일도 안 한다."""
+        if self.detail_stack.currentIndex() != 1:
+            self.detail_stack.setCurrentIndex(1)
+            self.edit_btn.setText("읽기")
+
+    def 읽다가치면(self, event) -> bool:
+        """읽기 모드에서 글자를 치거나 붙여넣으면 **고치기로 넘기고 그 입력을 살린다.**
+
+        ★ **조용히 버려지던 자리다.** 읽는 칸은 읽기 전용이라 Ctrl+V 가 아무 일도
+        안 했다 — 화면도 안 바뀌고 말도 없었다. 시험하는 쪽이 「왜 안 들어가지」로
+        몇 번 더 눌렀다. **사람이 넣은 것을 말없이 버리는 것이 이 프로그램에서
+        제일 나쁜 짓이다.** 모드를 눈치채게 하는 대신 **모드가 비키게** 한다.
+        """
+        키 = event.key()
+        붙여넣기 = event.matches(QKeySequence.Paste)
+        글자 = bool(event.text()) and 키 not in (
+            Qt.Key_Escape, Qt.Key_Tab, Qt.Key_Backtab, Qt.Key_Return, Qt.Key_Enter)
+        # 단축키(Ctrl+F 따위)는 그대로 흘려보낸다. 붙여넣기만 예외로 잡는다.
+        if not 붙여넣기 and (event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)):
+            return False
+        if not (붙여넣기 or 글자):
+            return False
+        self._고치기로()
+        self.detail_body.setFocus()
+        if 붙여넣기:
+            self.detail_body.paste()
+        else:
+            self.detail_body.insertPlainText(event.text())
+        return True
+
     def toggle_edit(self) -> None:
         """읽기 ↔ 고치기. 고치기에서 나올 때 반드시 저장한다."""
         if self.detail_stack.currentIndex() == 1:
@@ -1680,6 +1718,15 @@ class MainWindow(QWidget):
         self._opened_body = body
         self._fill_links(note.title)
         self.refresh()
+        # ★ **저장했다고 말해 준다.** Ctrl+S 를 눌러도 화면이 하나도 안 바뀌어서
+        #   시험하는 쪽이 파일을 열어 보고서야 저장된 걸 알았다(다-4). 글을 맡기는
+        #   물건에서 「됐나?」가 남으면 사람은 그 물건을 못 믿는다.
+        self._저장했다고(note.title)
+
+    def _저장했다고(self, title: str) -> None:
+        """상태줄에 잠깐 「저장했다」. 1.6초 뒤 원래 줄로 돌아간다."""
+        self.footer.setText(f"저장했다 — {title}")
+        QTimer.singleShot(1600, lambda: self.refresh(scan=False))
 
     # --- 오간 자취 ------------------------------------------------------
 
@@ -1772,6 +1819,9 @@ class MainWindow(QWidget):
         note = self.notes.daily()
         self.notes.reindex()
         self.show_note(note.title)
+        # 일지는 열자마자 쓰려는 것이다 — 새 글과 같은 까닭(시험 쪽 다-3).
+        self._고치기로()
+        self.detail_body.setFocus()
 
     def make_report(self) -> None:
         """진단 묶음을 만들고 어디 뒀는지 말해 준다.
@@ -1971,6 +2021,10 @@ class MainWindow(QWidget):
         self.notes.write(Note(title=title, body="", kind="note"))
         self.refresh()
         self._fill_detail(self.notes.read(title))
+        # ★ **새로 만든 글은 쓰려고 만든 것이다.** 읽기 모드로 열면 「고치기」를 한 번
+        #   더 눌러야 본문을 칠 수 있다 — 옵시디언은 Ctrl+N 하면 바로 쓴다. 매일 쓰는
+        #   동작이라 여기 한 번이 제일 먼저 지겨워진다(시험 쪽 다-1·7).
+        self._고치기로()
         self.detail_title.setFocus()
         self.detail_title.selectAll()
         self.graph.focus_on([title], zoom=FOCUS_ZOOM)

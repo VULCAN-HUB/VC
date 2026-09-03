@@ -49,6 +49,16 @@ EMBED_RE = re.compile(r"!\[\[([^\]\[|#]+?)(?:#([^\]\[|]+))?(?:\|[^\]\[]+)?\]\]")
 TAG_RE = re.compile(r"(?<![\w#/])#([\w/-]{1,40})")
 CODE_RE = re.compile(r"```.*?```|`[^`]*`", re.S)
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.S)
+
+
+def _앞머리값(글: str) -> object:
+    """앞머리 값 한 개를 푼다. JSON 이면 JSON 으로, 아니면 글자 그대로."""
+    if not 글:
+        return ""
+    try:
+        return json.loads(글)
+    except (ValueError, TypeError):
+        return 글.strip("\"'")
 UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # 첨부로 보는 확장자. **첨부는 항목이 아니다** — `![[사진.png]]`을 노트 링크로 세면
@@ -683,6 +693,42 @@ class Note:
     #  우리가 쓰는 프론트매터 열쇠. 이 밖의 것은 `extra`로 넘어간다.
     OURS = ("id", "kind", "pinned", "created", "aliases", "edited_by", "declaration")
 
+    def 본문앞머리끌어올리기(self) -> bool:
+        """본문 맨 앞에 사람이 적은 `---` 블록이 있으면 **진짜 앞머리로 올린다.**
+
+        ★ 안 올리면 파일에 `---` 블록이 **두 겹**으로 쌓인다. 옵시디언은 **첫 블록만**
+        속성으로 읽으므로, 사람이 적은 `type`·`date`·`status` 는 지워지진 않아도
+        **속성으로서는 죽고 본문 글자가 된다** — 읽기 모드에서 제목처럼 굵게 뜨고,
+        검색 미리보기 첫 줄을 통째로 차지해 무슨 글인지 안 보이게 만든다.
+
+        ★★ **AI 에게 더 아프다.** 이 창고는 AI 의 바깥 기억이라 AI 가 `type:` 이나
+        `status:` 로 걸러 회상하는데, 속성이 본문 글자면 **걸리지 않는다.**
+
+        우리 열쇠(`OURS`)는 덮지 않는다 — 사람이 본문에 `id:` 를 적었다고 항목의
+        신원이 바뀌면 안 된다. 값이 겹치면 우리 것이 이긴다.
+        """
+        m = FRONTMATTER_RE.match(self.body)
+        if not m:
+            return False
+        속, 남은 = m.group(1), m.group(2)
+        골라낸: dict[str, object] = {}
+        for 줄 in 속.splitlines():
+            줄 = 줄.rstrip()
+            if not 줄.strip():
+                continue
+            열쇠, 나눔, 값 = 줄.partition(":")
+            # `key: value` 꼴이 아니면 앞머리가 아니다 — 그냥 가로줄(`---`)로 둔다.
+            if not 나눔 or not 열쇠.strip() or 열쇠 != 열쇠.lstrip():
+                return False
+            골라낸[열쇠.strip()] = _앞머리값(값.strip())
+        if not 골라낸:
+            return False
+        for 열쇠, 값 in 골라낸.items():
+            if 열쇠 not in self.OURS:      # 우리 신원은 사람 글이 못 덮는다
+                self.extra[열쇠] = 값
+        self.body = 남은.lstrip("\n")
+        return True
+
     def dumps(self) -> str:
         # 남의 것을 먼저, 원래 순서대로. 그래야 옵시디언에서 열었을 때 낯설지 않다.
         front: dict[str, object] = dict(self.extra)
@@ -1212,6 +1258,8 @@ class Notes:
         if old is not None:
             note.id = note.id or old.id
             note.created = note.created or old.created
+        # 사람이 본문에 적은 `---` 블록을 진짜 앞머리로 올린다. 안 하면 두 겹이 된다.
+        note.본문앞머리끌어올리기()
         note.id = note.id or f"{int(time.time() * 1000):x}"
         note.created = note.created or _now()
         path = Path(at) if at else self.path_of(note.title, note.created)
@@ -2842,6 +2890,33 @@ def _self_check() -> None:
             겹침 = n.conn.execute(
                 "SELECT count(*) - count(DISTINCT path) FROM search").fetchone()[0]
             assert 겹침 == 0, f"낱말 색인에 겹친 줄이 남았다: {겹침}"
+        n.conn.close()
+
+    # ── 본문에 사람이 적은 앞머리는 진짜 앞머리로 올라간다 ─────────────────
+    # ★ 안 올리면 `---` 블록이 두 겹이 되고, 옵시디언은 첫 블록만 속성으로 읽어
+    #   사람이 적은 type/date/status 가 **본문 글자**가 된다(시험 쪽 라-①).
+    #   검색 미리보기가 그걸로 채워져 무슨 글인지 안 보이고, AI 는 `type:` 으로
+    #   걸러 회상하지 못한다 — 이 창고는 AI 의 바깥 기억이라 그게 더 아프다.
+    with tempfile.TemporaryDirectory() as tmp:
+        n = Notes(Path(tmp) / "notes", str(Path(tmp) / "i.db"), index_now=False)
+        속 = ("---" + chr(10) + "type: 시험" + chr(10) + "status: 진행"
+              + chr(10) + "---" + chr(10) + "본문이다.")
+        길 = n.write(Note(title="앞머리시험", body=속))
+        글 =길.read_text(encoding="utf-8")
+        assert 글.count(chr(10) + "---") == 1, "앞머리가 두 겹이다" + chr(10) + 글
+        되읽음 = n.read("앞머리시험")
+        assert (되읽음.extra or {}).get("type") == "시험", 되읽음.extra
+        assert (되읽음.extra or {}).get("status") == "진행", 되읽음.extra
+        # 본문은 앞머리를 뺀 알맹이만 — 미리보기 첫 줄이 여기서 나온다
+        assert 되읽음.body.strip() == "본문이다.", repr(되읽음.body)
+        # 우리 신원은 사람 글이 못 덮는다
+        속2 = "---" + chr(10) + 'id: "가짜"' + chr(10) + "---" + chr(10) + "몸"
+        n.write(Note(title="신원시험", body=속2))
+        assert n.read("신원시험").id != "가짜", "사람 글이 신원을 덮었다"
+        # 그냥 가로줄로 시작하는 글은 안 건드린다
+        가로 = "---" + chr(10) + "이건 앞머리가 아니라 그냥 줄이다." + chr(10) + "---"
+        n.write(Note(title="가로줄시험", body=가로))
+        assert "이건 앞머리가 아니라" in n.read("가로줄시험").body, "가로줄을 앞머리로 먹었다"
         n.conn.close()
 
     print("notes self-check 통과")
