@@ -1098,6 +1098,9 @@ class MainWindow(QWidget):
 
     def refresh_engine(self) -> None:
         """엔진이 뭘 올려놨는지. 서버가 꺼져 있으면 그 사실을 그대로 보여준다."""
+        # 창이 제 메모리를 파일에 적어 둔다. --report 는 창이 아니라 새 프로세스라
+        # 자기를 재면 안 되기 때문이다(시험 25-1). 4초 타이머라 여기서 같이 한다.
+        report.메모리찍기()
         out = self.link.call("GET", "/eb/v1/engine")
         if out is None:
             self.engine_label.setText("엔진 —  서버 꺼짐")

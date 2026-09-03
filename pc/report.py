@@ -156,6 +156,75 @@ def _note(line: str) -> None:
 _seen: dict[str, int] = {}     # 같은 예외를 몇 번 봤나
 
 
+_메모파일 = "vc-메모리.json"
+
+
+def 이프로세스메모리() -> tuple[int, int]:
+    """**부르는 프로세스**의 지금·최고 메모리(MB). 못 재면 OSError.
+
+    이건 자기 프로세스를 잰다. 그래서 facts() 는 이걸 직접 안 쓰고, 창이
+    메모리찍기() 로 적어 둔 파일을 읽는다 — --report 는 창이 아니기 때문이다.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _메모(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t)]
+
+    m = _메모()
+    m.cb = ctypes.sizeof(m)
+    커널 = ctypes.windll.kernel32
+    # ★ **인자 타입을 박아야 한다.** 안 박으면 프로세스 핸들이 int 로 잘려
+    # 64비트에서 엉뚱한 값이 되고, 함수는 0(실패)을 돌려준다. 그런데 돌려준 값을
+    # 안 보면 그냥 0MB 가 조용히 찍힌다 — 실제로 그랬다.
+    커널.GetCurrentProcess.restype = ctypes.c_void_p
+    나 = 커널.GetCurrentProcess()
+    됨 = 0
+    # 윈도 판에 따라 kernel32 에도 psapi 에도 있다. 둘 다 본다.
+    for 어디, 이름 in (("kernel32", "K32GetProcessMemoryInfo"),
+                      ("psapi", "GetProcessMemoryInfo")):
+        try:
+            함수 = getattr(getattr(ctypes.windll, 어디), 이름)
+            함수.argtypes = [ctypes.c_void_p, ctypes.POINTER(_메모), wintypes.DWORD]
+            함수.restype = wintypes.BOOL
+            됨 = 함수(나, ctypes.byref(m), m.cb)
+        except (AttributeError, OSError):
+            continue
+        if 됨:
+            break
+    if not 됨 or not m.WorkingSetSize:
+        # 0 은 「안 쓴다」가 아니라 「못 쟀다」다. 구별이 안 되니 터뜨린다.
+        raise OSError(f"메모리를 못 쟀다 (돌려준 값 {됨})")
+    return m.WorkingSetSize // 1048576, m.PeakWorkingSetSize // 1048576
+
+
+def 메모리찍기() -> None:
+    """창이 제 메모리를 파일에 적는다. 창 안 타이머가 4초마다 부른다.
+
+    **잰 때(벽시계)를 같이 적는다.** 창이 자거나 꺼져 파일이 안 갱신되면
+    --report 가 「몇 초째 안 갱신」이라고 말할 수 있어야 한다 — 자전에서
+    「[자는 중]」을 붙인 것과 같은 까닭이다. 낡은 값을 신선한 값처럼 보이면 안 된다.
+    """
+    try:
+        지금, 최고 = 이프로세스메모리()
+    except OSError:
+        return          # 못 재면 안 적는다. facts() 가 「창이 안 적었다」로 읽는다
+    try:
+        (paths.data_dir() / _메모파일).write_text(
+            json.dumps({"잰때": time.time(), "켠지": time.time() - _시작한때,
+                        "지금MB": 지금, "최고MB": 최고}), encoding="utf-8")
+    except OSError:
+        pass            # 못 적어도 창이 멈출 이유는 없다
+
+
 def facts() -> dict:
     """지금 무엇이 어디 있는지. **기록 내용은 안 담는다.**"""
     models = paths.models_dir()
@@ -186,60 +255,25 @@ def facts() -> dict:
         n.conn.close()
     except Exception as err:
         out["색인 읽기 실패"] = f"{type(err).__name__}: {err}"
-    # ★ **메모리는 「켠 지 얼마나 됐나」와 같이 적는다.**
-    # 시험하는 쪽이 뜬 직후에 재서 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다.
-    # 모델이 아직 안 올라온 값이다 — 30초쯤 지나면 494MB 로 자리를 잡는다.
-    # **값 옆에 켠 지가 붙어 있으면 그 규칙을 외울 필요가 없다.**
-    # 이건 「[자는 중]」·「간격 바람/실제」와 같은 결이다 — **값이 스스로 말하게 한다.**
+    # ★ 메모리는 **창이 적어 둔 파일**을 읽는다. 여기서 바로 재면 안 된다 —
+    # --report 는 창이 아니라 새로 뜬 명령줄 프로세스라, GetCurrentProcess() 로
+    # 재면 **자기 자신(갓 뜬 41MB · 0초)** 을 잰다. 시험 쪽 25-1 에서 걸렸다:
+    # 45초를 기다려도 41MB · 0초 그대로고 「다시 봐라」가 영영 안 사라졌다.
+    # 자전(vc-자전.json)과 같은 길이다 — 창이 적고, 딴 프로세스는 읽는다.
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        class _메모(ctypes.Structure):
-            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                        ("PeakWorkingSetSize", ctypes.c_size_t),
-                        ("WorkingSetSize", ctypes.c_size_t),
-                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                        ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                        ("PagefileUsage", ctypes.c_size_t),
-                        ("PeakPagefileUsage", ctypes.c_size_t)]
-
-        m = _메모()
-        m.cb = ctypes.sizeof(m)
-        # **돌려주는 값을 본다.** 안 보면 실패해도 0MB 가 조용히 찍힌다 — 실제로
-        # 그랬다. 0 은 「메모리를 안 쓴다」가 아니라 「못 쟀다」인데 구별이 안 된다.
-        # ★ **인자 타입을 박아야 한다.** 안 박으면 프로세스 핸들이 int 로 잘려
-        # 64비트에서 엉뚱한 값이 되고, 함수는 0(실패)을 돌려준다 —
-        # 그런데 우리가 안 보면 **그냥 0MB 가 조용히 찍힌다.**
-        커널 = ctypes.windll.kernel32
-        커널.GetCurrentProcess.restype = ctypes.c_void_p
-        나 = 커널.GetCurrentProcess()
-        됨 = 0
-        # 윈도 판에 따라 `kernel32` 에도 `psapi` 에도 있다. 둘 다 본다.
-        for 어디, 이름 in (("kernel32", "K32GetProcessMemoryInfo"),
-                          ("psapi", "GetProcessMemoryInfo")):
-            try:
-                함수 = getattr(getattr(ctypes.windll, 어디), 이름)
-                함수.argtypes = [ctypes.c_void_p, ctypes.POINTER(_메모),
-                                wintypes.DWORD]
-                함수.restype = wintypes.BOOL
-                됨 = 함수(나, ctypes.byref(m), m.cb)
-            except (AttributeError, OSError):
-                continue
-            if 됨:
-                break
-        if not 됨 or not m.WorkingSetSize:
-            raise OSError(f"메모리를 못 쟀다 (돌려준 값 {됨})")
-        켠지 = time.time() - _시작한때
-        out["메모리"] = (f"{m.WorkingSetSize // 1048576}MB "
-                        f"(최고 {m.PeakWorkingSetSize // 1048576}MB · "
-                        f"켠 지 {켠지 / 60:.0f}분 {켠지 % 60:.0f}초)")
-        if 켠지 < 30:
-            out["메모리"] += "  ← **아직 다 안 올라왔다. 30초 뒤에 다시 봐라**"
-    except Exception as err:
-        out["메모리 실패"] = f"{type(err).__name__}: {err}"
+        글 = json.loads((paths.data_dir() / _메모파일).read_text(encoding="utf-8"))
+        몇초전 = time.time() - float(글["잰때"])
+        켠지 = float(글["켠지"])          # 창이 파일에 적던 그 순간의 「켠 지」
+        값 = (f"{int(글['지금MB'])}MB (최고 {int(글['최고MB'])}MB · "
+              f"켠 지 {켠지 / 60:.0f}분 {켠지 % 60:.0f}초)")
+        # 4초 타이머가 세 번 넘게 걸렀다 = 창이 자거나 꺼졌다. **그때 값이다.**
+        if 몇초전 > 12:
+            값 += f"  ← **{몇초전:.0f}초째 안 갱신 — 창이 자거나 꺼졌다. 이건 그때 값**"
+        elif 켠지 < 30:
+            값 += "  ← **아직 다 안 올라왔다. 30초 뒤에 다시 봐라**"
+        out["메모리"] = 값
+    except (OSError, KeyError, ValueError):
+        out["메모리"] = "창이 아직 안 적었다 (창이 떠 있어야 잰다)"
 
     # ★ **자전이 고르게 도는지.** 시험하는 쪽은 화면을 찍어서 보기 때문에 이걸
     # 구조적으로 못 잰다 — 찍힌 두 장 사이에 무슨 일이 있었는지 안 남는다.
@@ -311,14 +345,39 @@ def _self_check() -> None:
             # 올라온 값이다). **값이 스스로 말하면 「30초 뒤에 재라」를 안 외워도 된다.**
             것들 = facts()
             assert 것들["판"].startswith("v0."), 것들["판"]
-            메모 = 것들.get("메모리", "")
-            assert "MB" in 메모, 것들.get("메모리 실패", 메모)
-            # ★ **0MB 는 「안 쓴다」가 아니라 「못 쟀다」다.** 인자 타입을 안 박으면
-            # 프로세스 핸들이 잘려 함수가 실패하는데, 안 보면 0MB 가 조용히 찍힌다.
+
+            # ── 메모리: 창이 적은 파일을 읽는다 ────────────────────────────
+            # ★ 예전엔 facts() 가 자기 프로세스를 쟀다. --report 는 창이 아니라
+            #   새 프로세스라 늘 「갓 뜬 41MB · 0초」가 나왔다(시험 25-1).
+            #   이제 창이 파일에 적고, 낡으면 그렇게 말한다.
+            #
+            # 방금 켠 것처럼 만든다 — 그래야 「다시 봐라」 경우를 확실히 본다.
+            global _시작한때
+            _시작한때 = time.time()
+            메모리찍기()
+            메모 = facts().get("메모리", "")
+            assert "MB" in 메모, 메모
+            # 0 은 「안 쓴다」가 아니라 「못 쟀다」다. 인자 타입이 잘리면 이렇게 된다.
             assert not 메모.startswith("0MB"), 메모
             assert "켠 지" in 메모, 메모
-            # 갓 뜬 값에는 「아직 다 안 올라왔다」가 붙는다 — 그래야 안 헷갈린다.
+            # 방금 적었으니 신선하다 — 「안 갱신」이 붙으면 안 된다.
+            assert "안 갱신" not in 메모, 메모
+            # 갓 뜬 값이라 「다시 봐라」가 붙어야 한다.
             assert "다시 봐라" in 메모, 메모
+
+            # 낡은 파일 = 창이 자거나 꺼진 것. **낡았다고 말해야 한다.**
+            # 이게 없으면 41MB 를 신선한 값으로 읽던 그 병이 그대로 남는다.
+            (Path(tmp) / _메모파일).write_text(
+                json.dumps({"잰때": time.time() - 60, "켠지": 300.0,
+                            "지금MB": 494, "최고MB": 511}), encoding="utf-8")
+            낡음 = facts()["메모리"]
+            assert "안 갱신" in 낡음 and "494MB" in 낡음, 낡음
+            assert "다시 봐라" not in 낡음, 낡음      # 낡은 것에 갓 뜬 딱지 붙이면 안 된다
+
+            # 파일이 없으면(창이 한 번도 안 뜸) 그렇게 말한다 — 0MB 가 아니다.
+            (Path(tmp) / _메모파일).unlink()
+            없음 = facts()["메모리"]
+            assert "안 적었다" in 없음, 없음
 
             watch_deaths()
             assert faulthandler.is_enabled(), "죽음 지켜보기가 안 켜졌다"
