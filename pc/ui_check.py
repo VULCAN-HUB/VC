@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import pathlib
 import sys
 import tempfile
 import time
@@ -238,6 +239,14 @@ def run() -> None:
         assert "따옴표를 떼면" in 말, 말
         민말 = first._못찾았다고("그냥 없는말")
         assert "따옴표를 떼면" not in 민말, 민말
+        # 감싸기는 한 자리에서만 한다 — 이미 따옴표면 그대로 둔다
+        assert first._감싸기('"이미 따옴표"') == '"이미 따옴표"'
+        assert first._감싸기("맨 물음") == "'맨 물음'"
+        # ★ **같은 일을 두 군데서 하면 한 군데는 반드시 남는다.** 처음엔 못 찾았을
+        #   때만 고쳤고 **찾았을 때 자리에 그대로 남아 있었다**(시험 쪽이 「반만
+        #   고쳐졌다」고 짚었다). 날것 감싸기가 다시 생기면 여기서 잡는다.
+        군 = pathlib.Path(__file__).with_name("ui.py").read_text(encoding="utf-8")
+        assert "f\"'{text}'" not in 군, "따옴표를 손으로 감싸는 자리가 다시 생겼다"
         fresh.delete("말투 정리"); fresh.delete("딴 글")
 
         fresh.delete("이름 바꾼 것")

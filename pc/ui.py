@@ -1162,7 +1162,8 @@ class MainWindow(QWidget):
         except Exception as err:
             report.log_crash(err)
             report.trail(f"찾다 실패: {type(err).__name__}: {err}")
-            self.report(f"'{text}' 찾다가 문제가 생겼어. 진단 묶음에 남겼어.", [ROOT])
+            self.report(f"{self._감싸기(text)} 찾다가 문제가 생겼어. 진단 묶음에 남겼어.",
+                        [ROOT])
 
     def _ask(self, text: str) -> None:
         """검색이든 지시든 여기로 들어온다. 음성도 이 문을 쓴다.
@@ -1224,9 +1225,9 @@ class MainWindow(QWidget):
             self.show_note(hits[0], focus=False)
             said = f"{hits[0]} 얘기야."
         elif len(hits) > 1:
-            said = f"'{text}' 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
+            said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
         else:
-            said = f"'{text}'는 {hits[0]} 하나야. 한 번 더 치면 열어줄게."
+            said = f"{self._감싸기(text)}는 {hits[0]} 하나야. 한 번 더 치면 열어줄게."
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
 
@@ -1735,6 +1736,18 @@ class MainWindow(QWidget):
         #   물건에서 「됐나?」가 남으면 사람은 그 물건을 못 믿는다.
         self._저장했다고(note.title)
 
+    @staticmethod
+    def _감싸기(text: str) -> str:
+        """물음을 따옴표로 감싼다. **이미 따옴표면 그대로 둔다.**
+
+        ★ 사람이 친 큰따옴표를 작은따옴표로 또 감싸서 `'"소리 내어 읽으면"'` 처럼
+        두 겹으로 보였다. 처음엔 못 찾았을 때 자리만 고쳤는데 **찾았을 때 자리에도
+        같은 것이 있었다**(시험 쪽이 반만 고쳐졌다고 짚었다). 같은 일을 두 군데서
+        하면 한 군데는 반드시 남는다 — 그래서 여기 한 자리로 모은다.
+        """
+        보임 = text.strip()
+        return 보임 if 보임.startswith(("'", '"')) else f"'{보임}'"
+
     def _못찾았다고(self, text: str) -> str:
         """못 찾았을 때 할 말. **따옴표를 쳤으면 떼면 몇 개 있는지도 알려 준다.**
 
@@ -1745,9 +1758,7 @@ class MainWindow(QWidget):
         따옴표는 **한 겹만** 보인다. 사람이 친 큰따옴표를 작은따옴표로 또 감싸면
         `'"이런 구절"'` 처럼 두 겹으로 보인다.
         """
-        보임 = text.strip()
-        감싼 = 보임 if 보임.startswith(("'", '"')) else f"'{보임}'"
-        말 = f"{감싼}로는 못 찾겠어."
+        말 = f"{self._감싸기(text)}로는 못 찾겠어."
         if '"' in text:
             헐겁게 = text.replace('"', " ").strip()
             남은 = len(self.notes.search(헐겁게, k=8)) if 헐겁게 else 0
