@@ -1208,7 +1208,7 @@ class MainWindow(QWidget):
 
         if not hits:
             # 시키지도 못하고 찾지도 못했다. 실행이 실패했으면 그 이유를 그대로 전한다.
-            miss = done["text"] if done else f"'{text}'로는 못 찾겠어."
+            miss = done["text"] if done else self._못찾았다고(text)
             self.report(miss, [ROOT])
             self._log_turn(text, miss, done.get("kind", "miss") if done else "miss", started)
             return
@@ -1735,10 +1735,39 @@ class MainWindow(QWidget):
         #   물건에서 「됐나?」가 남으면 사람은 그 물건을 못 믿는다.
         self._저장했다고(note.title)
 
+    def _못찾았다고(self, text: str) -> str:
+        """못 찾았을 때 할 말. **따옴표를 쳤으면 떼면 몇 개 있는지도 알려 준다.**
+
+        ★ 따옴표를 친 사람은 **그 말이 있다고 믿고** 친 것이다. 0건이 나오면
+        다음 손이 「따옴표를 떼 본다」인데, 그걸 사람이 스스로 떠올려야 했다
+        (시험 쪽이 그 자리를 짚었다). 여기서 미리 세어 알려 준다.
+
+        따옴표는 **한 겹만** 보인다. 사람이 친 큰따옴표를 작은따옴표로 또 감싸면
+        `'"이런 구절"'` 처럼 두 겹으로 보인다.
+        """
+        보임 = text.strip()
+        감싼 = 보임 if 보임.startswith(("'", '"')) else f"'{보임}'"
+        말 = f"{감싼}로는 못 찾겠어."
+        if '"' in text:
+            헐겁게 = text.replace('"', " ").strip()
+            남은 = len(self.notes.search(헐겁게, k=8)) if 헐겁게 else 0
+            if 남은:
+                말 += f" 따옴표를 떼면 비슷한 게 {남은}개 있어."
+        return 말
+
     def _저장했다고(self, title: str) -> None:
-        """상태줄에 잠깐 「저장했다」. 1.6초 뒤 원래 줄로 돌아간다."""
-        self.footer.setText(f"저장했다 — {title}")
-        QTimer.singleShot(1600, lambda: self.refresh(scan=False))
+        """말풍선으로 「저장했어」. **상태줄을 안 쓴다.**
+
+        ★ 처음엔 상태줄에 썼는데 두 가지가 어긋났다(시험 쪽 마):
+        - 상태줄은 **⚠ 경고가 사는 자리**다. 저장할 때마다 1.6초씩 ⚠ 가 가려졌다.
+          ⚠ 는 「이상할 때만 말한다」는 자리라 저장에 가리면 안 된다.
+        - 말풍선은 **새 말이 생길 때만 바뀌는데 저장은 말풍선을 안 건드렸다.**
+          그래서 지나간 경고가 계속 떠 있었다 — 다음 글로 넘어가도 그대로였다.
+
+        말풍선으로 옮기니 둘 다 풀린다. 소리로는 안 읽는다 — 저장할 때마다
+        말하면 시끄럽다.
+        """
+        self.report(f"저장했어 — {title}", [], aloud=False)
 
     # --- 오간 자취 ------------------------------------------------------
 

@@ -194,7 +194,7 @@ def run() -> None:
         #   원인은 이 자리였다 — **관측은 맞았고 짐작은 틀렸다.**
         말한것: list[str] = []
         원래말 = first.report
-        first.report = lambda t, touching, aloud=True: 말한것.append(t)
+        first.report = lambda t, touching=(), aloud=True: 말한것.append(t)
         try:
             first.new_note()
             first.settle()
@@ -225,6 +225,20 @@ def run() -> None:
         헛것 = [t for t in 말한것 if "밖에서도 고쳤" in t]
         assert not 헛것, "아무도 안 건드렸는데 헛경고가 떴다: " + str(헛것)
 
+
+        # ── 못 찾았을 때 할 말 ────────────────────────────────────────────
+        # ★ 따옴표를 친 사람은 그 말이 있다고 믿고 친 것이다. 0건이면 다음 손이
+        #   「따옴표를 떼 본다」인데 사람이 스스로 떠올려야 했다(시험 쪽 다).
+        #   그리고 따옴표가 두 겹으로 보이던 것도 여기서 잡는다.
+        fresh.write(Note(title="말투 정리", body="소리 내어 읽으면 좋다"))
+        fresh.write(Note(title="딴 글", body="소리도 나고 읽으면 좋다"))
+        fresh.reindex()
+        말 = first._못찾았다고('"소리 읽으면"')
+        assert "'\"" not in 말 and "\"'" not in 말, "따옴표가 두 겹이다: " + 말
+        assert "따옴표를 떼면" in 말, 말
+        민말 = first._못찾았다고("그냥 없는말")
+        assert "따옴표를 떼면" not in 민말, 민말
+        fresh.delete("말투 정리"); fresh.delete("딴 글")
 
         fresh.delete("이름 바꾼 것")
         first.refresh()
@@ -332,7 +346,7 @@ def run() -> None:
         first.settle()
         said = []
         spoke = first.report
-        first.report = lambda text, who=None: said.append(text)
+        first.report = lambda text, who=None, aloud=True: said.append(text)
         try:
             for turn in ("첫 고침", "둘째 고침", "셋째 고침"):
                 first.detail_body.setPlainText(turn)

@@ -1611,9 +1611,15 @@ class Notes:
         # 가중치를 올리는 쪽은 안 골랐다. 문턱·배수를 흔들면 **딴 것이 조용히 밀린다**
         # (이 프로젝트에서 여러 번 겪었다). 똑같을 때만 앞으로 당기면 **그 물음
         # 하나만** 달라지고 나머지 차례는 그대로다.
-        딱맞 = q.strip()
-        if 딱맞:
-            rows.sort(key=lambda r: (r["title"].strip() != 딱맞, ))
+        # ★ **따옴표를 친 물음도 여기 걸려야 한다.** 처음엔 물음 글자를 그대로 견줬는데
+        # `"안 먹는 말투"` 는 따옴표째라 제목과 영영 안 맞아, **따옴표를 붙이면 제목
+        # 우선이 조용히 꺼졌다**(시험 쪽 라 — 그 제목 글이 3등으로 되돌아갔다).
+        # 사람은 「정확히 이거」를 바랄수록 따옴표를 치는데 하필 그때 꺼진 것이다.
+        # 구절도 후보에 넣는다.
+        후보 = {q.strip()} | {p.strip() for p in ask.phrases}
+        후보.discard("")
+        if 후보:
+            rows.sort(key=lambda r: (r["title"].strip() not in 후보, ))
         if rows:
             self.conn.executemany(
                 "UPDATE notes SET used_at = ?, use_count = use_count + 1 WHERE path = ?",
@@ -2971,6 +2977,16 @@ def _self_check() -> None:
             느슨 = [r["title"] for r in n.search("소리 내어 읽으면", k=5)]
             굳게 = [r["title"] for r in n.search('"소리 내어 읽으면"', k=5)]
             assert "구절 든 글" in 굳게, 굳게
+            # ★ 따옴표를 쳐도 제목 우선이 살아 있어야 한다. 처음엔 물음 글자를
+            #   그대로 견줘서 `"제목"` 이 따옴표째라 안 맞았고, **따옴표를 붙이면
+            #   제목 우선이 조용히 꺼졌다.** 사람은 정확히 원할수록 따옴표를 친다.
+            n.write(Note(title="소리 내어 읽으면", body="이건 그 제목의 글이다."))
+            n.write(Note(title="딴 글인데 그 말이 많다",
+                         body=("소리 내어 읽으면 " * 20) + "여러 번 나온다."))
+            n.reindex()
+            for 물음 in ("소리 내어 읽으면", '"소리 내어 읽으면"'):
+                난 = [r["title"] for r in n.search(물음, k=5)]
+                assert 난 and 난[0] == "소리 내어 읽으면", (물음, 난)
             assert "말만 든 글" not in 굳게, "따옴표가 안 좁혔다: " + str(굳게)
             assert len(굳게) < len(느슨), (느슨, 굳게)
         # ★ 위 둘만으로는 **자료가 두 답을 안 가른다** — 이 작은 자리엔 뜻 검색이
