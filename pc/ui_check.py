@@ -1177,6 +1177,17 @@ def run() -> None:
         win._trim_tools(400)
         assert not win.past.isVisibleTo(win.detail_card), "좁은데 지난 판이 안 접혔다"
         assert not win.toc.isVisibleTo(win.detail_card), "좁은데 목차가 안 접혔다"
+        # ★ **접었으면 「…」 로 갈 길이 있어야 한다.** 좁은 카드에서 목차를 숨기면서
+        #   차림표에도 안 넣어 **소제목으로 갈 길이 통째로 사라졌다**(시험 쪽 라-③).
+        #   접는 것은 자리를 아끼려는 것이지 기능을 없애려는 것이 아니다.
+        if win.toc.count() > 1:
+            win._build_more()
+            차림 = [a.text() for a in win.more_menu.actions()]
+            assert any(t.startswith("목차") for t in 차림),                 "좁아서 접었는데 「…」에도 목차가 없다: " + str(차림)
+            win._trim_tools(900)
+            win._build_more()
+            넓은차림 = [a.text() for a in win.more_menu.actions()]
+            assert not any(t.startswith("목차") for t in 넓은차림),                 "위 줄에 있는데 차림표에도 겹쳐 넣었다: " + str(넓은차림)
         notes.delete("넓고 좁고")
         win.refresh()
         left_box, right_box = win.detail_card.geometry(), win.side_read.geometry()

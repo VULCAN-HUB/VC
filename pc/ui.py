@@ -1899,6 +1899,17 @@ class MainWindow(QWidget):
         self.more_menu.clear()
         self.more_menu.addAction("새 항목  (Ctrl+N)", self.new_note)
         self.more_menu.addAction("오늘 일지  (Ctrl+D)", self.open_daily)
+        # ★ **접힌 목차를 여기로 옮긴다.** 카드가 좁으면 위 줄에서 목차를 숨기는데,
+        # 여기에도 안 넣어서 **소제목으로 갈 길이 통째로 사라졌다**(시험 쪽 라-③ —
+        # 「목차 UI 가 안 보이고 ⋯ 메뉴에도 없다」). 접는 것은 자리를 아끼려는
+        # 것이지 **기능을 없애려는 것이 아니다.** 옵시디언도 좁으면 접어 넣지 없애지 않는다.
+        # `isHidden()` 을 쓴다 — `isVisible()` 은 **부모 카드가 안 떠 있을 때도**
+        # False 라, 위 줄에 멀쩡히 있는 목차를 차림표에 겹쳐 넣게 된다.
+        if self.toc.count() > 1 and self.toc.isHidden():
+            차례 = self.more_menu.addMenu(self.toc.itemText(0))
+            for i in range(1, self.toc.count()):
+                차례.addAction(self.toc.itemText(i),
+                             lambda _=False, n=i: self._jump_heading(n))
         names = self.notes.templates()
         if names and self.editing is not None:
             forms = self.more_menu.addMenu("서식 넣기")

@@ -179,6 +179,19 @@ class NoteView(QTextBrowser):
         self.anchorClicked.connect(self._went)
         self.setFrameShape(QFrame.NoFrame)
 
+    @staticmethod
+    def _주소(글: str) -> str:
+        """마크다운 주소 자리에 넣을 꼴로 감싼다.
+
+        ★ **빈칸이 든 주소는 Qt 가 링크로 안 만든다.** `[안 먹는 말투](note:안 먹는 말투)`
+        가 화면에 **글자 그대로** 나왔다 — 괄호도 `note:` 도 다 보였다(시험 쪽 라-②).
+        제목에 빈칸이 있는 것이 보통이라 **거의 모든 이음선이 날것으로 보이고 있었다.**
+        링크가 핵심인 물건에서 링크가 안 눌린 것이다.
+
+        마크다운은 주소를 `<...>` 로 감싸면 빈칸을 허락한다. 원문은 안 건드린다.
+        """
+        return "<" + 글.replace("<", "%3C").replace(">", "%3E") + ">"
+
     def _went(self, url) -> None:
         raw = url.toString()
         kind, _, rest = raw.partition(":")
@@ -201,16 +214,25 @@ class NoteView(QTextBrowser):
                     return f"⟨없는 첨부: {name}⟩"
                 return f"![{name}]({Path(path).as_uri()})"
             label = f"{name}#{head}" if head else name
-            return f"[⟨{label}⟩](note:{label})"
+            return f"[⟨{label}⟩]({self._주소('note:' + label)})"
 
         def link(m):
             name, head = m.group(1).strip(), (m.group(2) or "").strip()
             shown = (m.group(3) or "").strip() or (f"{name} › {head}" if head else name)
-            return f"[{shown}](note:{name}{'#' + head if head else ''})"
+            겨냥 = "note:" + name + ("#" + head if head else "")
+            return f"[{shown}]({self._주소(겨냥)})"
 
         out = notes.EMBED_RE.sub(embed, body)
         out = notes.LINK_RE.sub(link, out)
-        return notes.TAG_RE.sub(lambda m: f"[#{m.group(1)}](tag:{m.group(1).strip('/-')})", out)
+        # 칠하는 판단도 뽑는 판단과 **같은 자리**를 쓴다. 따로 두면 갈라진다 —
+        # 목록엔 안 들어가는 색상 코드가 본문에서만 태그처럼 칠해지고 있었다.
+        def 태그(m):
+            이름 = notes.태그인가(m.group(1))
+            if not 이름:
+                return m.group(0)      # 태그가 아니면 원문 그대로 둔다
+            return f"[#{m.group(1)}]({self._주소('tag:' + 이름)})"
+
+        return notes.TAG_RE.sub(태그, out)
 
     # 한 번에 입혀 그릴 글자 수. 넘으면 앞부분만 그린다.
     #
@@ -506,8 +528,8 @@ class NoteBody(QTextEdit):
             if m.start() <= at <= m.end():
                 return "link", m.group(1).strip(), (m.group(2) or "").strip()
         for m in notes.TAG_RE.finditer(text):
-            if m.start() <= at <= m.end():
-                return "tag", m.group(1).strip("/-"), ""
+            if m.start() <= at <= m.end() and notes.태그인가(m.group(1)):
+                return "tag", notes.태그인가(m.group(1)), ""
         return None
 
     def go_to_heading(self, heading: str) -> None:
@@ -1228,10 +1250,26 @@ def _self_check() -> None:
     view = NoteView()
     src = "제목 [[가#머리]] 와 [[나|보임]] 와 ![[다]] 와 #태그/하위"
     md = view.to_markdown(src)
-    assert "(note:가#머리)" in md and "가 › 머리" in md, md
-    assert "[보임](note:나)" in md, md
-    assert "(note:다)" in md and "⟨다⟩" in md, md
-    assert "(tag:태그/하위)" in md, md
+    # ★ **빈칸이 든 주소는 Qt 가 링크로 안 만든다.** 그래서 `<...>` 로 감싼다.
+    #   안 감싸면 `[안 먹는 말투](note:안 먹는 말투)` 가 화면에 글자 그대로 나온다 —
+    #   제목에 빈칸이 흔해서 **거의 모든 이음선이 날것으로 보이고 있었다**(시험 쪽 라-②).
+    빈칸 = view.to_markdown("[[안 먹는 말투]] 와 [[조사 어긋나감]]")
+    assert "(<note:안 먹는 말투>)" in 빈칸, 빈칸
+    view.show_note("이어보기 [[안 먹는 말투]] 와 #할 일 태그.")
+    보임 = view.toPlainText()
+    assert "note:" not in 보임 and "](" not in 보임, "링크가 날것으로 보인다: " + 보임
+    assert "<a " in view.toHtml(), "앵커가 안 생겼다"
+    assert "안 먹는 말투" in 보임, 보임
+    assert "(note:가#머리)" in md.replace("<", "").replace(">", "") and "가 › 머리" in md, md
+    assert "[보임](<note:나>)" in md, md
+    assert "(<note:다>)" in md and "⟨다⟩" in md, md
+    assert "(<tag:태그/하위>)" in md, md
+    # ★ **색상 코드는 태그가 아니다.** 뽑는 쪽만 거르고 칠하는 쪽은 안 걸러서,
+    #   목록엔 안 들어가는 `#0E1116` 이 본문에서는 태그와 같은 붉은색으로 칠해졌다
+    #   (시험 쪽 「뽑기와 색칠이 따로 논다」). 이제 판단이 한 자리다.
+    색 = view.to_markdown("배경은 #0E1116 이고 태그는 #할일 이다.")
+    assert "#0E1116 " in 색 and "tag:0E1116" not in 색, 색
+    assert "[#할일](<tag:할일>)" in 색, 색
     # 아주 긴 글은 앞부분만 그린다. 통째로 그리면 18만 자에서 1.5초 동안 창이 굳는다.
     import time as _t
     huge = ("긴 글입니다. " * 20000)

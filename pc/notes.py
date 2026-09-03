@@ -574,14 +574,26 @@ def parse_tags(body: str) -> list[str]:
     found = []
     for line in lines:
         for m in TAG_RE.finditer(line):
-            tag = m.group(1).strip("/-")
-            # 색상 코드는 태그가 아니다. 실제 기록을 넣어 보니 `#0E1116`·`#3D6BFF`가
-            # 태그로 잡혀서 태그 목록이 색깔로 뒤덮였다.
-            if HEX_COLOR.fullmatch(tag):
-                continue
-            if tag and not tag.isdigit() and tag not in found:
+            tag = 태그인가(m.group(1))
+            if tag and tag not in found:
                 found.append(tag)
     return found
+
+
+def 태그인가(글: str) -> str:
+    """태그면 다듬은 이름, 아니면 빈 글.
+
+    ★ **색상 코드는 태그가 아니다.** 실제 기록을 넣어 보니 `#0E1116`·`#3D6BFF` 가
+    태그로 잡혀 태그 목록이 색깔로 뒤덮였다.
+
+    ★★ **한 자리에 둔다.** 뽑는 쪽만 거르고 **칠하는 쪽은 안 걸러서**, 목록에는
+    안 들어가는 색상 코드가 본문에서는 태그와 같은 붉은색으로 칠해졌다
+    (시험 쪽 「뽑기와 색칠이 따로 논다」). 같은 판단을 두 군데서 하면 갈라진다.
+    """
+    tag = 글.strip("/-")
+    if not tag or tag.isdigit() or HEX_COLOR.fullmatch(tag):
+        return ""
+    return tag
 
 
 # 항목마다 자물쇠 하나. 서버(AI)와 화면이 한 프로그램 안에서 같은 파일을 쓰므로,
