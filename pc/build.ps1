@@ -75,7 +75,9 @@ try {
             Write-Host "== Defender 를 못 찾았다 — 검사 건너뜀"
         }
     }
-    Write-Host "== 끝. $Zip ($MB MB)"
+    # $MB 는 푼 폴더 크기다. 여기서 그걸 찍으면 zip 이 579MB 인 줄 알게 된다(실은 300MB).
+    $ZipMB = [math]::Round((Get-Item $Zip).Length / 1MB, 1)
+    Write-Host "== 끝. $Zip ($ZipMB MB · 풀면 $MB MB)"
 }
 finally {
     if (Test-Path $Link) { cmd /c rmdir $Link | Out-Null }
