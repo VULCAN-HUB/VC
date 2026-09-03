@@ -1601,6 +1601,13 @@ class MainWindow(QWidget):
             return
         if fresh.body.strip() == self.detail_body.toPlainText().strip():
             return
+        # ★ **우리가 방금 쓴 것을 「밖에서 온 것」으로 읽지 않는다.**
+        # 저장하면서 본문 맨 앞 `---` 블록이 앞머리로 올라가므로 **디스크 본문은
+        # 편집칸 글과 일부러 다르다.** 그걸 모르면 저장할 때마다 파일 감시가
+        # 「밖에서도 고쳤어」를 띄운다 — 아무도 안 건드렸는데(시험 쪽 새-④).
+        # `_opened_body` 에는 **디스크에 실제로 내려간 글**이 들어 있다.
+        if fresh.body.strip() == getattr(self, "_opened_body", None):
+            return
         if self._save_timer.isActive() or self.detail_stack.currentIndex() == 1:
             # **고치는 중이면 화면을 안 건드린다.** 갈아 끼우면 읽기로 튕겨 나가
             # 사용자는 왜 편집이 끝났는지 모른다 — 낯선 PC 에서 그렇게 보였다.

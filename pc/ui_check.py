@@ -206,10 +206,25 @@ def run() -> None:
             first.detail_body.setPlainText(앞머리 + chr(10) + "한 줄 더.")
             first.save_note()          # 두 번째 저장 — 헛경고가 나던 자리
             first.settle()
+
+            # ★★ **파일 감시 쪽도 같은 자리에서 태운다.** 실사용에서 뜬 경고는
+            #    `save_note` 가 아니라 **`_reload_open`(폴더 감시)** 문구였다 —
+            #    처음 고친 자리가 원인이 아니었다. 저장하며 앞머리가 올라가면
+            #    디스크 본문이 편집칸 글과 일부러 달라지고, 감시가 그 차이를
+            #    「밖에서 고쳤다」로 읽는다(시험 쪽이 「앞머리 없으면 안 난다」로 좁혔다).
+            #
+            # ★ 이 검사는 **`report` 를 되돌리기 전**에 있어야 한다. 밖에 두었더니
+            #   `finally` 가 먼저 돌아 말을 못 듣고 **조용히 통과**했다.
+            first.detail_body.setPlainText(앞머리 + chr(10) + "또 한 줄.")
+            first.save_note()
+            # 사이에 `settle()` 을 넣지 않는다 — 넣으면 감시가 먼저 돌아 편집칸을
+            # 디스크 글로 갈아 끼워서 재려던 상태를 스스로 지운다.
+            first._reload_open()       # 폴더 감시가 부르는 바로 그 길
         finally:
             first.report = 원래말
         헛것 = [t for t in 말한것 if "밖에서도 고쳤" in t]
         assert not 헛것, "아무도 안 건드렸는데 헛경고가 떴다: " + str(헛것)
+
 
         fresh.delete("이름 바꾼 것")
         first.refresh()

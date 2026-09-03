@@ -1637,6 +1637,13 @@ class Notes:
         """
         if len(rows) >= k or (not ask.terms and not ask.phrases):
             return rows            # 이미 찼거나, 좁히기만 한 물음이다
+        # ★ **따옴표를 쳤으면 뜻으로 채우지 않는다.** 구절은 「정확히 이것」이라는
+        # 말인데, 낱말로 좁힌 자리를 뜻 검색이 도로 채우면 **따옴표가 아무 일도 안 한
+        # 것처럼 보인다** — 실사용에서 `"소리 내어 읽으면"` 과 따옴표 없는 물음의
+        # 결과가 목록도 순서도 똑같이 나왔다(시험 쪽 ⑥). 그 구절이 안 보이는 글이
+        # 2등에 남아 있는데 따옴표를 붙여도 안 빠졌다. 좁히라고 친 것을 넓히면 안 된다.
+        if ask.phrases:
+            return rows
         hits = self.semantic(ask.plain(), k=k)
         if not hits:
             return rows
@@ -2950,6 +2957,34 @@ def _self_check() -> None:
         그냥 = [r["title"] for r in n.search("말투", k=5)]
         assert "안 먹는 말투" in 그냥 or "안 먹는 말투 정리 보고" in 그냥, 그냥
         n.conn.close()
+
+    # ── 따옴표는 좁힌다. 뜻 검색이 도로 채우면 안 된다 ─────────────────────
+    # ★ 실사용에서 `"소리 내어 읽으면"` 과 따옴표 없는 물음의 결과가 목록도 순서도
+    #   똑같이 나왔다(시험 쪽 ⑥). 낱말로 좁힌 자리를 뜻 검색이 채워서다.
+    #   **좁히라고 친 것을 넓히면 따옴표가 아무 일도 안 한 것처럼 보인다.**
+    with tempfile.TemporaryDirectory() as tmp:
+        n = Notes(Path(tmp) / "notes", str(Path(tmp) / "i.db"), index_now=False)
+        n.write(Note(title="구절 든 글", body="이 글에는 소리 내어 읽으면 이 든다."))
+        n.write(Note(title="말만 든 글", body="소리도 나고 읽으면 좋고 내어 준다."))
+        n.reindex()
+        try:
+            느슨 = [r["title"] for r in n.search("소리 내어 읽으면", k=5)]
+            굳게 = [r["title"] for r in n.search('"소리 내어 읽으면"', k=5)]
+            assert "구절 든 글" in 굳게, 굳게
+            assert "말만 든 글" not in 굳게, "따옴표가 안 좁혔다: " + str(굳게)
+            assert len(굳게) < len(느슨), (느슨, 굳게)
+        # ★ 위 둘만으로는 **자료가 두 답을 안 가른다** — 이 작은 자리엔 뜻 검색이
+        #   안 물려 있어 채울 일 자체가 없다. 그래서 뜻 검색을 **가짜로 물려** 잰다:
+        #   따옴표를 쳤으면 뜻이 무엇을 내놓든 **한 줄도 안 붙어야** 한다.
+            n.semantic = lambda q, k=8: [("말만 든 글", 0.99)]
+            굳게2 = [r["title"] for r in n.search('"소리 내어 읽으면"', k=5)]
+            assert "말만 든 글" not in 굳게2,                 "따옴표를 쳤는데 뜻 검색이 도로 채웠다: " + str(굳게2)
+            느슨2 = [r["title"] for r in n.search("없는말 소리", k=5)]
+            assert "말만 든 글" in 느슨2, "따옴표가 없으면 뜻으로 채워야 한다: " + str(느슨2)
+        finally:
+            # ★ 터져도 DB 는 닫는다. 안 닫으면 임시폴더 정리가 실패하면서
+            #   **그 오류가 진짜 오류를 덮는다** — 실제로 한 번 덮었다.
+            n.conn.close()
 
     print("notes self-check 통과")
 
