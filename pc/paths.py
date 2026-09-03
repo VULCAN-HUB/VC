@@ -16,10 +16,17 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
 APP_NAME = "VC"
+
+# ★ **판 번호는 여기 한 자리에만 적는다.** 그동안 exe 속성에는 `0.1.0.0` 이
+# 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
+# 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
+# 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
+VERSION = "0.1.55"
 
 
 def _qt_runtime_first() -> bool:
@@ -404,6 +411,9 @@ def _self_check() -> None:
                 쪽지.unlink(missing_ok=True)
             else:
                 쪽지.write_text(원래, encoding="utf-8")
+
+    # 판은 굽는 스크립트가 숫자 셋으로 쪼개 쓴다. 모양이 틀리면 거기서 깨진다.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", VERSION), VERSION
 
     print("paths self-check 통과")
 

@@ -161,6 +161,9 @@ def facts() -> dict:
     models = paths.models_dir()
     out = {
         "때": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # ★ **어느 판인지가 맨 위에 있어야 한다.** 이게 없어서 시험하는 쪽이
+        # 받은 판을 파일 이름으로만 알았고, 되돌릴 때 짚을 것이 없었다.
+        "판": f"v{paths.VERSION}",
         "윈도우": platform.platform(),
         "파이썬": sys.version.split()[0],
         "설치본인가": paths.frozen(),
@@ -307,6 +310,7 @@ def _self_check() -> None:
             # 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다(모델이 아직 안
             # 올라온 값이다). **값이 스스로 말하면 「30초 뒤에 재라」를 안 외워도 된다.**
             것들 = facts()
+            assert 것들["판"].startswith("v0."), 것들["판"]
             메모 = 것들.get("메모리", "")
             assert "MB" in 메모, 것들.get("메모리 실패", 메모)
             # ★ **0MB 는 「안 쓴다」가 아니라 「못 쟀다」다.** 인자 타입을 안 박으면

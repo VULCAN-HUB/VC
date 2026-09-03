@@ -21,6 +21,19 @@ cmd /c mklink /J $Link "$Root" | Out-Null
 if (-not (Test-Path "$Link\eb.py")) { throw "정션이 안 걸렸다" }
 
 try {
+    # 판 번호는 paths.py 한 자리에만 있다. 여기서 읽어 version.txt 를 만든다 —
+    # 안 그러면 exe 속성에 0.1.0.0 이 박히고, 쓰는 사람이 어느 판인지 못 가른다.
+    $Ver = (& python -c "import sys; sys.path.insert(0, r'$Link'); import paths; print(paths.VERSION)").Trim()
+    if ($Ver -notmatch '^\d+\.\d+\.\d+$') { throw "판 번호가 이상하다: '$Ver'" }
+    Write-Host "== 판 v$Ver"
+    $Tpl = Get-Content "$Link\version.txt.틀" -Raw -Encoding UTF8
+    # 괄호로 통째로 묶는다. 안 묶으면 PowerShell 이 인자 셋으로 읽고 깨진다.
+    $Nums = (($Ver -split '\.') -join ', ') + ', 0'
+    $Tpl = $Tpl -replace '@@네자리@@', $Nums
+    $Tpl = $Tpl -replace '@@판@@', "$Ver.0"
+    $Tpl | Out-File "$Link\version.txt" -Encoding utf8 -NoNewline
+    if ((Get-Content "$Link\version.txt" -Raw) -match '@@') { throw "틀에 안 채운 자리가 남았다" }
+
     Write-Host "== 아이콘 굽기"
     & python "$Link\tools\make_icon.py"
     if ($LASTEXITCODE -ne 0) { throw "아이콘 실패" }
@@ -50,6 +63,7 @@ try {
     $sha = (Get-FileHash $Zip -Algorithm SHA256).Hash
     "$sha  VC.zip" | Out-File "$Zip.sha256" -Encoding utf8
     Write-Host "== SHA-256 $sha"
+    "v$Ver  $sha" | Out-File (Join-Path $OutDir "판.txt") -Encoding utf8
 
     if (-not $SkipScan) {
         # **배포 전에 반드시 본다.** 행사 당일 백신에 막히면 되돌릴 방법이 없다.
