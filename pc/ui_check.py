@@ -187,6 +187,30 @@ def run() -> None:
         first.settle()
         assert first.detail_stack.currentIndex() == 0, "단축키에 고치기로 넘어갔다"
 
+        # ── 아무도 안 건드렸는데 「밖에서도 고쳤길래」가 뜨면 안 된다 ──────────
+        # ★ 앞머리를 본문에서 끌어올리면서 **디스크의 본문이 여기 친 것과 달라진다.**
+        #   그걸 모르고 친 글을 비교값으로 들고 있으면 다음 저장에서 헛경고가 뜬다.
+        #   시험 쪽이 실사용에서 봤다(새-④). 그쪽은 이름 바꾸기를 의심했지만
+        #   원인은 이 자리였다 — **관측은 맞았고 짐작은 틀렸다.**
+        말한것: list[str] = []
+        원래말 = first.report
+        first.report = lambda t, touching, aloud=True: 말한것.append(t)
+        try:
+            first.new_note()
+            first.settle()
+            앞머리 = ("---" + chr(10) + "type: 시험" + chr(10) + "status: 진행"
+                      + chr(10) + "---" + chr(10) + "## 첫째" + chr(10) + "몸이다.")
+            first.detail_body.setPlainText(앞머리)
+            first.save_note()          # 첫 저장 — 여기서 앞머리가 올라간다
+            first.settle()
+            first.detail_body.setPlainText(앞머리 + chr(10) + "한 줄 더.")
+            first.save_note()          # 두 번째 저장 — 헛경고가 나던 자리
+            first.settle()
+        finally:
+            first.report = 원래말
+        헛것 = [t for t in 말한것 if "밖에서도 고쳤" in t]
+        assert not 헛것, "아무도 안 건드렸는데 헛경고가 떴다: " + str(헛것)
+
         fresh.delete("이름 바꾼 것")
         first.refresh()
 

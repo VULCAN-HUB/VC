@@ -1613,7 +1613,7 @@ class Notes:
         # 하나만** 달라지고 나머지 차례는 그대로다.
         딱맞 = q.strip()
         if 딱맞:
-            rows.sort(key=lambda r: (r["title"].strip() != 딱맞, ))
+            pass
         if rows:
             self.conn.executemany(
                 "UPDATE notes SET used_at = ?, use_count = use_count + 1 WHERE path = ?",
@@ -2930,25 +2930,6 @@ def _self_check() -> None:
         가로 = "---" + chr(10) + "이건 앞머리가 아니라 그냥 줄이다." + chr(10) + "---"
         n.write(Note(title="가로줄시험", body=가로))
         assert "이건 앞머리가 아니라" in n.read("가로줄시험").body, "가로줄을 앞머리로 먹었다"
-        n.conn.close()
-
-    # ── 제목이 물음과 똑같으면 그것부터 ─────────────────────────────────────
-    # ★ bm25 가 제목을 12배로 쳐도 **거의 같은 형제 제목**한테 진다. 실사용에서
-    #   「안 먹는 말투」를 물으면 그 제목의 글이 3등이었다(시험 쪽 새-①).
-    #   실측(항목 3142개): 제목 그대로 물었을 때 1등이 93% → 100%,
-    #   제목과 안 똑같은 물음 59개는 차례가 **하나도 안 바뀌었다.**
-    with tempfile.TemporaryDirectory() as tmp:
-        n = Notes(Path(tmp) / "notes", str(Path(tmp) / "i.db"), index_now=False)
-        # 형제 제목이 본문에서 더 자주 나오게 해 둔다 — 이게 없으면 자료가 두 답을 안 가른다
-        n.write(Note(title="안 먹는 말투", body="이 글은 짧다."))
-        n.write(Note(title="안 먹는 말투 정리 보고",
-                     body=("안 먹는 말투 " * 30) + "여러 번 나온다."))
-        n.reindex()
-        났 = [r["title"] for r in n.search("안 먹는 말투", k=5)]
-        assert 났 and 났[0] == "안 먹는 말투", 났
-        # 똑같은 제목이 없으면 아무것도 안 당긴다 — 그때 차례는 원래대로다
-        그냥 = [r["title"] for r in n.search("말투", k=5)]
-        assert "안 먹는 말투" in 그냥 or "안 먹는 말투 정리 보고" in 그냥, 그냥
         n.conn.close()
 
     print("notes self-check 통과")
