@@ -886,10 +886,20 @@ class Notes:
         self.conn.executescript(VECTOR_SCHEMA)
         # 이미 쓰던 색인에는 이 칸이 없다. 색인은 다시 만들 수 있지만 2만 개를
         # 다시 훑게 하느니 칸 하나를 붙이는 게 싸다.
-        try:
-            self.conn.execute("ALTER TABLE notes ADD COLUMN vec_mtime REAL NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass   # 이미 있다
+        # ★★ **칸을 더할 때는 반드시 여기에도 적는다.** `CREATE TABLE IF NOT EXISTS`
+        # 는 **이미 있는 표를 안 고친다** — 새로 만든 색인에만 칸이 생기고, 쓰던
+        # 색인에는 안 생긴다. 그러면 그 칸을 쓰는 자리가 통째로 터진다:
+        # 실제로 「links 표에 흐림 칸이 없다」로 **새 글 쓰기가 죽었고**, 만든 쪽은
+        # 기록을 새로 부어서(빈 색인) 못 봤다. **올려 쓰는 길을 안 밟은 것이다.**
+        # **있는지 먼저 보고 없을 때만 붙인다.** 매번 던지고 받는 쪽으로 했더니
+        # 색인을 열 때마다 예외가 셋씩 났고, 검사에서 죽는 일이 1/5 → 4/5 로 늘었다
+        # (되돌려서 원래 값이 나오는지 다섯 번씩 재고 갈랐다).
+        for 표, 칸, 꼴 in (("notes", "vec_mtime", "REAL NOT NULL DEFAULT 0"),
+                          ("notes", "wrote", "TEXT NOT NULL DEFAULT ''"),
+                          ("links", "흐림", "INTEGER NOT NULL DEFAULT 0")):
+            있는칸 = {r[1] for r in self.conn.execute(f"PRAGMA table_info({표})")}
+            if 있는칸 and 칸 not in 있는칸:
+                self.conn.execute(f"ALTER TABLE {표} ADD COLUMN {칸} {꼴}")
         try:
             self.conn.executescript(SEARCH_SCHEMA)
             self.fts = True
@@ -3181,6 +3191,43 @@ def _self_check() -> None:
             (Path(tmp) / "vc-이름바꾸다만것.txt").write_text(
                 "가" + chr(9) + "나", encoding="utf-8")
             assert n.이름바꾸다만것() == ("가", "나"), n.이름바꾸다만것()
+        finally:
+            n.conn.close()
+
+    # ── ★★ 쓰던 색인 위에 올려 쓰는 길 ────────────────────────────────────
+    #
+    # **이걸 안 재서 남의 기록을 깼다.** `CREATE TABLE IF NOT EXISTS` 는 **이미 있는
+    # 표를 안 고친다** — 새로 만든 색인에만 칸이 생기고 쓰던 색인에는 안 생긴다.
+    # 「links 표에 흐림 칸이 없다」로 **새 글 쓰기가 통째로 죽었는데**, 만든 쪽은
+    # 기록을 새로 부어서(빈 색인) 한 번도 못 봤다.
+    #
+    # **새로 만드는 길만 재고 올려 쓰는 길을 안 밟은 것이다.** 쓰는 사람은 늘
+    # 올려 쓴다 — 새로 만드는 쪽이 오히려 드문 길이다.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        터 = Path(tmp)
+        옛색인 = str(터 / "옛.db")
+        옛 = sqlite3.connect(옛색인)
+        옛.executescript(
+            "CREATE TABLE notes(path TEXT PRIMARY KEY, id TEXT NOT NULL, "
+            "title TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'note', "
+            "pinned INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT '', "
+            "mtime REAL NOT NULL DEFAULT 0, body TEXT NOT NULL DEFAULT '', "
+            "used_at REAL NOT NULL DEFAULT 0, use_count INTEGER NOT NULL DEFAULT 0);"
+            "CREATE TABLE links(src TEXT NOT NULL, dst TEXT NOT NULL, "
+            "heading TEXT NOT NULL DEFAULT '', PRIMARY KEY(src, dst, heading));")
+        옛.commit()
+        옛.close()
+        n = Notes(터 / "notes", 옛색인, index_now=False)
+        try:
+            # 여기서 터지던 자리다 — 「table links has no column named 흐림」
+            n.write(Note(title="옛 색인에 새 글", body="[[가나]] 를 가리킨다"))
+            칸 = {r[1] for r in n.conn.execute("PRAGMA table_info(links)")}
+            assert "흐림" in 칸, f"쓰던 색인에 흐림 칸이 안 붙었다: {칸}"
+            칸2 = {r[1] for r in n.conn.execute("PRAGMA table_info(notes)")}
+            assert "wrote" in 칸2, f"쓰던 색인에 wrote 칸이 안 붙었다: {칸2}"
+            # 읽는 쪽도 성해야 한다 — 진단이 「색인 읽기 실패」로 떨어지던 자리다
+            assert n.conn.execute(
+                "SELECT count(*) FROM links WHERE 흐림 = 1").fetchone()[0] >= 0
         finally:
             n.conn.close()
 

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import sys
 
@@ -232,6 +233,13 @@ def _self_check() -> None:
         assert 이름 in 자리, 이름
     # ※ 실제로 `main()` 을 불러 보진 않는다 — 서버·창을 붙들어 검사가 안 끝난다.
     #   서명과 본문만 봐도 이번 것은 잡힌다(매개변수가 사라진 것이 원인이었다).
+
+    # ★ **`--doctor` 에도 판 적합률이 있어야 한다.** 창이 안 뜨는 판에서는 그것만
+    #   돌아가는데 그때 이 값이 제일 필요하다(시험 쪽이 짚었다).
+    # (이 글자들은 이 파일에서 `--doctor` 자리에만 있다 — 진단 묶음 쪽은 report.py 다)
+    본문 = pathlib.Path(__file__).read_text(encoding="utf-8")
+    for 있어야 in ('report["판 적합률"]', '그중 흐린 선'):
+        assert 있어야 in 본문, f"--doctor 에 「{있어야}」가 없다"
 
     print("eb self-check 통과")
 
@@ -677,6 +685,29 @@ if __name__ == "__main__":
             n = Notes(paths.notes_dir(), str(paths.index_path()), index_now=False)
             셈 = lambda q: n.conn.execute(q).fetchone()[0]
             report["항목 수"] = 셈("SELECT count(*) FROM notes")
+            # ★ **판 적합률은 여기에도 있어야 한다.** 창이 안 뜨는 판에서는
+            # `--doctor` 만 돌아가는데, **그때 이 값이 제일 필요하다.**
+            # 시험하는 쪽이 「--doctor 에는 없고 --report 에만 있다」로 짚었다.
+            import notes as _n
+
+            옛것, 모두 = [], 0
+            for 파일 in n.notes_files():
+                try:
+                    머리 = 파일.read_text(encoding="utf-8", errors="replace").split(
+                        chr(10) + "---", 1)[0]
+                except OSError:
+                    continue
+                모두 += 1
+                if f"스키마: {_n.적는판}" not in 머리:
+                    옛것.append(파일.stem)
+            맞은 = 모두 - len(옛것)
+            report["판 적합률"] = (f"{맞은}/{모두} ({맞은 / max(1, 모두) * 100:.1f}%)가 "
+                                  f"{_n.적는판}판")
+            if 옛것:
+                report["아직 옛 판"] = f"{len(옛것)}개"
+                report["아직 옛 판 (이름 몇 개)"] = 옛것[:8]
+            report["연결 수"] = 셈("SELECT count(*) FROM links")
+            report["  그중 흐린 선"] = 셈("SELECT count(*) FROM links WHERE 흐림 = 1")
             report["뜻 벡터 수"] = 셈("SELECT count(*) FROM vectors")
             report["아직 못 만든 벡터"] = n.vec_left()
             report["본문이 빈 항목"] = n.blank_count()
