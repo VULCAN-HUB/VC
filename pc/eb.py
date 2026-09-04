@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import paths
@@ -98,7 +99,7 @@ def _사람이손댄것(뿌리) -> list[str]:
     return 남
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
@@ -210,6 +211,27 @@ def _self_check() -> None:
         assert 죽음.exists(), "스위치가 터졌는데 죽음 기록이 아예 안 생겼다"
         assert "일부러 터뜨린" in 죽음.read_text(encoding="utf-8"), "죽음 기록에 안 남았다"
         assert 자국.exists() and "스위치에서 죽음" in 자국.read_text(encoding="utf-8"),             "자국에 안 남았다"
+
+    # ── ★★ 인자 없이 띄우는 길이 성한가 ────────────────────────────────────
+    #
+    # **이걸 안 재서 안 뜨는 판을 내보냈다.** `--doctor` 같은 스위치는 다 됐는데
+    # **인자 없이 띄우면 시작하자마자 터졌다** — 고치다 `main()` 의 매개변수를
+    # 통째로 덮어써서 본문이 쓰는 `argv` 가 사라졌는데, 검사 열셋이 전부 통과했다.
+    # **제일 흔한 길(그냥 두 번 눌러 켜기)을 아무도 안 밟고 있었다.**
+    #
+    # 창을 실제로 띄우진 않는다(검사 자리에 창이 뜨면 사람 손이 필요해진다).
+    # 대신 **부를 수 있는 꼴인지**를 본다 — 터진 자리가 바로 여기였다.
+    import inspect
+
+    자리 = inspect.signature(main).parameters
+    assert "argv" in 자리, f"main 이 argv 를 안 받는다 — 인자 없이 켜면 터진다: {자리}"
+    assert 자리["argv"].default is None, "argv 에 기본값이 없다 — 인자 없이 못 부른다"
+    # 본문이 쓰는 이름과 매개변수 이름이 어긋나면 `UnboundLocalError` 가 난다.
+    몸 = inspect.getsource(main)
+    for 이름 in re.findall(r"\b(argv)\b", 몸):
+        assert 이름 in 자리, 이름
+    # ※ 실제로 `main()` 을 불러 보진 않는다 — 서버·창을 붙들어 검사가 안 끝난다.
+    #   서명과 본문만 봐도 이번 것은 잡힌다(매개변수가 사라진 것이 원인이었다).
 
     print("eb self-check 통과")
 
