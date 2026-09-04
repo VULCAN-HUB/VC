@@ -249,7 +249,28 @@ def facts() -> dict:
         n = notes.Notes(paths.notes_dir(), str(paths.index_path()), index_now=False)
         q = lambda s: n.conn.execute(s).fetchone()[0]
         out["항목 수"] = q("SELECT count(*) FROM notes")
+        # ★ **판번호를 찍기만 하고 볼 길이 없으면 아무 값도 없다.**
+        # 판번호를 넣은 까닭이 「무엇이 아직 안 고쳐졌나」를 **물어보기 위해서**인데,
+        # 그걸 보여 주는 자리가 없으면 예전처럼 **찾다가 눈에 걸려야** 알게 된다.
+        # 파일을 센다 — 색인이 아니라. 색인기는 mtime 을 쓰고 조용히 낡을 수 있다.
+        옛것 = []
+        모두 = 0
+        for 파일 in n.notes_files():
+            try:
+                머리 = 파일.read_text(encoding="utf-8", errors="replace").split(
+                    chr(10) + "---", 1)[0]
+            except OSError:
+                continue
+            모두 += 1
+            if f"스키마: {notes.적는판}" not in 머리:
+                옛것.append(파일.stem)
+        맞은 = 모두 - len(옛것)
+        out["판 적합률"] = (f"{맞은}/{모두} ({맞은 / max(1, 모두) * 100:.1f}%)가 "
+                           f"{notes.적는판}판")
+        if 옛것:
+            out["아직 옛 판"] = f"{len(옛것)}개 — 예: " + ", ".join(옛것[:3])
         out["연결 수"] = q("SELECT count(*) FROM links")
+        out["  그중 흐린 선"] = q("SELECT count(*) FROM links WHERE 흐림 = 1")
         out["뜻 벡터 수"] = q("SELECT count(*) FROM vectors")
         out["아직 못 만든 벡터"] = n.vec_left()
         n.conn.close()
@@ -344,6 +365,10 @@ def _self_check() -> None:
             # 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다(모델이 아직 안
             # 올라온 값이다). **값이 스스로 말하면 「30초 뒤에 재라」를 안 외워도 된다.**
             것들 = facts()
+            # ★ **판번호를 볼 길**이 있어야 「무엇이 아직 안 고쳐졌나」를 물어볼 수
+            #   있다. 안 보여 주면 예전처럼 찾다가 눈에 걸려야 알게 된다.
+            assert "판 적합률" in 것들 and "판" in 것들["판 적합률"], 것들.get("판 적합률")
+            assert "그중 흐린 선" in str(것들), "흐린 선을 안 센다"
             assert 것들["판"].startswith("v0."), 것들["판"]
 
             # ── 메모리: 창이 적은 파일을 읽는다 ────────────────────────────
