@@ -1729,6 +1729,12 @@ class MainWindow(QWidget):
         #   들고 있으면 다음 저장에서 「밖에서도 고쳤길래」가 뜬다. 아무도 안 건드렸는데.
         #   (시험 쪽 새-④ — 그쪽은 이름 바꾸기를 의심했지만 원인은 이 자리였다)
         self._opened_body = note.body.strip()
+        # ★ **글이 바뀌면 목차도 바뀐다.** `_fill_toc` 이 항목을 **열 때만** 불려서,
+        # 소제목을 쳐 넣고 저장해도 목차가 0으로 남았다 — 새로 만든 글은 빈 채로
+        # 열리므로 **직접 쳐서 만든 글은 목차가 영영 안 떴다**(시험 쪽 다-②).
+        # 넓은 창에서도 안 보이던 까닭이 접기가 아니라 이것이었다.
+        self._fill_toc(note.body)
+        self._place_reader()          # 채운 뒤 접기를 다시 셈한다
         self._fill_links(note.title)
         self.refresh()
         # ★ **저장했다고 말해 준다.** Ctrl+S 를 눌러도 화면이 하나도 안 바뀌어서

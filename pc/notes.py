@@ -50,6 +50,20 @@ TAG_RE = re.compile(r"(?<![\w#/])#([\w/-]{1,40})")
 CODE_RE = re.compile(r"```.*?```|`[^`]*`", re.S)
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.S)
 
+# ★★ **적는 판. 모든 항목이 이걸 달고 저장된다.**
+#
+# 없으면 **0판**이다 — 「필드가 없다 = 아직 안 옮겼다」가 그대로 질의가 되므로
+# 옛 항목에 소급해 채울 필요가 없다. 새로 쓰는 것부터 달면 된다.
+#
+# 왜 필요한가: 고침이 옛 자료에 소급되지 않는데, **무엇이 아직 안 고쳐졌나를
+# 물어볼 길이 없었다.** 제목의 `--` 도 옛 앞머리 두 겹도 **찾다가 눈에 걸려야**
+# 알았다. 판번호가 있으면 대상만 골라 고칠 수 있고 「몇 %가 현재 판인가」가
+# 상시로 보인다. 남은 수단이 「통째로 다시 붓기」뿐이던 까닭이 이것이 없어서다.
+#
+# 올릴 때: 저장 꼴이 바뀌어 **옛 항목을 고쳐야 하는 변경**일 때만 올린다.
+# 화면만 바뀌는 것은 안 올린다 — 판번호가 흔들리면 적합률이 뜻을 잃는다.
+적는판 = 1
+
 
 def _앞머리값(글: str) -> object:
     """앞머리 값 한 개를 푼다. JSON 이면 JSON 으로, 아니면 글자 그대로."""
@@ -253,6 +267,12 @@ CREATE TABLE IF NOT EXISTS links (
     src     TEXT NOT NULL,
     dst     TEXT NOT NULL,
     heading TEXT NOT NULL DEFAULT '',
+    -- 0 = 사람이 손으로 이은 진한 선, 1 = 흡수해 온 글에 들어 있던 흐린 선.
+    -- ★ 예전에는 흡수 글의 `[[ ]]` 를 **아예 안 넣었다.** 진한 선과 섞이면
+    -- 「사람이 이은 것」의 뜻이 흐려진다는 까닭이었는데, 실제 자료가 사실상
+    -- 전부 흡수분이라 **그물이 통째로 비었다**(3142장에 이음 0). 안 넣는 대신
+    -- 갈라서 넣는다 — 원문 문자열은 본문에 있으니 언제든 다시 만들 수 있다.
+    흐림    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (src, dst, heading)
 );
 CREATE INDEX IF NOT EXISTS idx_links_dst ON links (dst);
@@ -444,6 +464,12 @@ CREATE TABLE IF NOT EXISTS links (
     src     TEXT NOT NULL,
     dst     TEXT NOT NULL,
     heading TEXT NOT NULL DEFAULT '',
+    -- 0 = 사람이 손으로 이은 진한 선, 1 = 흡수해 온 글에 들어 있던 흐린 선.
+    -- ★ 예전에는 흡수 글의 `[[ ]]` 를 **아예 안 넣었다.** 진한 선과 섞이면
+    -- 「사람이 이은 것」의 뜻이 흐려진다는 까닭이었는데, 실제 자료가 사실상
+    -- 전부 흡수분이라 **그물이 통째로 비었다**(3142장에 이음 0). 안 넣는 대신
+    -- 갈라서 넣는다 — 원문 문자열은 본문에 있으니 언제든 다시 만들 수 있다.
+    흐림    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (src, dst, heading)
 );
 CREATE INDEX IF NOT EXISTS idx_links_dst ON links (dst);
@@ -703,7 +729,8 @@ class Note:
         return parse_attachments(self.body)
 
     #  우리가 쓰는 프론트매터 열쇠. 이 밖의 것은 `extra`로 넘어간다.
-    OURS = ("id", "kind", "pinned", "created", "aliases", "edited_by", "declaration")
+    OURS = ("id", "kind", "pinned", "created", "aliases", "edited_by", "declaration",
+            "스키마")
 
     def 본문앞머리끌어올리기(self) -> bool:
         """본문 맨 앞에 사람이 적은 `---` 블록이 있으면 **진짜 앞머리로 올린다.**
@@ -749,6 +776,11 @@ class Note:
             "kind": self.kind,
             "pinned": self.pinned,
             "created": self.created,
+            # ★ **여기 한 자리에서 찍는다.** 부르는 쪽마다 맡기면 반드시 몇 군데가
+            # 샌다 — 이 프로젝트에서 따옴표 감싸기가 네 군데, 태그 거르기가 두 군데
+            # 갈라져 있었고 **한 자리로 모으고 나서야** 알았다. 한 군데라도 안 찍으면
+            # 「필드가 없다 = 아직 안 옮겼다」가 조용히 거짓이 되고 적합률이 거짓말한다.
+            "스키마": 적는판,
         })
         if self.aliases:
             front["aliases"] = self.aliases
@@ -1515,10 +1547,12 @@ class Notes:
         # 그러면 **「진한 선(사람이 말한 것)」과 「흐린 선(우리가 짐작한 것)」을
         # 갈라 놓은 뜻이 흐려진다.** 위키 문법을 쓰는 자리를 흡수하면 이 수가
         # 사람이 실제로 이은 것보다 훨씬 커진다.
-        if str((note.extra or {}).get("지은이", "")) != "문지기":
+        흐림 = 1 if str((note.extra or {}).get("지은이", "")) == "문지기" else 0
+        if True:
             self.conn.executemany(
-                "INSERT OR IGNORE INTO links (src, dst, heading) VALUES (?, ?, ?)",
-                [(note.title, dst, head) for dst, head in note.links()],
+                "INSERT OR IGNORE INTO links (src, dst, heading, 흐림) "
+                "VALUES (?, ?, ?, ?)",
+                [(note.title, dst, head, 흐림) for dst, head in note.links()],
             )
         self.conn.executemany(
             "INSERT OR IGNORE INTO tags (title, tag) VALUES (?, ?)",
@@ -2044,17 +2078,21 @@ def _self_check() -> None:
             m.write(Note(title="문지기가 쓴 것", body="예시로 [[다른이름]] 을 쳐 보니",
                          kind="일", extra={"지은이": "문지기", "출처": "a.md"}))
             m.write(Note(title="사람이 쓴 것", body="이건 [[VC]] 를 가리킨다", kind="일"))
-            걸린 = {(r["src"], r["dst"]) for r in
-                    m.conn.execute("SELECT src, dst FROM links")}
-            assert ("사람이 쓴 것", "VC") in 걸린, 걸린
-            assert not any(s == "문지기가 쓴 것" for s, _ in 걸린), 걸린
+            # ★ **약속이 바뀌었다.** 예전엔 흡수 글의 `[[ ]]` 를 **아예 안 넣었는데**,
+            #   실제 자료가 사실상 전부 흡수분이라 **그물이 통째로 비었다**
+            #   (3142장에 이음 0). 이제 **안 넣는 대신 갈라서 넣는다** —
+            #   진한 선 흐림=0, 흐린 선 흐림=1. 「사람이 이은 것」의 뜻은 칸이 지킨다.
+            걸린 = {(r["src"], r["dst"], r["흐림"]) for r in
+                    m.conn.execute("SELECT src, dst, 흐림 FROM links")}
+            assert ("사람이 쓴 것", "VC", 0) in 걸린, 걸린
+            assert ("문지기가 쓴 것", "다른이름", 1) in 걸린, 걸린
             # 파일에서 다시 읽어도 마찬가지다 — 색인을 다시 쌓아도 안 들어온다.
             m.conn.execute("DELETE FROM notes")
             m.conn.execute("DELETE FROM links")
             m.conn.commit()
             m.reindex()
-            다시 = {(r["src"], r["dst"]) for r in
-                    m.conn.execute("SELECT src, dst FROM links")}
+            다시 = {(r["src"], r["dst"], r["흐림"]) for r in
+                    m.conn.execute("SELECT src, dst, 흐림 FROM links")}
             assert 다시 == 걸린, (다시, 걸린)
             m.conn.close()
 
@@ -3012,6 +3050,25 @@ def _self_check() -> None:
         finally:
             # ★ 터져도 DB 는 닫는다. 안 닫으면 임시폴더 정리가 실패하면서
             #   **그 오류가 진짜 오류를 덮는다** — 실제로 한 번 덮었다.
+            n.conn.close()
+
+    # ── 흐린 선: 흡수 글의 [[ ]] 도 넣되 갈라서 넣는다 ─────────────────────
+    # ★ 예전에는 아예 안 넣었다. 진한 선(사람이 이은 것)의 뜻을 지키려던 것인데,
+    #   실제 자료가 사실상 전부 흡수분이라 **그물이 통째로 비었다**(3142장에 이음 0).
+    #   「유기적으로 연결하는 지식창고」가 1번의 정의인데 연결이 0이었다.
+    # 정리 실패를 눈감는다 — 못 지운 임시 파일의 오류가 **진짜 오류를 덮은** 적이 있다.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        n = Notes(Path(tmp) / "notes", str(Path(tmp) / "i.db"), index_now=False)
+        try:
+            n.write(Note(title="사람 글", body="[[가나]] 를 가리킨다"))
+            n.write(Note(title="흡수 글", body="[[다라]] 를 가리킨다",
+                         extra={"지은이": "문지기"}))
+            n.reindex()
+            난 = {r[0]: r[2] for r in
+                  n.conn.execute("SELECT src, dst, 흐림 FROM links").fetchall()}
+            assert 난.get("사람 글") == 0, 난
+            assert 난.get("흡수 글") == 1, ("흡수 글의 [[ ]] 가 안 들어갔거나 진한 선이다", 난)
+        finally:
             n.conn.close()
 
     print("notes self-check 통과")

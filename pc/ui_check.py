@@ -1188,6 +1188,19 @@ def run() -> None:
             win._build_more()
             넓은차림 = [a.text() for a in win.more_menu.actions()]
             assert not any(t.startswith("목차") for t in 넓은차림),                 "위 줄에 있는데 차림표에도 겹쳐 넣었다: " + str(넓은차림)
+        # ★ **글이 바뀌면 목차도 바뀐다.** `_fill_toc` 이 항목을 **열 때만** 불려서,
+        #   새 글에 소제목을 쳐 넣고 저장해도 목차가 0으로 남았다 — 새 글은 빈 채로
+        #   열리므로 **직접 쳐서 만든 글은 목차가 영영 안 떴다**(시험 쪽 다-②).
+        #   넓은 창에서도 안 보이던 까닭이 접기가 아니라 이것이었다.
+        win.new_note()
+        win.settle()
+        assert win.toc.count() == 0, "새 글인데 목차가 이미 있다"
+        win.detail_body.setPlainText("## 하나" + chr(10) + "가" + chr(10)
+                                     + "## 둘" + chr(10) + "나")
+        win.save_note()
+        win.settle()
+        assert win.toc.count() > 1, "소제목을 쳐 넣고 저장했는데 목차가 안 생겼다"
+
         notes.delete("넓고 좁고")
         win.refresh()
         left_box, right_box = win.detail_card.geometry(), win.side_read.geometry()

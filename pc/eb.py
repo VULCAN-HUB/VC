@@ -72,7 +72,33 @@ def _log_crash(err: BaseException) -> None:
         pass   # 남기다 또 죽으면 그냥 넘어간다
 
 
-def main(argv: list[str] | None = None) -> int:
+def _사람이손댄것(뿌리) -> list[str]:
+    """사람이 만들었거나 고친 항목의 이름. 흡수분(문지기·그대로)은 뺀다.
+
+    ★ **파일을 본다. 색인이 아니라.** 색인기는 mtime 으로 무엇을 다시 읽을지
+    고르는데 SMB 볼트에서는 그것이 조용히 낡을 수 있다. 되돌릴 수 없는 일
+    직전에는 **파생물이 아니라 진실**을 본다.
+    """
+    from pathlib import Path as _P
+
+    남 = []
+    for f in _P(뿌리).rglob("*.md"):
+        조각 = f.relative_to(뿌리).parts
+        if ".이력" in 조각 or "_서식" in 조각:
+            continue
+        try:
+            글 = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        머리 = 글.split(chr(10) + "---", 1)[0]
+        # 흡수가 만든 것에는 지은이가 「문지기」 또는 「그대로」로 박힌다.
+        if '지은이: "문지기"' in 머리 or '지은이: "그대로"' in 머리:
+            continue
+        남.append(f.stem)
+    return 남
+
+
+def main() -> None:
     argv = sys.argv[1:] if argv is None else argv
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
@@ -437,6 +463,33 @@ if __name__ == "__main__":
 
         걸린 = clock.perf_counter() - t0
         줄 += ["", f"{걸린:.0f}초 · 조각당 {걸린 / max(1, s.본것):.2f}초"]
+
+        # ★★ **사람이 손댄 기록이 있으면 안 붓는다.**
+        #
+        # 지금은 기록이 전부 흡수분이라 다시 붓는 것이 공짜다 — 지울 사람 손질이
+        # 없다. 그런데 **오너가 옵시디언에서 한 글자라도 고치는 순간 그 성질이
+        # 사라진다.** 그때도 이 길이 열려 있으면 재수집이 **사람 손질을 지우는
+        # 도구**가 된다. 되돌릴 수 없고, 지워졌다는 것조차 안 보인다.
+        #
+        # 그래서 규칙을 말이 아니라 **여기서 막는다** — 「다시 붓기는 색인을 새로
+        # 만드는 수단이지 노트를 고치는 수단이 아니다」. 노트를 고쳐야 하면
+        # 이행 스크립트로 한다(순서 있고, 여러 번 돌려도 같고, 배치마다 이력 남김).
+        if "--쓴다" in sys.argv or "--write" in sys.argv:
+            사람것 = _사람이손댄것(paths.notes_dir())
+            if 사람것 and "--그래도쓴다" not in sys.argv:
+                말하기(chr(10).join([
+                    f"★ 사람이 손댄 기록이 {len(사람것)}개 있다. 다시 붓지 않는다.",
+                    "",
+                    "  재수집은 항목을 새로 만든다 — 사람이 고친 것은 **지워진다.**",
+                    "  다시 붓기는 색인을 새로 만드는 수단이지 노트를 고치는 수단이 아니다.",
+                    "  노트를 고쳐야 하면 이행 스크립트로 해라(되돌릴 자리를 남기면서).",
+                    "",
+                    "  손댄 것 몇 개:",
+                    *[f"    {이름}" for 이름 in 사람것[:5]],
+                    "",
+                    "  그래도 지우고 부으려면 --그래도쓴다 를 붙여라.",
+                ]))
+                os._exit(1)
 
         if "--쓴다" not in sys.argv and "--write" not in sys.argv:
             줄 += ["", "**아무것도 안 썼다.** 들일 것만 세어 봤다.",
