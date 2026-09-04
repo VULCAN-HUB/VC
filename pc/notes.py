@@ -446,6 +446,13 @@ CREATE TABLE IF NOT EXISTS notes (
     path      TEXT PRIMARY KEY,
     id        TEXT NOT NULL,
     title     TEXT NOT NULL,
+    -- 우리가 마지막으로 **쓴 글**의 지문. 다음에 덮어쓰기 전에 파일이 그것과
+    -- 같은지 본다. 다르면 그 사이 **밖에서 누가 고친 것**이므로 지난 판을
+    -- 반드시 남긴다(5분 간격 규칙을 건너뛴다).
+    -- ★ **비었으면 「밖에서 고쳤다」로 친다.** 색인은 다시 만들 수 있는 파생물이라
+    -- 지문이 없을 수 있는데, 모르는 쪽을 「안전」으로 읽으면 사람 손질이 조용히
+    -- 지워진다. 모르면 남기는 쪽이 싸다 — 잘못 남기면 이력이 한 판 늘 뿐이다.
+    wrote     TEXT NOT NULL DEFAULT '',
     kind      TEXT NOT NULL,
     pinned    INTEGER NOT NULL DEFAULT 0,
     created   TEXT NOT NULL,
@@ -640,6 +647,14 @@ def _lock_for(path: Path) -> threading.Lock:
 
 class WriteBlocked(OSError):
     """파일이 잠겨 못 썼다. 글은 옆에 `(못 쓴 글)` 로 남겨 뒀다."""
+
+
+def _해시(글: str) -> str:
+    """글의 지문. **mtime 이 아니라 글자를 본다** — SMB 볼트에서 mtime 은 초 단위
+    해상도·시계 어긋남·캐싱으로 자주 틀린다. 글자는 안 틀린다."""
+    import hashlib
+
+    return hashlib.sha256(글.encode("utf-8", "replace")).hexdigest()[:32]
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -1316,10 +1331,32 @@ class Notes:
             except (Vanished, OSError):
                 was = fresh    # 사라졌으면 남길 지난 판도 없다
             if was != fresh:
-                self.keep_history(path, was)
+                # ★★ **밖에서 온 글은 5분 규칙에 안 걸리게 한다.**
+                # 「치는 대로 저장」이라 판이 너무 늘지 않게 5분 안이면 지난 판을
+                # 안 만드는데, 그 사이에 **사람이 옵시디언에서 고친 판**이 들어오면
+                # 그것이 흔적 없이 사라진다. 되돌릴 수도, 사라진 줄 알 수도 없다.
+                # 우리가 쓴 지문과 다르면 남의 손이 닿은 것이므로 **반드시 남긴다.**
+                self.keep_history(path, was, always=self._남의손인가(path, was))
+        _지문 = _해시(fresh)
         _atomic_write(path, fresh)
         self._index_file(path)
+        # 우리가 쓴 글의 지문을 남긴다. 다음 덮어쓰기 때 이것과 견준다.
+        self.conn.execute("UPDATE notes SET wrote = ? WHERE path = ?",
+                          (_지문, str(path)))
+        self.conn.commit()
         return path
+
+    def _남의손인가(self, path: Path, 지금글: str) -> bool:
+        """디스크에 있는 글이 **우리가 쓴 그 글이 아닌가.**
+
+        ★ 「모르면 남긴다」 — 지문이 없으면 참으로 친다. 색인은 다시 만들 수 있는
+        파생물이라 지문이 비어 있을 수 있는데, 그때 「우리가 쓴 것」으로 읽으면
+        사람 손질이 조용히 사라진다. 잘못 남기면 이력이 한 판 느는 것뿐이다.
+        """
+        row = self.conn.execute("SELECT wrote FROM notes WHERE path = ?",
+                                (str(path),)).fetchone()
+        찍힌 = (row[0] if row else "") or ""
+        return 찍힌 != _해시(지금글)
 
     def append(self, title: str, text: str, kind: str = "note") -> Path:
         """있으면 뒤에 붙이고, 없으면 새로 만든다.
@@ -1747,6 +1784,18 @@ class Notes:
         note = self.read(old)
         if note is None or self.read(new) is not None:
             return False
+        # ★★ **하려는 일을 먼저 적는다.** 이름 바꾸기는 **여러 파일**을 건드린다 —
+        # 항목을 옮기고, 이력 폴더를 옮기고, 가리키던 `[[옛이름]]` 을 전부 고친다.
+        # `os.replace` 의 원자성은 **한 파일까지만** 덮어 준다. 중간에 죽으면
+        # 그래프가 반쯤 끊긴 채로 남고 **끊긴 줄조차 모른다.**
+        #
+        # 이건 **진실을 옮기는 저널이 아니다** — 파일은 계속 진실이다. 끝나면 지우는
+        # **재개용 쪽지**라, 이게 남아 있으면 「하다 말았다」는 뜻이다.
+        쪽지 = self.root.parent / "vc-이름바꾸다만것.txt"
+        try:
+            쪽지.write_text(old + chr(9) + new + chr(10), encoding="utf-8")
+        except OSError:
+            pass          # 못 적어도 이름 바꾸기 자체는 한다
         # **지난 판도 같이 옮긴다.** 이력 폴더는 이름으로 잡히므로, 안 옮기면
         # 옛 이름 폴더에 남아 새 이름으로는 못 찾는다 — 이름을 바꾼 항목은
         # 되돌릴 수 없게 된다. 낯선 PC 실사용에서 「화면은 지난 판이 있다 하고
@@ -1781,7 +1830,22 @@ class Notes:
                 except (Vanished, OSError, WriteBlocked):
                     continue
         self.reindex()
+        쪽지.unlink(missing_ok=True)      # 끝났으니 쪽지를 지운다
         return True
+
+    def 이름바꾸다만것(self) -> tuple[str, str] | None:
+        """하다 만 이름 바꾸기가 있으면 (옛이름, 새이름). 없으면 `None`.
+
+        켤 때 한 번 본다. 남아 있으면 **여러 파일 중 일부만 고쳐진 상태**라
+        그래프가 반쯤 끊겨 있다 — 사람에게 알려 다시 하게 한다.
+        """
+        쪽지 = self.root.parent / "vc-이름바꾸다만것.txt"
+        try:
+            글 = 쪽지.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        옛, 탭, 새 = 글.partition(chr(9))
+        return (옛, 새) if 탭 and 옛 and 새 else None
 
     def resolve(self, name: str) -> str | None:
         """[[이름]]이 실제로 가리키는 항목. 없으면 None(= 미해결 링크).
@@ -3068,6 +3132,55 @@ def _self_check() -> None:
                   n.conn.execute("SELECT src, dst, 흐림 FROM links").fetchall()}
             assert 난.get("사람 글") == 0, 난
             assert 난.get("흡수 글") == 1, ("흡수 글의 [[ ]] 가 안 들어갔거나 진한 선이다", 난)
+        finally:
+            n.conn.close()
+
+    # ── 밖에서 온 글은 5분 규칙을 건너뛰고 반드시 남는다 ────────────────────
+    # ★ 「치는 대로 저장」이라 5분 안이면 지난 판을 안 만드는데, 그 사이에 **사람이
+    #   옵시디언에서 고친 판**이 들어오면 흔적 없이 사라진다. 되돌릴 수도, 사라진
+    #   줄 알 수도 없다. 우리가 쓴 지문과 다르면 남의 손이므로 반드시 남긴다.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        뿌리 = Path(tmp) / "notes"
+        n = Notes(뿌리, str(Path(tmp) / "i.db"), index_now=False)
+        try:
+            길 = n.write(Note(title="겹침 시험", body="처음 글"))
+            # ★ **먼저 지난 판을 하나 만들어 둔다.** 지난 판이 없으면 5분 규칙이
+            #   발동조차 안 해서 **자료가 두 답을 안 가른다** — 처음엔 이걸 빠뜨려
+            #   고침을 빼도 검사가 통과했다.
+            n.write(Note(title="겹침 시험", body="두 번째 글"))
+            assert list((뿌리 / HISTORY_DIR).rglob("*.md")), "지난 판이 안 생겼다"
+            # 이제 5분 안이다. 사람이 밖에서 고친 척 — 원래는 안 남던 자리다
+            길.write_text(길.read_text(encoding="utf-8")
+                          .replace("두 번째 글", "사람이 고친 글"), encoding="utf-8")
+            n.write(Note(title="겹침 시험", body="AI 가 덮어쓴 글"))
+            판들 = list((뿌리 / HISTORY_DIR).rglob("*.md"))
+            assert any("사람이 고친 글" in f.read_text(encoding="utf-8") for f in 판들),                 "밖에서 온 글이 5분 규칙에 걸려 사라졌다"
+            # 우리가 쓴 것을 우리가 또 쓰는 것은 남의 손이 아니다
+            assert not n._남의손인가(길, 길.read_text(encoding="utf-8")), "제 글을 남의 손으로 봤다"
+            # ★ 지문이 없으면 **모르는 것이므로 남의 손으로 친다**
+            n.conn.execute("UPDATE notes SET wrote = ''")
+            n.conn.commit()
+            assert n._남의손인가(길, 길.read_text(encoding="utf-8")),                 "지문이 없는데 안전으로 읽었다"
+        finally:
+            n.conn.close()
+
+    # ── 이름 바꾸기는 하다 만 것을 남긴다 ──────────────────────────────────
+    # ★ 이름 바꾸기는 **여러 파일**을 건드리는데 `os.replace` 의 원자성은 한 파일까지다.
+    #   중간에 죽으면 그물이 반쯤 끊긴 채로 남고 **끊긴 줄조차 모른다.**
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        n = Notes(Path(tmp) / "notes", str(Path(tmp) / "i.db"), index_now=False)
+        try:
+            n.write(Note(title="옛 이름", body="몸"))
+            n.write(Note(title="가리키는 글", body="[[옛 이름]] 을 본다"))
+            n.reindex()
+            assert n.이름바꾸다만것() is None, "하기도 전에 쪽지가 있다"
+            assert n.rename("옛 이름", "새 이름")
+            assert "[[새 이름]]" in n.read("가리키는 글").body, "역링크가 안 따라왔다"
+            assert n.이름바꾸다만것() is None, "끝났는데 쪽지가 남았다"
+            # 하다 만 상태를 흉내 내면 켤 때 알아본다
+            (Path(tmp) / "vc-이름바꾸다만것.txt").write_text(
+                "가" + chr(9) + "나", encoding="utf-8")
+            assert n.이름바꾸다만것() == ("가", "나"), n.이름바꾸다만것()
         finally:
             n.conn.close()
 
