@@ -106,6 +106,7 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--재보기", "--ingest", "--흡수", "--write", "--쓴다", "--그래도쓴다",
     "--score", "--찾기점수", "--without", "--빼고", "--제목벡터빼고",
     "--links", "--이음선", "--그물시험", "--bench", "--net-test", "--log-test",
+    "--사본치우기",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
@@ -290,6 +291,25 @@ def _self_check() -> None:
 
     # ★ **`--doctor` 에도 판 적합률이 있어야 한다.** 창이 안 뜨는 판에서는 그것만
     #   돌아가는데 그때 이 값이 제일 필요하다(시험 쪽이 짚었다).
+    # ★ 사본 치우기는 **미리보기가 기본**이고 `--쓴다` 가 있어야 움직인다.
+    #   그리고 **지우지 않고 `.이력/` 으로 치운다** — `delete()` 는 파일을 그냥
+    #   없애서 되돌릴 수가 없다. 실측: 3183장에서 388장(12.2%)이 본문이 똑같았고,
+    #   치운 뒤 그물의 near-중복이 40% → 9% 로 떨어졌다.
+    # ※ **소스를 잘라 보지 않는다.** 잘라 봤더니 **검사 코드 자체에 같은 글자가
+    #   들어 있어** 자르는 자리가 어긋났고, 고침을 빼도 「통과」가 나왔다.
+    #   그 자리에만 있는 글자로 본다.
+    본문3 = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # ★★ **세어서 본다. 「들어 있나」로 보면 검사가 제 꼬리를 문다** —
+    #   검사문에 적은 그 글자가 스스로를 만족시켜, **고침을 빼도 통과했다.**
+    #   검사 자신이 한 번 쓰므로 **진짜 코드까지 두 번**이어야 한다.
+    for 있어야, 몇번, 까닭 in (
+            ('n.keep_history(길,', 2, "치우기 전에 지난 판을 안 남긴다 — 되돌릴 수가 없다"),
+            ('FROM links WHERE dst = ?", (길.stem,)', 2,
+             "가리키는 것을 안 본다 — 치우면 그 이음이 허공을 가리킨다"),
+            ('사람것 = _사람이손댄것(뿌리)', 2, "사람 손질을 안 본다"),
+            ('치울것, 지킨것, 건너뛴것', 2, "사본 치우기 자리가 없다")):
+        assert 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
+
     # ★★ **모르는 스위치는 조용히 지나가면 안 된다.**
     #   시험하는 쪽이 아직 그 스위치가 없는 판에 `--제목벡터빼고` 를 주고 쟀더니
     #   **그냥 잰 값과 똑같은 숫자**가 나왔다. 그대로 읽으면 「빼도 안 좋아진다」가
@@ -405,6 +425,98 @@ if __name__ == "__main__":
         # 안 죽었다(CPU 0.3초, 실 1개로 서 있었다). 소스로는 재현이 안 돼 원인을 못
         # 짚었는데, 한 번 쓰고 끝나는 스위치라 남은 것을 기다릴 이유가 없다.
         # 파일도 DB 도 이미 닫았으니 잃을 것이 없다.
+        os._exit(0)
+
+    if "--사본치우기" in sys.argv:
+        # ★★ **본문이 똑같은 항목을 하나만 남긴다.**
+        #
+        # 같은 글이 두 나무에서 흡수되면 사본이 생긴다 — 볼트에 한 벌, 프로젝트
+        # 폴더 안 옛 기록에 한 벌. 실측으로 3183장 중 **388장(12.2%)** 이 그랬다.
+        # 그물에서 「사본끼리 잇는 선」이 나오는 것도 여기서 온다.
+        #
+        # ★ **지우지 않고 `.이력/` 으로 치운다.** 지우면 되돌릴 수가 없다 —
+        # `delete()` 는 파일을 그냥 없앤다. 치워 두면 파일이 남아 되살릴 수 있다.
+        #
+        # ★ **미리보기가 기본이다.** `--쓴다` 를 붙여야 실제로 움직인다.
+        import hashlib
+        import re as _re
+        from collections import defaultdict
+
+        from notes import Notes
+
+        뿌리 = paths.notes_dir()
+        # 사람이 손댄 것이 있으면 아무것도 안 한다 — 다시 붓기와 같은 잣대다.
+        사람것 = _사람이손댄것(뿌리)
+        if 사람것 and "--그래도쓴다" not in sys.argv:
+            말하기(f"★ 사람이 손댄 기록이 {len(사람것)}개 있다. 안 건드린다."
+                   + chr(10) + "  그래도 하려면 --그래도쓴다 를 붙여라.")
+            os._exit(1)
+
+        앞머리 = _re.compile(r"\A---\n.*?\n---\n?", _re.S)
+        n = Notes(뿌리, str(paths.index_path()), index_now=False)
+        몸별 = defaultdict(list)
+        모두 = 0
+        for 길 in n.notes_files():
+            try:
+                글 = 길.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            모두 += 1
+            몸 = 앞머리.sub("", 글).strip()
+            if not 몸:
+                continue          # 빈 것은 안 건드린다
+            지문 = hashlib.sha256(" ".join(몸.split()).encode("utf-8")).hexdigest()
+            몸별[지문].append(길)
+
+        치울것, 지킨것, 건너뛴것 = [], [], []
+        for 같은것 in 몸별.values():
+            if len(같은것) < 2:
+                continue
+            # **짧은 제목을 남긴다.** 긴 쪽은 겹쳐서 출처가 덧붙은 것이다
+            # (`0단계 실제 결과 (eb)` ← `0단계 실제 결과`). 같으면 먼저 만든 것.
+            차례 = sorted(같은것, key=lambda q: (len(q.stem), q.stem))
+            남길, 뺄것 = 차례[0], 차례[1:]
+            for 길 in 뺄것:
+                # ★ **가리키는 것이 있으면 안 치운다.** 치우면 그 이음이 허공을 가리킨다.
+                걸린 = n.conn.execute(
+                    "SELECT count(*) FROM links WHERE dst = ?", (길.stem,)).fetchone()[0]
+                if 걸린:
+                    건너뛴것.append((길.stem, 걸린))
+                    continue
+                치울것.append((길, 남길.stem))
+            지킨것.append(남길.stem)
+
+        줄 = [f"사본 치우기 — 항목 {모두}장",
+              f"  본문이 똑같은 뭉치 {len(지킨것)}개 · 치울 것 {len(치울것)}장",
+              f"  가리키는 것이 있어 그냥 둔 것 {len(건너뛴것)}장"]
+        for 이름, 몇 in 건너뛴것[:5]:
+            줄.append(f"      {몇}개가 가리킨다: {이름[:52]}")
+
+        if "--쓴다" not in sys.argv and "--write" not in sys.argv:
+            줄 += ["", "**아무것도 안 치웠다.** 셀 것만 세어 봤다.",
+                   "  이대로 치우려면 뒤에 --쓴다 를 붙여라.", "",
+                   "치울 것 스무 개 미리보기:", "-" * 72]
+            for 길, 남는 in 치울것[:20]:
+                줄.append(f"  치움: {길.stem[:46]}")
+                줄.append(f"    남길 것: {남는[:46]}")
+        else:
+            움직인 = 0
+            for 길, _ in 치울것:
+                try:
+                    # **치우기 전에 지난 판으로 남긴다.** 그래야 되살릴 수 있다.
+                    n.keep_history(길, 길.read_text(encoding="utf-8"), always=True)
+                except (OSError, ValueError):
+                    pass
+                if n.delete(길.stem):
+                    움직인 += 1
+            n.reindex()
+            줄 += ["", f"**{움직인}장 치웠다.** 지난 판(`.이력/`)에 남겨 뒀다 — 되살릴 수 있다.",
+                   f"  남은 항목: {n.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}장"]
+
+        n.conn.close()
+        (paths.data_dir() / "vc-사본치움.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        말하기(chr(10).join(줄[:14]) + chr(10)
+               + f"  적었다: {paths.data_dir() / 'vc-사본치움.txt'}")
         os._exit(0)
 
     if "--찾기점수" in sys.argv or "--score" in sys.argv:
