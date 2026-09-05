@@ -1140,7 +1140,12 @@ def run() -> None:
         notes.reindex()
         win.show_note("점검표")
         assert "☐ 하나" in win.detail_view.toPlainText()
-        assert win.toc.isVisibleTo(win.detail_card) and win.toc.count() == 3, win.toc.count()
+        # ★ **약속이 바뀌었다.** 예전엔 「채우면 보인다」였는데 이제 **폭도 본다** —
+        #   좁은 카드에서 목차가 위 줄을 밀어 글자가 겹치는 것을 막으려고 접기 때문이다.
+        #   그러니 여기서는 **채워졌나**를 재고, 보임 여부는 폭을 넓혀 놓고 잰다.
+        assert win.toc.count() == 3, win.toc.count()
+        win._trim_tools(900)
+        assert win.toc.isVisibleTo(win.detail_card), "넓은데 목차가 안 보인다"
         win.flip_task(0)
         win.settle()
         assert "- [x] 하나" in notes.read("점검표").body
@@ -1200,6 +1205,14 @@ def run() -> None:
         win.save_note()
         win.settle()
         assert win.toc.count() > 1, "소제목을 쳐 넣고 저장했는데 목차가 안 생겼다"
+        # ★ **항목을 열 때도 폭을 본다.** 안 보면 좁은 카드에서 목차가 **있으면 안 될
+        #   자리에 떠 있고**, 나란히 보기를 켰다 끈 뒤에야 접힌다 — 앞뒤가 다르다.
+        #   시험 쪽은 이걸 「끈 뒤 안 돌아온다」로 봤는데 **끈 뒤가 맞는 쪽**이었다.
+        win._trim_tools(400)
+        접힘 = win.toc.isHidden()
+        win.show_note("넓고 좁고")          # 좁은 채로 다시 연다
+        win.settle()
+        assert win.toc.isHidden() == 접힘, "좁은데 항목을 여니 목차가 도로 떴다"
 
         notes.delete("넓고 좁고")
         win.refresh()

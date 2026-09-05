@@ -1878,6 +1878,13 @@ class MainWindow(QWidget):
             self.toc.addItem("   " * (depth - 1) + text, text)
         self.toc.setCurrentIndex(0)
         self.toc.show()
+        # ★ **채운 뒤에는 접기를 다시 셈한다.** 안 하면 폭을 안 보고 무조건 띄워서,
+        # 좁은 카드에서 항목을 열면 목차가 **있으면 안 될 자리에 떠 있다**(위 줄이
+        # 밀려 글자가 겹치는 것을 막으려고 접는 것인데 그게 무력해진다).
+        # 시험 쪽은 이걸 「나란히 보기를 끈 뒤 목차가 안 돌아온다」로 봤는데,
+        # 실은 **끈 뒤가 맞고 처음부터 떠 있던 쪽이 틀린 것**이었다.
+        if (폭 := self.detail_card.width()) > 40:
+            self._trim_tools(폭)
 
     def open_daily(self) -> None:
         """오늘 일지. 없으면 서식대로 만들어 연다."""
