@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import pathlib
 import re
@@ -135,7 +136,25 @@ def _모르는스위치(argv: list[str]) -> list[str]:
     return 모름
 
 
+def 콘솔안전() -> None:
+    """못 찍는 글자 하나가 프로그램을 죽이지 않게 한다.
+
+    한국어 윈도우 콘솔은 기본이 **cp949** 라 U+26A0(경고 세모) 같은 글자를 못 찍는다.
+    켜질 때 그 글자를 한 번 찍었더니 **UnicodeEncodeError 로 창이 아예 안 떴다** —
+    **알리려고 넣은 말이 프로그램을 죽였다.** 글자는 흘려보내고 프로그램은 산다.
+
+    글자 하나를 바꾸는 것으로는 모자란다 — **다음에 누가 또 넣으면 또 죽는다.**
+    말하는 자리를 전부 고치는 대신 **말이 나가는 문** 하나를 막는다.
+    """
+    for 짝 in (sys.stdout, sys.stderr):
+        try:
+            짝.reconfigure(errors="backslashreplace")
+        except Exception:
+            pass      # 창 모드에선 None 이거나 감싸는 것이 다를 수 있다
+
+
 def main(argv: list[str] | None = None) -> int:
+    콘솔안전()
     argv = sys.argv[1:] if argv is None else argv
     # ★★ **모르는 스위치를 조용히 무시하지 않는다.**
     #
@@ -176,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         # 알았다 — 「모르는 새 열린다」가 문제였다. 막이는 있지만(토큰 없으면 401)
         # **같은 공유기의 다른 기기에서 닿는다는 사실 자체**를 쓰는 사람이 알아야 한다.
         if HOST == "0.0.0.0":
-            print("  ⚠ 같은 공유기의 다른 기기에서도 이 자리에 닿는다"
+            print("  ★ 같은 공유기의 다른 기기에서도 이 자리에 닿는다"
                   " (토큰 없으면 401로 막힌다).")
             print("  원격이 필요 없으면  VC.exe --no-server  로 켜라.")
         report.trail(f"서버 열었다 {HOST}:{PORT}")
@@ -321,6 +340,22 @@ def _self_check() -> None:
     # (검사문이 한 번 쓰므로 **둘 이상**이어야 진짜 코드가 있는 것이다)
     빈것뺌 = 본문3.count("            if not 몸:")
     assert 빈것뺌 >= 2, f"빈 글을 짝짓기에서 안 뺀다 ({빈것뺌}군데)"
+    # ★★ **못 찍는 글자가 프로그램을 죽이면 안 된다.** 실제로 죽였다 —
+    #   v0.1.78 은 스위치 없이 그냥 켜면 cp949 콘솔에서 바로 터졌다.
+    #   내 자리는 UTF-8 이라 **안 보였다.** 그래서 검사가 cp949 로 찍어 본다.
+    바탕 = io.TextIOWrapper(io.BytesIO(), encoding="cp949")
+    진짜밖 = sys.stdout
+    sys.stdout = 바탕
+    try:
+        콘솔안전()
+        print("★ " + chr(0x26A0) + " 같은 공유기의 다른 기기에서도 닿는다")
+        바탕.flush()
+    finally:
+        sys.stdout = 진짜밖
+    # 그리고 애초에 **켜질 때 그 글자를 안 쓴다** (`★` 는 cp949 에 있다).
+    # 글자를 그대로 적으면 검사문이 제 꺼를 세므로 번호로 찾는다.
+    assert 본문3.count(chr(0x26A0)) == 0, "cp949 가 못 찍는 글자가 eb.py 에 있다"
+
     # ★ 열려 있는 자리를 말한다 — 「모르는 새 열린다」가 문제였다
     for 있어야, 몇, 까닭 in ((' 다른 기기에서도', 3, "듣는 자리를 안 알린다"),):
         assert 본문3.count(있어야) >= 몇, f"{까닭} ({본문3.count(있어야)}군데)"
