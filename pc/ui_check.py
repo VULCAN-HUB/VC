@@ -516,6 +516,24 @@ def run() -> None:
         적힘 = win.footer.text()
         assert "연결" in 적힘 and "적은 것" in 적힘, 적힘
 
+        # ★★ **밖에서 닿는 자리로 열렸으면 창이 그걸 말해야 한다.**
+        # 자국과 `--doctor` 에만 적혀 있었는데, 오너는 아이콘을 눌러 켜고 창만 본다.
+        # 그리고 **창용 exe 는 콘솔이 없어 켤 때 찍는 말이 갈 데가 없다**(시험 쪽이 잼).
+        assert win.열린자리.isHidden(), "안 열렸는데 열렸다고 한다"
+        win.열린자리알리기("127.0.0.1", 8765)
+        assert win.열린자리.isHidden(), "안에서만 듣는데 밖에 열렸다고 한다"
+        win.열린자리알리기("0.0.0.0", 8765)
+        assert not win.열린자리.isHidden(), "밖에서 닿는데 창이 아무 말도 안 한다"
+        assert "8765" in win.열린자리.text(), win.열린자리.text()
+
+        # ★★ **이름표는 잘려도 되지만 창은 화면에 들어가야 한다.**
+        # 위·아래 띄에 값을 하나 더할 때마다 창 최소 폭이 그만큼 커졌고, 한 번은
+        # **1624** 까지 가 1366 짜리 노트북에 안 들어갔다. 지금까지는 그 교훈이 주석에만
+        # 있었다 — **주석은 다음에 값을 더하는 사람을 안 막는다.** 재어서 막는다.
+        잠 = win.minimumSizeHint()
+        assert 잠.width() <= 1366, f"창 최소 폭 {잠.width()} — 1366 짜리 화면에 안 들어간다"
+        assert 잠.height() <= 1032, f"창 최소 높이 {잠.height()} — 1080 화면에 안 들어간다"
+
         # 빈 화면에서 VC 하나로 시작한다.
         assert list(win.graph.nodes) == [ROOT], list(win.graph.nodes)
         assert notes.read(ROOT) is not None and notes.read(ROOT).pinned

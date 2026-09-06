@@ -273,6 +273,18 @@ class MainWindow(QWidget):
         # 우리가 쓴 것도 감시에 걸린다. 방금 우리가 쓴 거면 다시 읽을 필요가 없다.
         self._wrote_at = 0.0
 
+        # ★★ **창만 보는 사람에게도 「지금 열려 있다」를 알린다.**
+        #
+        # 자국(`vc-기록.log`)과 `--doctor` 에는 적히지만, **오너는 아이콘을 눌러 켜고
+        # 창만 본다.** 시험하는 쪽이 「절반만 닫혔다 — 자국을 열어 보거나 --doctor 를
+        # 돌린 사람은 알고, 그냥 켜는 사람은 여전히 모른다」고 짚었다. 여기가 나머지
+        # 절반이다. **닫혀 있을 때는 아무 말도 안 한다**(아래 띠와 같은 규칙).
+        self.열린자리 = QLabel()
+        self.열린자리.setStyleSheet(theme.small(theme.T.WARN, 0.8, 10))
+        # ★ **왼쪽 세로 칸은 폭이 100px 도 안 된다** — 거기 놓았더니 「★ 원격 열림 :87」로
+        #   잘렸다. 잘린 경고는 경고가 아니다. 위 띄의 빈 자리로 옮겼다.
+        self.열린자리.hide()
+
         head_left = QVBoxLayout()
         head_left.setSpacing(3)
         head_left.addWidget(wordmark)
@@ -311,6 +323,8 @@ class MainWindow(QWidget):
 
         head = QHBoxLayout()
         head.addLayout(head_left)
+        head.addSpacing(16)
+        head.addWidget(self.열린자리, 0, Qt.AlignBottom)
         head.addStretch(1)
         head.addWidget(self.head_new, 0, Qt.AlignBottom)
         head.addSpacing(8)
@@ -1103,6 +1117,22 @@ class MainWindow(QWidget):
             self.voice.stop()
             self.voice.wait(2000)
         super().closeEvent(event)
+
+    def 열린자리알리기(self, host: str, port: int) -> None:
+        """**밖에서도 닿는 자리로 열렸다는 것을 창에 적는다.**
+
+        켤 때 콘솔에 찍는 말은 **창용으로 구운 exe 에서는 갈 데가 없다** — 시험하는
+        쪽이 「리다이렉트해도 비어 있다」로 잡았다. 그러니 창이 스스로 말해야 한다.
+        `127.0.0.1` 로 열렸으면 밖에서 못 닿으니 아무 말도 안 한다.
+        """
+        if host not in ("0.0.0.0", "::"):
+            return
+        self.열린자리.setText(f"★ 원격 열림 :{port}")
+        self.열린자리.setToolTip(
+            f"{host}:{port} 로 듣는다 — 같은 공유기의 다른 기기에서 닿는다. "
+            "토큰 없이 들어오면 401로 막힌다. "
+            "원격이 필요 없으면 VC.exe --no-server 로 켜라.")
+        self.열린자리.show()
 
     def _greet_server(self) -> None:
         """서버가 떠 있는지 처음 확인한다. 창이 다 뜬 뒤에 부른다."""

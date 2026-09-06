@@ -244,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     # 창부터 띄우고 훑기는 뒤에서 돈다 — 2만 개면 훑는 데 6초, 10만 개면 30초다.
     win = ui.MainWindow(ui.Notes(paths.notes_dir(), str(paths.index_path()), index_now=False),
                         ui.Store(str(paths.store_path())))
+    # ★ 창만 보는 사람에게도 열린 자리를 알린다 — 콘솔에 찍는 말은 창용 exe 에서
+    #   갈 데가 없다. 서버를 안 켰으면 아무 말도 안 한다.
+    if want_server:
+        win.열린자리알리기(HOST, PORT)
     win.show()
     report.trail("창 떴다")
     code = app.exec_()
