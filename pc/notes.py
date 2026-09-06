@@ -1822,8 +1822,15 @@ class Notes:
         # 지시는 없다 한다」로 드러났다.
         was = self.history_dir(self.path_of(old))
         self.delete(old)
-        self.write(Note(title=new, body=note.body, kind=note.kind,
-                        pinned=note.pinned, created=note.created))
+        # ★★ **이름만 바꾸는 것이지 딴 것을 버리는 게 아니다.**
+        # 예전에는 제목·본문·갈래·고정·만든날만 옮기고 **`extra` 를 통째로 버렸다** —
+        # `출처`·`지은이`·`들인이유` 와 사람이 적은 `type`·`status` 가 다 사라졌다.
+        # 그 값들은 **원본 사실이라 나중에 되살릴 수가 없다**(어디서 온 글인지는
+        # 그때만 안다). 실제로 이름 바꾼 35개가 **흡수분인데 사람이 만든 글로**
+        # 보이게 됐다 — 다시 붓기 막이가 그걸 보고 막아선다.
+        # 별칭도 같이 옮긴다. 안 옮기면 옛 별칭으로 부르던 링크가 끊긴다.
+        note.title = new
+        self.write(note)
         now = self.history_dir(self.path_of(new))
         if was.is_dir() and was != now:
             try:
@@ -3197,6 +3204,20 @@ def _self_check() -> None:
             assert n.rename("옛 이름", "새 이름")
             assert "[[새 이름]]" in n.read("가리키는 글").body, "역링크가 안 따라왔다"
             assert n.이름바꾸다만것() is None, "끝났는데 쪽지가 남았다"
+            # ★★ **이름만 바꾸는 것이지 딴 것을 버리는 게 아니다.**
+            #   예전엔 `extra` 를 통째로 버려 `출처`·`지은이` 와 사람이 적은
+            #   `type`·`status` 가 다 사라졌다. **원본 사실이라 되살릴 수 없다** —
+            #   이름 바꾼 35개가 흡수분인데 사람이 만든 글로 보이게 됐고,
+            #   다시 붓기 막이가 그걸 보고 막아섰다.
+            n.write(Note(title="딸린 것 시험", body="몸", kind="일",
+                         aliases=["별명"],
+                         extra={"출처": "a.md", "지은이": "문지기", "type": "시험"}))
+            assert n.rename("딸린 것 시험", "딸린 것 시험 2")
+            옮 = n.read("딸린 것 시험 2")
+            for 열쇠, 값 in (("출처", "a.md"), ("지은이", "문지기"), ("type", "시험")):
+                assert (옮.extra or {}).get(열쇠) == 값, (열쇠, 옮.extra)
+            assert 옮.aliases == ["별명"], 옮.aliases
+            assert 옮.kind == "일", 옮.kind
             # 하다 만 상태를 흉내 내면 켤 때 알아본다
             (Path(tmp) / "vc-이름바꾸다만것.txt").write_text(
                 "가" + chr(9) + "나", encoding="utf-8")
