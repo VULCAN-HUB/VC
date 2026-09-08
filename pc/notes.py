@@ -544,6 +544,31 @@ def headings(body: str) -> list[tuple[int, str]]:
     return out
 
 
+def 요약(body: str, extra: dict | None = None, 길이: int = 120) -> str:
+    """한 줄로 무슨 글인지 밝힌다. 앞머리에 적힌 것이 있으면 그것, 없으면 몸의 첫 줄.
+
+    ★★ **꺼내기 1단에 쓰는 것이다.** 찾은 글의 몸을 통째로 주면 여덟 장에
+    **46,000자(≈ 18,000토큰)** 이 나가는데(재 본 값: 평균 5,814자 · 최대 184,467자),
+    그중 실제로 읽는 것은 몇 줄이다. 1단은 **무엇이 있는지**만 보이고,
+    고른 구획만 2단에서 펼친다.
+    """
+    for 열쇠 in ("요약", "summary", "description", "설명"):
+        값 = (extra or {}).get(열쇠)
+        if isinstance(값, str) and 값.strip():
+            return 값.strip()[:길이]
+    담 = False
+    for 줄 in body.splitlines():
+        굳 = 줄.strip()
+        if 굳.startswith(("```", "~~~")):
+            담 = not 담
+            continue
+        # 앞머리·소제목·줄자는 「무슨 글인가」에 답하지 않는다. 몸의 첫 문장을 찾는다.
+        if 담 or not 굳 or 굳.startswith(("#", "---", "===", ">", "|")):
+            continue
+        return re.sub(r"[*`~\[\]]", "", 굳)[:길이]
+    return ""
+
+
 def parse_links(body: str) -> list[tuple[str, str]]:
     """본문에서 (대상, 소제목)을 뽑는다. 보이는 글자는 연결과 무관해서 버린다.
 

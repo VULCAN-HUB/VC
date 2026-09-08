@@ -190,26 +190,58 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, hello.__dict__)
 
         if url.path == "/eb/v1/memory/search":
+            # ★★ **꺼내기는 두 단이다.** 예전엔 걸린 여덟 장의 **몸을 통째로** 준다 —
+            # 재 보니 한 번에 46,000자(≈ 18,000토큰)가 나가는데 읽는 것은 몇 줄이었다.
+            #   1단(여기)  제목 · 한 줄 요약 · 소제목 목록 · 글자 수   — 여덟 장에 몇백 자
+            #   2단         `/eb/v1/memory/note?title=..&heading=..` 로 **고른 구획만**
+            # 예전처럼 몸까지 받으려면 `full=1` 을 붙인다 — 붙여 쓰던 쪽을 안 깨린다.
             args = parse_qs(url.query)
             q = (args.get("q") or [""])[0]
             k = int((args.get("k") or ["8"])[0])
+            통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
             rows = self.server.notes.search(q, k)
-            return self._send(
-                200,
-                {
-                    "results": [
-                        {
-                            "title": r["title"],
-                            "kind": r["kind"],
-                            "pinned": bool(r["pinned"]),
-                            "created": r["created"],
-                            "body": r["body"],
-                            "links": self.server.notes.neighbors(r["title"]),
-                        }
-                        for r in rows
-                    ]
-                },
-            )
+            out = []
+            for r in rows:
+                몸 = r["body"]
+                한장 = {
+                    "title": r["title"],
+                    "kind": r["kind"],
+                    "pinned": bool(r["pinned"]),
+                    "created": r["created"],
+                    "summary": notes.요약(몸),
+                    # 소제목은 **펼칠 자리의 목록**이다. 이름만 준다 — 깊이는 2단에서 안 쓴다.
+                    "headings": [h for _, h in notes.headings(몸)][:20],
+                    "chars": len(몸),
+                    "links": self.server.notes.neighbors(r["title"]),
+                }
+                if 통째로:
+                    한장["body"] = 몸
+                out.append(한장)
+            return self._send(200, {"results": out})
+
+        if url.path == "/eb/v1/memory/note":
+            # 꺼내기 2단. 소제목을 주면 **그 토막만**, 안 주면 글 한 편을 그대로 준다.
+            # 한 편을 달라는 것은 **고른 것**이라 막지 않는다 — 1단이 글자 수를 이미 보였다.
+            args = parse_qs(url.query)
+            title = (args.get("title") or [""])[0].strip()
+            heading = (args.get("heading") or [""])[0].strip()
+            if not title:
+                return self._send(400, {"error": "title required"})
+            note = self.server.notes.read(title)
+            if note is None:
+                return self._send(404, {"error": "no such note", "title": title})
+            if heading:
+                토막 = notes.section(note.body, heading)
+                if not 토막:
+                    # 없는 소제목에 **글 통째**를 돌려주면 아끼려던 것이 그대로 나간다.
+                    # 없다고 말하고 **있는 소제목을 보여 준다.**
+                    return self._send(404, {"error": "no such heading", "title": title,
+                                            "heading": heading,
+                                            "headings": [h for _, h in notes.headings(note.body)][:20]})
+                return self._send(200, {"title": title, "heading": heading, "text": 토막,
+                                        "chars": len(토막)})
+            return self._send(200, {"title": title, "text": note.body, "chars": len(note.body),
+                                    "headings": [h for _, h in notes.headings(note.body)][:20]})
 
         if url.path == "/eb/v1/graph":
             return self._send(200, {"nodes": self.server.notes.graph()})
@@ -757,6 +789,34 @@ def _self_check() -> None:
     status, found = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아이스"))
     assert status == 200 and len(found["results"]) == 1
     assert found["results"][0]["links"] == ["VC"], "연결이 안 실려 온다"
+
+    # ★★ **꺼내기는 두 단이다.** 1단은 몸을 안 준다 — 생기다 말면 여덟 장에
+    # 46,000자가 다시 나간다(재 본 값: 평균 5,814자 · 최대 184,467자).
+    달 = chr(10)
+    긴글 = (f"머리말{달}{달}## 첫 칸{달}" + "가" * 3000
+            + f"{달}{달}## 둘째 칸{달}여기만 읽고 싶다{달}")
+    assert call("POST", "/eb/v1/memory", {"title": "긴 기록", "text": 긴글})[0] == 201
+    status, 찾 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("둘째"))
+    assert status == 200 and 찾["results"], 찾
+    한장 = 찾["results"][0]
+    assert "body" not in 한장, "1단이 몸을 통째로 준다"
+    assert 한장["summary"] and len(한장["summary"]) <= 120, 한장["summary"]
+    assert "둘째 칸" in 한장["headings"], 한장["headings"]
+    assert 한장["chars"] > 3000, "얼만큼 큰지를 안 밝히면 펼칠지 고를 수가 없다"
+    assert len(json.dumps(찾, ensure_ascii=False)) < 1500, "1단이 무거워졌다"
+
+    # 2단 — 고른 구획만 펼친다
+    status, 토막 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("긴 기록")
+                        + "&heading=" + urllib.parse.quote("둘째 칸"))
+    assert status == 200 and 토막["text"].strip() == "여기만 읽고 싶다", 토막
+    assert "가가가" not in 토막["text"], "다른 칸까지 딸려왔다"
+    # 없는 소제목은 **글 통째로 바꾸지 않고** 없다고 말하며 있는 것을 보인다
+    status, 없음 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("긴 기록")
+                        + "&heading=" + urllib.parse.quote("없는 칸"))
+    assert status == 404 and "둘째 칸" in 없음["headings"], 없음
+    # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
+    status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
+    assert status == 200 and 통째["results"][0]["body"], "full=1 이 안 먹는다"
 
     # 기본은 덧붙이기다 — 어제 적은 것이 오늘 것에 지워지면 기억이 아니다.
     assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "요즘은 따뜻한 것도 마신다"})[0] == 201
