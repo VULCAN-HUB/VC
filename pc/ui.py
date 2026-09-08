@@ -1147,7 +1147,9 @@ class MainWindow(QWidget):
         report.메모리찍기()
         out = self.link.call("GET", "/eb/v1/engine")
         if out is None:
-            self.engine_label.setText("엔진 —  서버 꺼짐")
+            # ★ 「서버 꺼짐」이 원격 줄과 나란히 떠서 **어느 서버가 꺼진 것인지**
+            #   헷갈린다고 시험 쪽이 짚었다. 이 줄은 **글 모델**을 말한다.
+            self.engine_label.setText("엔진 —  글 모델 안 올라옴")
             return
         if out.get("loaded"):
             # 사진을 보는 모델인지 표시한다. 글자 모델이면 제품 검색이 안 된다.

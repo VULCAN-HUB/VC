@@ -905,7 +905,10 @@ def run() -> None:
         assert "a 올라옴" in win.engine_label.text(), win.engine_label.text()
         win.link = ServerLink(config="없는파일.json")
         win.refresh_engine()
-        assert "서버 꺼짐" in win.engine_label.text()
+        # ★ 「서버 꺼짐」이라고 쓰면 바로 옆 「★ 원격 열림 :8765」와 나란히 떠서
+        #   **어느 서버가 꺼진 것인지** 헷갈린다(시험 쪽 지적). 이 줄은 글 모델을 말한다.
+        assert "글 모델 안 올라옴" in win.engine_label.text(), win.engine_label.text()
+        assert "서버" not in win.engine_label.text(), "원격 서버와 헷갈리는 말이 남아 있다"
 
         # 활동 흐름이 실제 계측 기록을 읽어 온다 — 근거 없이 굴러가는 것처럼 보이면 안 된다.
         assert win.feed.rows == []

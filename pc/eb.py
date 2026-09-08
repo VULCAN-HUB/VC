@@ -146,11 +146,27 @@ def 콘솔안전() -> None:
     글자 하나를 바꾸는 것으로는 모자란다 — **다음에 누가 또 넣으면 또 죽는다.**
     말하는 자리를 전부 고치는 대신 **말이 나가는 문** 하나를 막는다.
     """
-    for 짝 in (sys.stdout, sys.stderr):
+    for 이름 in ("stdout", "stderr"):
+        짝 = getattr(sys, 이름, None)
+        if 짝 is None:
+            continue          # 창 모드에선 아예 없다
         try:
             짝.reconfigure(errors="backslashreplace")
+            continue
         except Exception:
-            pass      # 창 모드에선 None 이거나 감싸는 것이 다를 수 있다
+            pass
+        # ★★ **`reconfigure` 가 안 먹는 자리가 있다** — 구운 판에서는 이게 터지고
+        # 난 그걸 조용히 삼켰다. 그래서 소스로는 멀줦했는데 **exe 는 그대로 죽었다**
+        # (시험하는 쪽에서 `—` 하나로 사본치우기가 통째로 입을 닫았다).
+        # 안 먹으면 **새로 감싼다.**
+        try:
+            속 = getattr(짝, "buffer", None)
+            if 속 is not None:
+                setattr(sys, 이름, io.TextIOWrapper(
+                    속, encoding=(getattr(짝, "encoding", None) or "utf-8"),
+                    errors="backslashreplace", line_buffering=True))
+        except Exception:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,6 +272,20 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
+def _소스글() -> str:
+    """이 파일의 글. **구운 판에는 없다** — 그때는 빈 글을 준다.
+
+    소스를 세어 보는 검사들이 여럿 있는데, 구운 판에서 `__file__` 을 읽으면 터져
+    `--check` 가 통째로 실패했다(시험 쪽이 잡았다). **소스가 없는 자리에서
+    소스 검사는 할 일이 아니다** — 건너뛰되, 건너뛴 것을 말한다.
+    """
+    try:
+        return pathlib.Path(__file__).read_text(encoding="utf-8")
+    except OSError:
+        말하기("  (구운 판이라 소스 세기 검사는 건너뛴다)")
+        return ""
+
+
 def _self_check() -> None:
     import tempfile
 
@@ -321,7 +351,14 @@ def _self_check() -> None:
     assert "argv" in 자리, f"main 이 argv 를 안 받는다 — 인자 없이 켜면 터진다: {자리}"
     assert 자리["argv"].default is None, "argv 에 기본값이 없다 — 인자 없이 못 부른다"
     # 본문이 쓰는 이름과 매개변수 이름이 어긋나면 `UnboundLocalError` 가 난다.
-    몸 = inspect.getsource(main)
+    # ★ **구운 판에는 소스가 없다.** `getsource` 가 OSError 로 터져 `--check` 가
+    #   통째로 실패했다(시험 쪽이 잡았다). 소스가 있을 때만 본다 —
+    #   소스가 없는 자리에서 이 검사는 애초에 할 일이 아니다.
+    try:
+        몸 = inspect.getsource(main)
+    except (OSError, TypeError):
+        몸 = ""
+        말하기("  (구운 판이라 소스 검사는 건너뛴다)")
     for 이름 in re.findall(r"\b(argv)\b", 몸):
         assert 이름 in 자리, 이름
     # ※ 실제로 `main()` 을 불러 보진 않는다 — 서버·창을 붙들어 검사가 안 끝난다.
@@ -336,14 +373,18 @@ def _self_check() -> None:
     # ※ **소스를 잘라 보지 않는다.** 잘라 봤더니 **검사 코드 자체에 같은 글자가
     #   들어 있어** 자르는 자리가 어긋났고, 고침을 빼도 「통과」가 나왔다.
     #   그 자리에만 있는 글자로 본다.
-    본문3 = pathlib.Path(__file__).read_text(encoding="utf-8")
+    본문3 = _소스글()
+    # ★★ **소스가 없으면 소스 검사는 아예 안 한다.** 구운 판에서 빈 글을 세면
+    # 0 이 나와 **멀쩡한 판이 「검사 실패」로 보인다** — 실제로 오류 상자가 떴다.
+    # 「없어서 못 잰 것」과 「재 봤더니 틀린 것」은 다른 말이다.
+    소스있다 = bool(본문3)
     # ★ **빈 글끼리는 사본이 아니다.** 비어 있는 두 글은 같은 내용을 가진 게 아니라
     #   내용이 없는 것이다. 바닥값을 넣으며 이 줄을 지웠더니 **제목 밑동 예외가
     #   바닥값을 뚫고** 빈 글끼리 묶였다 — 창에서 만들어 두고 아직 안 쓴 글이
     #   사본으로 치워질 뻔했다(시험 쪽이 잡았다).
     # (검사문이 한 번 쓰므로 **둘 이상**이어야 진짜 코드가 있는 것이다)
     빈것뺌 = 본문3.count("            if not 몸:")
-    assert 빈것뺌 >= 2, f"빈 글을 짝짓기에서 안 뺀다 ({빈것뺌}군데)"
+    assert not 소스있다 or 빈것뺌 >= 2, f"빈 글을 짝짓기에서 안 뺀다 ({빈것뺌}군데)"
     # ★★ **못 찍는 글자가 프로그램을 죽이면 안 된다.** 실제로 죽였다 —
     #   v0.1.78 은 스위치 없이 그냥 켜면 cp949 콘솔에서 바로 터졌다.
     #   내 자리는 UTF-8 이라 **안 보였다.** 그래서 검사가 cp949 로 찍어 본다.
@@ -353,16 +394,53 @@ def _self_check() -> None:
     try:
         콘솔안전()
         print("★ " + chr(0x26A0) + " 같은 공유기의 다른 기기에서도 닿는다")
-        바탕.flush()
+        sys.stdout.flush()
     finally:
         sys.stdout = 진짜밖
+
+    # ★★ **막이가 안 먹는 자리에서도 말은 나가야 한다.**
+    # 구운 판에선 `reconfigure` 가 터졌고, 그러자 `—`(em dash) 하나로
+    # `--사본치우기`·`--판올리기` 가 **아무 말도 안 하고 끝났다**(종료값 0).
+    # 그랬 때는 `말하기` 가 한 번 더 받아 낸다. 그걸 여기서 재다 —
+    # 바꿔치기를 못 하게 막아 놓고 재야 진짜로 나가는지 안다.
+    class _고집센콘솔(io.TextIOBase):
+        """`reconfigure` 를 거절하고 cp949 로만 받는 콘솔. 구운 판이 이랬했다."""
+        encoding = "cp949"
+
+        def __init__(self):
+            self.받은 = []
+
+        def reconfigure(self, **_):
+            raise OSError("안 먹는다")
+
+        def write(self, 글):
+            글.encode("cp949")          # 못 찍는 글자면 여기서 터진다
+            self.받은.append(글)
+            return len(글)
+
+    고집센 = _고집센콘솔()
+    진짜밖 = sys.stdout
+    sys.stdout = 고집센
+    try:
+        콘솔안전()
+        말하기("사본 치우기 — 항목 0장")     # em dash — 예전엔 여기서 통째로 삼켰다
+    finally:
+        sys.stdout = 진짜밖
+    assert any("사본 치우기" in 글 for 글 in 고집센.받은),         "막이가 안 먹는 콘솔에서 말이 통째로 사라졌다"
+
     # 그리고 애초에 **켜질 때 그 글자를 안 쓴다** (`★` 는 cp949 에 있다).
     # 글자를 그대로 적으면 검사문이 제 꺼를 세므로 번호로 찾는다.
-    assert 본문3.count(chr(0x26A0)) == 0, "cp949 가 못 찍는 글자가 eb.py 에 있다"
+    assert not 소스있다 or 본문3.count(chr(0x26A0)) == 0, "cp949 가 못 찍는 글자가 eb.py 에 있다"
+
+    # ★ 모델이 없을 때 **넣을 자리를 바로 말하고, 센 것도 같이 말한다.**
+    #   예전엔 `_internal\models`(프로그램 속)을 가리켰고, 멈추면서 센 것을 안 보였다.
+    for 있어야, 몇, 까닭 in ((' / "models"', 2, "넣을 자리로 exe 옆을 안 말한다"),
+                          ('센 것: {s}', 2, "멈추면서 센 것을 안 보인다")):
+        assert not 소스있다 or 본문3.count(있어야) >= 몇, f"{까닭} ({본문3.count(있어야)}군데)"
 
     # ★ 열려 있는 자리를 말한다 — 「모르는 새 열린다」가 문제였다
     for 있어야, 몇, 까닭 in ((' 다른 기기에서도', 3, "듣는 자리를 안 알린다"),):
-        assert 본문3.count(있어야) >= 몇, f"{까닭} ({본문3.count(있어야)}군데)"
+        assert not 소스있다 or 본문3.count(있어야) >= 몇, f"{까닭} ({본문3.count(있어야)}군데)"
 
     # ★★ **세어서 본다. 「들어 있나」로 보면 검사가 제 꼬리를 문다** —
     #   검사문에 적은 그 글자가 스스로를 만족시켜, **고침을 빼도 통과했다.**
@@ -373,21 +451,21 @@ def _self_check() -> None:
              "가리키는 것을 안 본다 — 치우면 그 이음이 허공을 가리킨다"),
             ('사람것 = _사람이손댄것(뿌리)', 2, "사람 손질을 안 본다"),
             ('치울것, 지킨것, 건너뛴것', 2, "사본 치우기 자리가 없다")):
-        assert 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
+        assert not 소스있다 or 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
 
     # ★ **짝짓기에 바닥값이 있어야 한다.** 본문만 보고 짝을 지었더니 **두 글자짜리
     #   본문 셋**이 한 뭉치가 되어 제목이 서로 다른 딴 글이 「치울 것」에 들어갔다
     #   (시험 쪽이 잡았다). 13071자가 같은 것과 두 글자가 같은 것은 다른 일이다.
     #   (검사문이 한 번 쓰므로 **둘 이상**이어야 진짜 코드가 있는 것이다)
     짝바닥 = 본문3.count("< ingest.짧은조각")
-    assert 짝바닥 >= 2, f"짧은 본문끼리도 짝을 짓는다 ({짝바닥}군데)"
+    assert not 소스있다 or 짝바닥 >= 2, f"짧은 본문끼리도 짝을 짓는다 ({짝바닥}군데)"
     # ★ 다만 **짧아도 제목 밑동까지 같으면 진짜 사본이다.** 바닥값만 두면
     #   「8월 회의록」 셋(본문 20자·제목 같음)을 놓친다(시험 쪽이 갈랐다).
     밑동봄 = 본문3.count("chr(31) + 밑동 if 짧다")
-    assert 밑동봄 >= 2, f"짧은 것에서 제목 밑동을 안 본다 ({밑동봄}군데)"
+    assert not 소스있다 or 밑동봄 >= 2, f"짧은 것에서 제목 밑동을 안 본다 ({밑동봄}군데)"
     # ★ 같은 폴더를 두 번 흡수해도 다시 안 쌓인다 — 오너 기록 388장(12.2%)의 원인이었다
     이미봄 = 본문3.count("ingest.들일것(뿌리, 이미)")
-    assert 이미봄 >= 2, f"흡수가 이미 든 글을 안 본다 ({이미봄}군데)"
+    assert not 소스있다 or 이미봄 >= 2, f"흡수가 이미 든 글을 안 본다 ({이미봄}군데)"
 
     # ★★ **막이는 쓰는 것을 막지 보는 것을 막지 않는다.**
     #   처음에는 세는 것까지 막아서, 「먼저 세어만 봐라」를 시켜 놓고 **셀 수가
@@ -398,12 +476,12 @@ def _self_check() -> None:
             ('if 사람것 and "--손댄것도쓴다" not in sys.argv:', 2,
              "막이가 쓰는 자리에 없다 — 세는 것까지 막으면 안 된다"),
             ('★ 사람이 손댄 항목', 2, "미리보기가 사람 손질을 안 알려 준다")):
-        assert 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
+        assert not 소스있다 or 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
     # ★ 옛 판이 들인 항목(지은이 칸이 없다)을 사람 손질로 오해하면 안 된다 —
     #   시험 PC 에서 552개가 그렇게 잡혀 세는 것까지 막혔다.
     옛것가르기 = 본문3.count(chr(105) + chr(102) + ' "출처:" in 머리 and')
     # (검사문은 chr() 로 쪼개 적어 제 몫을 안 센다 — 그래서 1군데면 충분하다)
-    assert 옛것가르기 >= 1, f"출처만 있는 옛 흡수분을 안 가른다 ({옛것가르기}군데)"
+    assert not 소스있다 or 옛것가르기 >= 1, f"출처만 있는 옛 흡수분을 안 가른다 ({옛것가르기}군데)"
 
     # ★ **켠 스위치는 제 몫을 머리글에 찍는다.** 안 찍으면 「먹었는지」를 값이
     #   달라진 것으로만 알게 되고, 값이 같게 나오는 판에서는 「안 먹은 것」과
@@ -411,7 +489,7 @@ def _self_check() -> None:
     for 있어야, 몇번, 까닭 in (
             ('제목 벡터를 빼고 쟀다', 2, "--제목벡터빼고 가 머리글에 안 찍힌다"),
             ('정답을 여럿 적은 물음', 2, "정답 여럿이 머리글에 안 찍힌다")):
-        assert 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
+        assert not 소스있다 or 본문3.count(있어야) >= 몇번, f"{까닭} ({본문3.count(있어야)}군데)"
 
     # ★★ **모르는 스위치는 조용히 지나가면 안 된다.**
     #   시험하는 쪽이 아직 그 스위치가 없는 판에 `--제목벡터빼고` 를 주고 쟀더니
@@ -429,14 +507,14 @@ def _self_check() -> None:
     #   실사용에서 「아래 띠 말이 어색하던 것」의 1등이 「어색한 문장 고치기」였는데
     #   시험하는 쪽이 **사람 눈에도 그럴듯하다**고 했다. 그런 물음을 실패로 세면
     #   **고칠 것이 없는데 있다고 하는 숫자**가 된다.
-    본문2 = pathlib.Path(__file__).read_text(encoding="utf-8")
-    assert '정답칸.split(";")' in 본문2, "정답을 여럿 못 받는다"
-    assert "min(자리) if 자리 else 0" in 본문2, "여럿 중 제일 위를 안 센다"
+    본문2 = _소스글()
+    assert not 본문2 or '정답칸.split(";")' in 본문2, "정답을 여럿 못 받는다"
+    assert not 본문2 or "min(자리) if 자리 else 0" in 본문2, "여럿 중 제일 위를 안 센다"
 
     # (이 글자들은 이 파일에서 `--doctor` 자리에만 있다 — 진단 묶음 쪽은 report.py 다)
-    본문 = pathlib.Path(__file__).read_text(encoding="utf-8")
+    본문 = _소스글()
     for 있어야 in ('report["판 적합률"]', '그중 흐린 선'):
-        assert 있어야 in 본문, f"--doctor 에 「{있어야}」가 없다"
+        assert not 본문 or 있어야 in 본문, f"--doctor 에 「{있어야}」가 없다"
 
     print("eb self-check 통과")
 
@@ -452,11 +530,30 @@ def 말하기(said: str) -> None:
     """
     if sys.stdout is None:
         return
+    # ★ **못 찍는 글자는 닮은 글자로 바꿔 찍는다.** 그냥 막기만 하면
+    # cp949 콘솔에서 줄마다 `—` 같은 기호가 섞여 읽기가 나빴다.
+    마름 = getattr(sys.stdout, "encoding", None) or "utf-8"
+    if 마름.lower() not in ("utf-8", "utf8"):
+        for 이것, 저것 in (("—", "-"), ("–", "-"), ("…", "..."),
+                          ("→", "->"), ("↔", "<->"), (chr(0x26A0), "!")):
+            if 이것 in said:
+                said = said.replace(이것, 저것)
     try:
-        print(said)
+        try:
+            print(said)
+        except UnicodeEncodeError:
+            # ★ **못 찍는 글자 하나로 한 마디를 통째로 버리지 않는다.**
+            # 앞의 막이가 안 먹는 자리가 있어 여기서 한 번 더 받는다.
+            마름 = getattr(sys.stdout, "encoding", None) or "utf-8"
+            print(said.encode(마름, "backslashreplace").decode(마름, "replace"))
         sys.stdout.flush()
-    except (AttributeError, OSError, ValueError):
-        pass
+    except (AttributeError, OSError, ValueError) as e:
+        # ★ **말이 안 나갔으면 왜 안 나갔는지라도 남긴다.** 조용히 삼키면
+        # 시험하는 쪽 눈에는 「아무 말도 안 한다」로만 보이고 원인을 못 찾는다.
+        try:
+            report.trail(f"콘솔에 못 찍음: {type(e).__name__}: {e}")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
@@ -957,9 +1054,15 @@ if __name__ == "__main__":
             eng = LocalEngine(model_dir=str(paths.gguf_dir()))
             있는 = [m for m in eng.available() if "vl" not in m.lower()]
             if not 있는:
+                # ★★ **넣으라고 말할 자리를 정확히 말한다.** 예전엔 `gguf_dir()` 을
+                # 그대로 찍었는데, 모델이 없을 때 그 값은 **`_internal\models`** —
+                # 프로그램 속이라 사람이 넣을 자리가 아니고 다음 판을 덮으면 지워진다.
+                # 실제로 시험하는 쪽이 그 자리를 받아 멈췄다. **exe 옆을 말한다.**
+                넣을자리 = (Path(sys.executable).parent / "models"
+                          if paths.frozen() else paths.gguf_dir())
                 raise RuntimeError(
-                    f"글 모델이 없다. {paths.gguf_dir()} 에 .gguf 를 넣어라 "
-                    "(내려받는 자리는 지시서에)")
+                    f"글 모델이 없다. {넣을자리} 에 .gguf 를 넣어라 "
+                    "(폴더가 없으면 만들어라 · 받는 자리는 지시서에)")
             이름 = 있는[0]
 
             def 말시키기(글: str) -> str:
@@ -984,7 +1087,9 @@ if __name__ == "__main__":
                    "  문지기 없이 쌓으면 과정 소음이 그대로 항목이 된다. 안 쓴다."]
             (paths.data_dir() / "vc-흡수.txt").write_text(chr(10).join(줄),
                                                           encoding="utf-8")
-            말하기(chr(10).join(줄[-2:]))
+            # ★ **센 것을 오류 옆에 다시 놓는다.** 멈춘 재도 「내 파일을 몇 장 봤나」는
+            # 알아야 한다 — 막이는 쓰는 것을 막아야지 보는 것을 막으면 안 된다.
+            말하기(chr(10).join(줄[-2:]) + chr(10) + f"  센 것: {s}")
             os._exit(1)
 
         걸린 = clock.perf_counter() - t0

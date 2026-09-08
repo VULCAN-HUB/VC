@@ -2132,8 +2132,11 @@ class Notes:
             return [int(i) for i in np.argmax(쪽, axis=0)]
 
         이웃 = 가장가까운([i for _, i in 고른])
+        # ★★ **혼자면 이웃이 없다.** 자기 자신을 뺀 자리에 아무도 안 남으면
+        # `argmax` 가 **그 자기 자신을 도로 집는다** — 항목 한 장짜리 새 창고에서
+        # 「VC ↔ VC」라는 이음선이 나왔다(시험 쪽이 잡았다). 없는 것이 옳다.
         if not 맞짝만:
-            return {t: [names[j]] for (t, _), j in zip(고른, 이웃)}
+            return {t: ([names[j]] if j != i else []) for (t, i), j in zip(고른, 이웃)}
         # **상대도 나를 1등으로 꼽는가.** 한 번 더 곱해서 되묻는다.
         # 중복을 지운 목록으로 물어야 하고, 짝지을 때도 **그 목록**과 짝지어야 한다 —
         # 중복이 있는 쪽과 없는 쪽을 zip 하면 엉뚱한 답이 붙는다(그래서 한쪽만 이어졌다).
@@ -2141,7 +2144,7 @@ class Notes:
         되물음 = dict(zip(한번씩, 가장가까운(한번씩)))
         out: dict[str, list[str]] = {}
         for (t, i), j in zip(고른, 이웃):
-            out[t] = [names[j]] if 되물음.get(j) == i else []
+            out[t] = [names[j]] if (j != i and 되물음.get(j) == i) else []
         return out
 
     def subgraph(self, titles) -> dict[str, list[str]]:
@@ -2719,6 +2722,22 @@ def _self_check() -> None:
         길 = 홀로.kin(["홀로 있는 것"], 맞짝만=False)
         assert 길["홀로 있는 것"], f"카드에 갈 길이 하나도 없다: {길}"
         홀로.conn.close()
+
+        # ★★ **항목이 하나뿐이면 이음선은 없다.** 자기 자신을 뺀 자리에 아무도 안
+        # 남으면 `argmax` 가 자기를 도로 집어 「VC ↔ VC」가 나왔다 — 새로 깐 창고에서
+        # 시험하는 쪽이 바로 봤다. 처음 켠 사람이 제일 먼저 보는 자리다.
+        혼자 = Notes(Path(tmp) / "혼자")
+        혼자.write(Note(title="혼자 있는 글", body="이 창고엔 나뿐이다. " * 5))
+        한자리 = {r["title"]: r["path"] for r in
+                 혼자.conn.execute("SELECT title, path FROM notes")}
+        혼자.conn.execute(
+            "INSERT INTO vectors (path, vec, tvec) VALUES (?, ?, ?)",
+            (한자리["혼자 있는 글"], _pack(방향(0.3)), _pack(방향(0.3))))
+        혼자.conn.commit()
+        혼자._vec_cache = None
+        assert 혼자.kin(["혼자 있는 글"]) == {"혼자 있는 글": []}, 혼자.kin(["혼자 있는 글"])
+        assert 혼자.kin(["혼자 있는 글"], 맞짝만=False) == {"혼자 있는 글": []}, "자기를 이웃으로 꼽는다"
+        혼자.conn.close()
 
         # 벡터가 없으면 조용히 빈손 — 뜻 검색이 꺼진 자리에서도 화면이 돌아야 한다.
         빈 = Notes(Path(tmp) / "빈자리")

@@ -26,7 +26,7 @@ APP_NAME = "VC"
 # 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
 # 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
 # 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
-VERSION = "0.1.81"
+VERSION = "0.1.82"
 
 
 def _qt_runtime_first() -> bool:
@@ -205,10 +205,22 @@ def _적어둔자리() -> Path | None:
     코드에 `D:` 를 박으면 딴 PC 와 맥에서 깨진다. 그래서 **파일 한 장으로 가리킨다.**
 
     설정에 못 넣는 이유: 설정 자체가 이 자리 안에 산다 — 먼저 자리를 알아야 한다.
+
+    ★★ **사람은 `VC.exe` 옆에 놓는다.** 설치본은 PyInstaller 폴더 꼴이라
+    `app_dir()` 이 `_internal` 을 가리키는데, **그 안에 설정 파일을 넣는 사람은 없다.**
+    실제로 시험하는 쪽이 exe 옆에 놓았다가 **조용히 기본 자리로 돌아가** 막혔다.
+    그래서 **exe 옆을 먼저 보고**, 없으면 딸린 것 옆을 본다.
     """
+    찾을자리 = []
+    if frozen():
+        찾을자리.append(Path(sys.executable).parent / SPOT)   # 사람이 놓는 자리
+    찾을자리.append(app_dir() / SPOT)                        # 딸린 것 옆(_internal)
     try:
-        쪽지 = app_dir() / SPOT
-        적힌 = 쪽지.read_text(encoding="utf-8").strip() if 쪽지.is_file() else ""
+        적힌 = ""
+        for 쪽지 in 찾을자리:
+            if 쪽지.is_file():
+                적힌 = 쪽지.read_text(encoding="utf-8-sig").strip()
+                break
     except OSError:
         return None
     # 첫 줄만 본다. 아래에 왜 그리 했는지 적어 둘 수 있게.
@@ -399,6 +411,32 @@ def _self_check() -> None:
             assert not (Path.cwd() / 군소리).exists(), "군소리 이름으로 폴더가 생겼다"
             적기("")
             assert data_dir() == Path.cwd() or frozen(), data_dir()
+            # ★★ **설치본에서는 사람이 `VC.exe` 옆에 놓는다.** `app_dir()` 은
+            # `_internal` 을 가리켜서 exe 옆에 놓은 쪽지가 **조용히 무시됐다** —
+            # 시험하는 쪽이 그대로 겪었다(「기본 자리로 돌아갔다」). exe 옆을 먼저 본다.
+            # 여기서만 얼린 척한다. 진짜로 얼릴 수는 없으니 두 값을 바꿔 끼운다.
+            적기("")                                   # 딸린 것 옆 쪽지는 비워 둔다
+            가짜exe = 잠깐 / "설치본" / "VC.exe"
+            가짜exe.parent.mkdir(parents=True, exist_ok=True)
+            가짜exe.write_text("", encoding="utf-8")
+            # BOM 이 붙어 저장돼도 읽혀야 한다 — 메모장이 기본으로 붙인다
+            (가짜exe.parent / SPOT).write_text(
+                "﻿" + str(잠깐 / "옆에둔곳"), encoding="utf-8")
+            # ★ `_MEIPASS` 까지 가짜로 놓는다. 안 놓으면 `app_dir()` 이 exe 옆을
+            #   그대로 돌려줘 **고침을 빼도 검사가 통과한다** — 실제로 그랬다.
+            #   설치본은 `_internal` 이 따로 있으니 그 꼴을 만들어 놓고 재야 한다.
+            속팡 = 가짜exe.parent / "_internal"
+            속팡.mkdir(exist_ok=True)
+            참exe, 참얼림 = sys.executable, globals()["frozen"]
+            sys.executable = str(가짜exe)
+            globals()["frozen"] = lambda: True
+            sys._MEIPASS = str(속팡)
+            try:
+                assert _적어둔자리() == 잠깐 / "옆에둔곳", _적어둔자리()
+            finally:
+                sys.executable, globals()["frozen"] = 참exe, 참얼림
+                del sys._MEIPASS
+
             # 환경 변수가 쪽지를 이긴다 — 시험할 때 쪽지를 안 건드려도 되게
             os.environ["VC_DATA"] = str(잠깐 / "환경")
             적기(str(잠깐 / "기록"))
