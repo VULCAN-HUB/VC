@@ -1067,6 +1067,12 @@ class ServerLink:
                  config: str | Path = "") -> None:
         self.base = base.rstrip("/")
         self.token = ""
+        # ★★ **아무도 자리를 안 알려 주면 스스로 찾는다.**
+        # 예전에는 기본값이 빈 글자라 `Path("")` 을 읽다 조용히 실패했고, 그러면
+        # 토큰이 없어 `call()` 이 **아무것도 안 걸고 None 을 돌려줬다** — 창은 서버가
+        # 멀쩡히 답하는데도 「서버에 못 물어봤다」만 말했다(시험 쪽이 잡았다).
+        # 창을 띄우는 자리에서 아무도 자리를 안 넘겼으니 **여기가 고칠 자리다.**
+        config = config or paths.config_path()
         # 서버가 꺼져 있을 때 매번 기다리지 않으려는 장치.
         #
         # 같은 PC 안이라 서버가 살아 있으면 곧바로 답한다. 꺼져 있을 때만 오래
@@ -1229,6 +1235,26 @@ class ProposalCard(HudPanel):
 def _self_check() -> None:
     panel = HudPanel()
     assert panel.objectName() == "hud"
+
+    # ★★ **창은 서버에 걸 수 있어야 한다.** 자리를 아무도 안 넘기면 스스로 찾는다.
+    # 예전 기본값은 빈 글자라 토큰을 못 읽었고, 토큰이 없으면 `call()` 이 아예
+    # 안 걸고 None 을 준다 — 서버가 멀쩡한데 창만 「못 물어봤다」고 했다.
+    import json as _json
+    import os as _os
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as 잠깐설정:
+        옛자리 = _os.environ.get("VC_DATA")
+        _os.environ["VC_DATA"] = 잠깐설정
+        try:
+            paths.config_path().write_text(
+                _json.dumps({"pair_token": "시험토큰"}), encoding="utf-8")
+            assert ServerLink().token == "시험토큰", "창이 서버 토큰을 못 읽는다"
+        finally:
+            if 옛자리 is None:
+                _os.environ.pop("VC_DATA", None)
+            else:
+                _os.environ["VC_DATA"] = 옛자리
 
     legend = Legend()
     assert legend.height() > 0
