@@ -75,6 +75,76 @@ def _log_crash(err: BaseException) -> None:
         pass   # 남기다 또 죽으면 그냥 넘어간다
 
 
+def _지문(글: str) -> str:
+    """조각 하나의 지문. 흡수가 겹침을 볼 때 쓰는 것과 같은 셈이다."""
+    import hashlib as _h
+
+    굳힌 = " ".join((글 or "").split())
+    return _h.blake2b(굳힌.encode("utf-8"), digest_size=16).hexdigest() if 굳힌 else ""
+
+
+def _휴지통지문() -> set[str]:
+    """휴지통에 든 조각들의 지문. **여기 있는 것은 다시 안 물어본다.**"""
+    자리 = paths.휴지통자리()
+    if not 자리.is_dir():
+        return set()
+    본것 = set()
+    for f in 자리.glob("*.md"):
+        try:
+            글 = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        몸 = 글.split(chr(10) + "---" + chr(10), 1)[-1] if 글.startswith("---") else 글
+        지 = _지문(몸)
+        if 지:
+            본것.add(지)
+    return 본것
+
+
+def _휴지통에담기(막힌, 뿌리) -> int:
+    """문지기가 버린 조각을 휴지통에 남긴다. 몇 개 남겼는지 돌려준다.
+
+    ★ **지우지 않는다.** 되살릴 수 있어야 버리는 일이 무섭지 않다 —
+    사람이 파일 하나를 글 폴더로 옮기면 그대로 항목이 된다(파일이 원본이다).
+    ★ 기록 폴더 **밖**이라 찾기·색인·그물에 안 들어간다.
+      「찾으라고 하기 전까지 안 찾는다」(오너 결정 2026-09-09).
+    """
+    import re as _re
+
+    if not 막힌:
+        return 0
+    자리 = paths.휴지통자리()
+    자리.mkdir(parents=True, exist_ok=True)
+    이미 = _휴지통지문()
+    담은 = 0
+    이제 = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for c in 막힌:
+        지 = _지문(c.몸)
+        if not 지 or 지 in 이미:
+            continue                    # 같은 것을 두 번 담지 않는다
+        이미.add(지)
+        이름 = _re.sub(r'[\/:*?"<>|]', "_", (c.제목 or Path(c.출처).stem or "조각"))[:60].strip()
+        길 = 자리 / f"{이름 or '조각'} {지[:8]}.md"
+        앞머리 = [
+            "---",
+            'kind: "휴지통"',
+            '지은이: "문지기"',
+            f'출처: "{뿌리 / c.출처}"',
+            f"줄: {c.줄}",
+            f'버린날: "{이제}"',
+            '까닭: "문지기가 버렸다"',
+            f'지문: "{지}"',
+            "---",
+            "",
+        ]
+        try:
+            길.write_text(chr(10).join(앞머리) + c.몸 + chr(10), encoding="utf-8")
+            담은 += 1
+        except OSError:
+            pass                        # 한 조각 못 담았다고 흡수를 멈추지 않는다
+    return 담은
+
+
 def _사람이손댄것(뿌리) -> list[str]:
     """사람이 만들었거나 고친 항목의 이름. 흡수분(문지기·그대로)은 뺀다.
 
@@ -120,7 +190,7 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--재보기", "--ingest", "--흡수", "--write", "--쓴다", "--그래도쓴다", "--손댄것도쓴다",
     "--score", "--찾기점수", "--without", "--빼고", "--제목벡터빼고",
     "--links", "--이음선", "--그물시험", "--bench", "--net-test", "--log-test",
-    "--사본치우기", "--판올리기",
+    "--사본치우기", "--판올리기", "--휴지통",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
@@ -198,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                    "  --찾기점수 [물음파일] [--빼고 <출처조각>] [--제목벡터빼고]",
                    "        물음 한 줄 꼴 : 물음 | 정답   또는   물음 | 정답1; 정답2",
                    "  --이음선             맞짝 이음선을 적는다",
+                   "  --휴지통 [찾을말]      버린 조각을 모아 둔 자리를 뒤진다",
                    "  --check             자체점검"):
             print(줄)
         return 0
@@ -437,6 +508,37 @@ def _self_check() -> None:
     # 그리고 애초에 **켜질 때 그 글자를 안 쓴다** (`★` 는 cp949 에 있다).
     # 글자를 그대로 적으면 검사문이 제 꺼를 세므로 번호로 찾는다.
     assert not 소스있다 or 본문3.count(chr(0x26A0)) == 0, "cp949 가 못 찍는 글자가 eb.py 에 있다"
+
+    # ★★ **버린 것은 지우지 않고 휴지통에 모으고, 다시 안 물어본다.**
+    #   예전엔 같은 폴더를 열 번 부으면 버린 조각을 열 번 문지기에게 물어봤다
+    #   (시험 쪽이 「후보 5는 다시 모델 검사를 받는다」로 잰 그 자리다).
+    #   ★ 그리고 휴지통은 **기록 폴더 밖**이라 찾기·색인·그물이 안 본다 —
+    #     「찾으라고 하기 전까지 안 찾는다」(오너 결정).
+    import tempfile as _tf2
+
+    import ingest as _ing
+
+    with _tf2.TemporaryDirectory() as 잠깐휴지:
+        옛자리2 = os.environ.get("VC_DATA")
+        os.environ["VC_DATA"] = 잠깐휴지
+        try:
+            버린조각 = [_ing.조각(제목="버릴 것", 몸="이건 과정 소음이다. " * 8,
+                              출처="어디/에서.md", 줄=3)]
+            assert _휴지통에담기(버린조각, pathlib.Path(잠깐휴지)) == 1
+            assert _휴지통에담기(버린조각, pathlib.Path(잠깐휴지)) == 0, "같은 것을 두 번 담는다"
+            담긴 = list(paths.휴지통자리().glob("*.md"))
+            assert len(담긴) == 1, 담긴
+            # 휴지통은 글 폴더 밖이어야 한다 — 안에 있으면 색인에 딸려 들어간다
+            assert paths.notes_dir() not in paths.휴지통자리().parents, "휴지통이 글 폴더 안이다"
+            # 그리고 다음 흡수 때 「이미 본 것」으로 잡혀 다시 안 물어본다
+            지문들 = _휴지통지문()
+            assert 지문들 and _지문(버린조각[0].몸) in 지문들, "휴지통에 있는데 또 물어본다"
+            _조각들, 셈 = _ing.들일것(pathlib.Path(잠깐휴지), 지문들)
+        finally:
+            if 옛자리2 is None:
+                os.environ.pop("VC_DATA", None)
+            else:
+                os.environ["VC_DATA"] = 옛자리2
 
     # ★★ **창을 한 번 켜는 것이 죄가 되면 안 된다.**
     #   창이 처음 켜질 때 만드는 씨앗 글을 「사람이 손넄 기록」으로 세서
@@ -777,6 +879,41 @@ if __name__ == "__main__":
                + f"  적었다: {paths.data_dir() / 'vc-판올리기.txt'}")
         os._exit(0)
 
+    if "--휴지통" in sys.argv:
+        # ★★ **버린 것은 여기 있다. 그리고 여기만 안 찾는다.**
+        # 찾기·색인·그물은 이 자리를 아예 안 본다 — 「찾으라고 하기 전까지
+        # 안 찾는다」(오너 결정 2026-09-09). 그러니 부를 길이 하나는 있어야 한다.
+        자리 = paths.휴지통자리()
+        것들 = sorted(자리.glob("*.md")) if 자리.is_dir() else []
+        뒤에 = sys.argv[sys.argv.index("--휴지통") + 1:]
+        찾을말 = next((a for a in 뒤에 if not a.startswith("-")), "")
+        줄 = [f"휴지통: {자리}", f"  담긴 것 {len(것들)}개"]
+        보인 = 0
+        for f in 것들:
+            try:
+                글 = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if 찾을말 and 찾을말 not in 글:
+                continue
+            보인 += 1
+            if 보인 > 40:
+                continue
+            몸 = 글.split(chr(10) + "---" + chr(10), 1)[-1].strip()
+            첫 = next((t.strip() for t in 몸.splitlines() if t.strip()), "")
+            줄.append(f"  {f.stem}")
+            줄.append(f"      {첫[:88]}")
+        if 찾을말:
+            줄.insert(2, f"  「{찾을말}」이 든 것 {보인}개")
+        if 보인 > 40:
+            줄.append(f"  … 앞 40개만 보였다 (모두 {보인}개)")
+        줄 += ["", "  되살리려면 그 파일을 글 폴더로 옮겨라 — 파일이 곧 항목이다.",
+               f"  글 폴더: {paths.notes_dir()}"]
+        (paths.data_dir() / "vc-휴지통.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        말하기(chr(10).join(줄[:12]) + chr(10)
+               + f"  적었다: {paths.data_dir() / 'vc-휴지통.txt'}")
+        os._exit(0)
+
     if "--사본치우기" in sys.argv:
         # ★★ **본문이 똑같은 항목을 하나만 남긴다.**
         #
@@ -1068,6 +1205,9 @@ if __name__ == "__main__":
             _n.conn.close()
         except Exception:
             이미 = set()      # 색인을 못 읽어도 흡수는 돌아간다(겹침만 못 본다)
+        # ★★ **휴지통에 있는 것도 「이미 본 것」이다.** 안 그러면 버린 조각을
+        # 부을 때마다 문지기에게 다시 물어본다 — 자리마다 몇 십 초씩 든다.
+        이미 |= _휴지통지문()
         조각들, s = ingest.들일것(뿌리, 이미)
         줄 = [f"흡수: {뿌리}", "", f"싼 문지기 — {s}"]
         말하기(chr(10).join(줄))
@@ -1168,9 +1308,9 @@ if __name__ == "__main__":
             # 볼 길이 없다 — 문지기를 고치려면 그게 있어야 한다. 시험하는 쪽이
             # 「막힌 것을 볼 길이 없다」로 짚어 준 자리다.
             if 막힌:
-                줄 += ["", f"막힌 것 {len(막힌)}개 미리보기 (버린 것 {gs.버린것}개 중):",
+                줄 += ["", f"막힌 것 {min(len(막힌), gate.막힌보기)}개 미리보기 (버린 것 {gs.버린것}개 중):",
                        "-" * 72]
-                for c in 막힌:
+                for c in 막힌[:gate.막힌보기]:
                     첫 = next((줄자.strip() for 줄자 in c.몸.splitlines()
                                if 줄자.strip()), "")
                     줄.append(f"  {c.출처}:{c.줄}")
@@ -1207,6 +1347,14 @@ if __name__ == "__main__":
             판수 = n.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
             n.conn.close()
             잃은 = gate.잃은수(쓴것, 앞수, 판수)
+            # ★★ **버린 것은 지우지 않고 휴지통에 모은다** (오너 결정 2026-09-09).
+            # 기록 폴더 **밖**이라 찾기·색인·그물 어디에도 안 들어간다 —
+            # 「찾으라고 하기 전까지 안 찾는다」. 그리고 여기 있는 것은 다시 부어도
+            # **문지기에게 또 안 물어본다** — 예전엔 같은 폴더를 열 번 부으면
+            # 버린 조각을 열 번 물어봤다(시험 쪽이 잰 그 재심사다).
+            버린수 = _휴지통에담기(막힌, 뿌리)
+            if 버린수:
+                줄.append(f"  버린 것 {버린수}개는 휴지통에 뒀다: {paths.휴지통자리()}")
             줄 += ["", f"**{쓴것}개 썼다.** 원본 파일은 하나도 안 건드렸다.",
                    f"  기록에 든 항목: {앞수} → {판수}개 (는 것 {판수 - 앞수})"]
             if 잃은:
