@@ -537,6 +537,9 @@ def run() -> None:
         # 빈 화면에서 VC 하나로 시작한다.
         assert list(win.graph.nodes) == [ROOT], list(win.graph.nodes)
         assert notes.read(ROOT) is not None and notes.read(ROOT).pinned
+        # ★ 씨앗은 **프로그램이 만든 글**이라고 적혀 있어야 한다. 안 적으면 흡수의
+        #   「사람 손질」 막이가 이걸 사람 글로 보고 첫 흡수를 통째로 막는다.
+        assert notes.read(ROOT).extra.get("지은이") == "씨앗", notes.read(ROOT).extra
         assert "항목 01" in win.stats.text()
 
         # 크기가 층위를 나타낸다: VC > 모듈 > 그 외.

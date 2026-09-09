@@ -846,11 +846,16 @@ class MainWindow(QWidget):
             # 우리가 만든 것이다. 감시가 이걸 "밖에서 바뀜"으로 보고 훑기를 또 돌리면
             # 켤 때마다 훑기를 두 번 한다.
             self._wrote_at = time.monotonic()
+            # ★★ **이건 프로그램이 만든 글이다. 그렇다고 적어 둔다.**
+            # 안 적었더니 「사람이 손댄 기록」 막이가 이 씨앗을 사람 글로 보고
+            # **새 창고의 첫 흡수를 통째로 막았다** — 창을 한 번 켠 것이 죄가 됐다.
+            # 사람이 나중에 이 글을 고치면 `edited_by: "사람"` 이 붙어 그때는 지켜진다.
             self.notes.write(Note(
                 title=ROOT,
                 body="여기서 시작한다. 쓸수록 항목이 늘고 서로 이어진다.",
                 kind="agent",
                 pinned=True,
+                extra={"지은이": "씨앗"},
             ))
 
     def refresh(self, scan: bool = True) -> None:
