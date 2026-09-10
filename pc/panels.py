@@ -1090,20 +1090,31 @@ class ServerLink:
     # 하나가 창 뜨는 데 1006ms를 통째로 먹었다.
     TIMEOUT = 0.35
 
+    # ★ **못 건 까닭을 남긴다.** 「서버에 못 물어봤다」만 적고 까닭을 삼켰더니,
+    #   구운 판에서 서버는 밖에서 부르면 12ms 에 답하는데 창만 못 거는 것을
+    #   아무도 가를 수 없었다. 부드럽게 실패하되 **그 길로 갔다는 것은 보인다.**
+    last_fail = ""
+
     def call(self, method: str, path: str, payload: dict | None = None) -> dict | None:
-        if not self.token or time.monotonic() < self.down_until:
+        if not self.token:
+            self.last_fail = "토큰이 없다 (설정 파일을 못 읽었다)"
             return None
+        if time.monotonic() < self.down_until:
+            return None          # 쉬는 중 — 까닭은 앞서 실패한 것이 들고 있다
         req = urllib.request.Request(
             f"{self.base}{path}", method=method,
             data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode(),
             headers={"Authorization": f"Bearer {self.token}",
                      "Content-Type": "application/json"})
+        t0 = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
                 raw = r.read().decode()
                 self.down_until = 0.0
                 return json.loads(raw) if raw else {}
-        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            self.last_fail = (f"{method} {path} {type(e).__name__}: {e}"
+                              f" ({(time.monotonic() - t0) * 1000:.0f}ms)")
             self.down_until = time.monotonic() + self.QUIET_SEC
             return None
 

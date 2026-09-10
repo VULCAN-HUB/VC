@@ -190,7 +190,7 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--재보기", "--ingest", "--흡수", "--write", "--쓴다", "--그래도쓴다", "--손댄것도쓴다",
     "--score", "--찾기점수", "--without", "--빼고", "--제목벡터빼고",
     "--links", "--이음선", "--그물시험", "--bench", "--net-test", "--log-test",
-    "--사본치우기", "--판올리기", "--휴지통",
+    "--사본치우기", "--판올리기", "--휴지통", "--시험표", "--화면상태",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
@@ -269,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
                    "        물음 한 줄 꼴 : 물음 | 정답   또는   물음 | 정답1; 정답2",
                    "  --이음선             맞짝 이음선을 적는다",
                    "  --휴지통 [찾을말]      버린 조각을 모아 둔 자리를 뒤진다",
+                   "  --시험표 [폴더] [--쓴다]  기계로 잴 것을 한 번에 재서 표 한 장으로 적는다",
+                   "  --화면상태           진짜 창을 띄워 띠 문구·최소 크기를 적고 닫는다",
                    "  --check             자체점검"):
             print(줄)
         return 0
@@ -315,8 +317,13 @@ def main(argv: list[str] | None = None) -> int:
     report.catch_slot_deaths()
     # **같은 기록을 두 벌이 만지면 서로 덮어쓴다.** 작업표시줄에서 못 찾고 다시 켜는
     # 흔한 실수라, 조용히 두 벌이 뜨는 대신 알리고 그만둔다.
+    화면상태 = "--화면상태" in argv
     if not paths.only_one():
         report.trail("이미 떠 있어서 그만뒀다")
+        if 화면상태:
+            # 재러 온 길에 확인창을 띄우면 아무도 안 눌러 프로세스가 선다.
+            _화면상태적기({"못 잼": "VC 가 이미 떠 있다 — 창을 닫고 다시 재라"})
+            return 3
         try:
             from PyQt5.QtWidgets import QApplication, QMessageBox
 
@@ -343,10 +350,231 @@ def main(argv: list[str] | None = None) -> int:
         win.열린자리알리기(HOST, PORT)
     win.show()
     report.trail("창 떴다")
+    if 화면상태:
+        _화면상태재기(app, win)
     code = app.exec_()
     report.trail(f"끔 ({code})")
     report.stop_watching()
     return code
+
+
+def _화면상태적기(값: dict) -> None:
+    import json
+
+    (paths.data_dir() / "vc-화면상태.json").write_text(
+        json.dumps(값, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _화면상태재기(app, win, 기다림_ms: int = 9000) -> None:
+    """**진짜 창을 띄운 채로** 사람 눈에 보이는 것을 글로 적고 닫는다.
+
+    시험 PC 가 이 값을 스크린샷으로 읽고 있었다 — 제일 비싼 입력이다.
+    ★ `offscreen` 으로 재지 않는다. 창 관리자가 없어 최소 크기가 300 으로 나왔는데
+      진짜 창은 910 이었다(그 값을 받은 쪽이 화면 크기를 한참 팠다).
+    엔진 줄은 4초 타이머로 채워지므로 두 바퀴는 기다린다.
+    """
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QApplication
+
+    본크기 = (win.width(), win.height())
+
+    def 적기() -> None:
+        최소 = [win.width(), win.height()]
+        win.resize(*본크기)
+        값 = {
+            "판": paths.VERSION,
+            "창 제목": win.windowTitle(),
+            "최소 창 크기": 최소,
+            "최소 크기 잰 법": "진짜 창을 1x1 로 줄이라 해서 멈춘 자리",
+            "위 띠": win.stats.text(),
+            "엔진 줄": win.engine_label.text(),
+            "서버 전화 마지막 탈": win.link.last_fail or "(없음)",
+            "원격 줄": win.열린자리.text() if win.열린자리.isVisible() else "",
+            "아래 띠": win.footer.text(),
+            "항목 수": win._total_notes,
+            # 주 창 하나여야 한다 — 부모 없는 위젯이 조각 창으로 뜬 적이 있다
+            "떠 있는 최상위 창": sum(w.isVisible() for w in QApplication.topLevelWidgets()),
+        }
+        try:
+            값["메모리 MB"] = report.이프로세스메모리()[0]
+        except OSError:
+            값["메모리 MB"] = "못 잼"
+        _화면상태적기(값)
+        app.quit()
+
+    # 창 관리자가 최소에서 막는다 — 멈춘 자리가 사람이 끌어서 닿는 최소다.
+    QTimer.singleShot(기다림_ms - 1500, lambda: win.resize(1, 1))
+    QTimer.singleShot(기다림_ms, 적기)
+
+
+def _나를(*인자: str, 기한: int = 900) -> tuple[int | None, float, str]:
+    """이 프로그램을 스위치 하나로 한 번 더 부른다. (종료값, 걸린 초, 끝 세 줄).
+
+    ★ 결과는 **각 스위치가 남기는 파일**로 읽는다. 창용 exe 는 표준출력이 없을 수
+      있어, 여기 끝 줄은 파일이 없을 때 보태는 실마리일 뿐이다.
+    """
+    import subprocess
+
+    머리 = [sys.executable] if paths.frozen() else [sys.executable, str(Path(__file__).resolve())]
+    t0 = time.perf_counter()
+    try:
+        r = subprocess.run(머리 + list(인자), capture_output=True, timeout=기한,
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    except subprocess.TimeoutExpired:
+        return None, time.perf_counter() - t0, f"{기한}초 넘어 끊었다"
+    # ★ 구운 exe 의 표준출력은 UTF-8 이 아닐 수 있다(cp949 로 와서 「통과」가 깨졌다)
+    try:
+        글 = (r.stdout or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        글 = r.stdout.decode("cp949", "replace")
+    끝 = 글.strip().splitlines()[-3:]
+    return r.returncode, time.perf_counter() - t0, " / ".join(끝)
+
+
+def _시험표글(줄표: list, 머리말: list[str]) -> str:
+    """(무엇, 됐나, 값, 초) 줄들을 표 한 장으로. 됐나는 True·False·None(안 함)."""
+    칸 = lambda s: str(s).replace("|", "/").replace(chr(10), " / ")
+    표 = [*머리말, "", "| 무엇 | 됐나 | 값 | 초 |", "|---|---|---|---:|"]
+    for 무엇, 됐나, 값, 초 in 줄표:
+        표.append(f"| {칸(무엇)} | {'-' if 됐나 is None else '✔' if 됐나 else '✘'} "
+                 f"| {칸(값)} | {초:.1f} |")
+    표 += ["", "★ 이 표는 **만든 쪽 도구가 잰 것**이다. 판마다 값 1~2개는 네가 골라 네 방법으로 따로 재라."]
+    return chr(10).join(표)
+
+
+def _시험표(argv: list[str]) -> int:
+    """기계로 잴 것을 한 번에 재서 `★시험표-v판.md` 한 장으로 적는다.
+
+    시험 PC 의 에이전트가 명령 수십 번을 치고 결과를 읽느라 크레딧을 태웠다.
+    잡일은 여기서 하고 에이전트는 **표를 읽고 판단만** 한다(오너 결정 2026-09-10).
+    `--쓴다` 없으면 아무것도 안 고친다 — 흡수도 세어만 본다.
+    """
+    import json
+    import urllib.parse
+
+    자리 = paths.data_dir()
+    폴더 = next((a for a in argv if not a.startswith("-")), "")
+    쓸까 = "--쓴다" in argv or "--write" in argv
+    줄표: list = []
+
+    def 한단(무엇: str, 인자: list[str], 파일: str, 고르기, 기한: int = 900) -> None:
+        f = 자리 / 파일
+        # ★ **묵은 결과로 헛통과하지 않게 먼저 지운다** — 앞 실행이 남긴 파일로
+        #   고침을 되돌려도 통과한 적이 있다.
+        f.unlink(missing_ok=True)
+        코드, 초, 끝 = _나를(*인자, 기한=기한)
+        글 = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+        try:
+            값 = 고르기(글) if 글 else f"결과 파일이 없다 (종료값 {코드}) {끝}"
+        except Exception as e:
+            값 = f"결과를 못 읽었다: {type(e).__name__}: {e}"
+        줄표.append((무엇, 코드 == 0 and bool(글), 값, 초))
+
+    골라 = lambda *낱: (lambda 글: " / ".join(
+        l.strip() for l in 글.splitlines() if any(n in l for n in 낱)) or 글.splitlines()[0])
+
+    코드, 초, 끝 = _나를("--check", 기한=300)
+    # 끝 한 줄만 — 앞 줄에는 검사가 부른 도움말이 섞인다
+    줄표.append(("--check", 코드 == 0, f"종료값 {코드} · {끝.split(' / ')[-1]}", 초))
+
+    def 진단(글: str) -> str:
+        d = json.loads(글)
+        return (f"항목 {d.get('항목 수')} · 연결 {d.get('연결 수')} · 판 적합률 {d.get('판 적합률')}"
+                f" · 벡터 {d.get('뜻 벡터 수')} (못 만든 것 {d.get('아직 못 만든 벡터')})"
+                f" · 빈 항목 {d.get('본문이 빈 항목')} · 임베더 {d.get('임베더 됨')}")
+    한단("--doctor", ["--doctor"], "vc-진단.json", 진단, 300)
+
+    흡수골라 = 골라("싼 문지기", "비싼 문지기", "썼다", "휴지통", "초 ·", "★")
+    if not 폴더:
+        줄표.append(("--흡수", None, "폴더를 안 줘서 안 했다", 0.0))
+    else:
+        한단("--흡수 (세기)", ["--흡수", 폴더], "vc-흡수.txt", 흡수골라)
+        if 쓸까:
+            한단("--흡수 --쓴다", ["--흡수", 폴더, "--쓴다"], "vc-흡수.txt", 흡수골라)
+            한단("--흡수 (다시 세기)", ["--흡수", 폴더], "vc-흡수.txt", 흡수골라)
+    한단("--휴지통", ["--휴지통"], "vc-휴지통.txt", 골라("담긴 것"), 120)
+    한단("--사본치우기 (세기)", ["--사본치우기"], "vc-사본치움.txt",
+         lambda 글: " / ".join(글.splitlines()[:3]), 300)
+    한단("--판올리기 (세기)", ["--판올리기"], "vc-판올리기.txt",
+         lambda 글: " / ".join(글.splitlines()[:3]), 300)
+    한단("--이음선", ["--이음선"], "vc-이음선.txt", lambda 글: 글.splitlines()[0], 300)
+
+    # AI 꺼내기 1·2단. 창과 안 겹치게 **127.0.0.1 임시 자리**에 따로 띄운다
+    # (밖에서 안 닿으니 방화벽도 안 묻는다). 토큰은 표에 안 적는다.
+    t0 = time.perf_counter()
+    try:
+        import notes as 글모듈
+
+        cfg = srv.load_config()
+        n = srv.Notes(str(paths.notes_dir()), str(paths.index_path()), index_now=False)
+        고른, 소 = "", []
+        for r in n.conn.execute("SELECT title, body FROM notes"):
+            h = [x for _, x in 글모듈.headings(r["body"] or "")]
+            if not 고른 or len(h) > len(소):
+                고른, 소 = r["title"], h
+        eb = srv.EBServer(("127.0.0.1", 0), cfg, srv.Store(":memory:"), n)
+        threading.Thread(target=eb.serve_forever, daemon=True).start()
+        밑 = f"http://127.0.0.1:{eb.server_address[1]}"
+
+        def 물어(길: str) -> tuple[int, str]:
+            req = urllib.request.Request(밑 + 길, headers={
+                "Authorization": f"Bearer {cfg['pair_token']}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, r.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode("utf-8")
+
+        try:
+            if not 고른:
+                줄표.append(("AI 꺼내기", None, "창고에 글이 없어 안 했다", 0.0))
+            else:
+                q = urllib.parse.quote
+                s, 글 = 물어(f"/eb/v1/memory/search?q={q(고른)}")
+                몸없음 = all("body" not in x for x in json.loads(글).get("results", []))
+                줄표.append(("1단 search", s == 200 and 몸없음,
+                            f"HTTP {s} · {len(글)}자 · body 없음 {몸없음} · 고른 글 소제목 {len(소)}개",
+                            time.perf_counter() - t0))
+                if 소:
+                    s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}&heading={q(소[0])}")
+                    줄표.append(("2단 한 토막", s == 200, f"HTTP {s} · {len(글)}자", 0.0))
+                    s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}&heading={q('없는 소제목 zz')}")
+                    목록옴 = "headings" in json.loads(글) and "text" not in json.loads(글)
+                    줄표.append(("2단 없는 소제목", s == 404 and 목록옴,
+                                f"HTTP {s} · {len(글)}자 · 소제목 목록만 옴 {목록옴}", 0.0))
+                else:
+                    줄표.append(("2단 한 토막", None, "소제목 있는 글이 없어 안 했다", 0.0))
+                s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}")
+                줄표.append(("2단 글 한 편", s == 200, f"HTTP {s} · {len(글)}자", 0.0))
+                s, 글 = 물어(f"/eb/v1/memory/search?full=1&q={q(고른)}")
+                몸옴 = any("body" in x for x in json.loads(글).get("results", []))
+                줄표.append(("full=1", s == 200 and 몸옴, f"HTTP {s} · {len(글)}자 · body 옴 {몸옴}", 0.0))
+        finally:
+            eb.shutdown()
+            eb.server_close()
+    except Exception as e:
+        줄표.append(("AI 꺼내기", False, f"{type(e).__name__}: {e}", time.perf_counter() - t0))
+
+    def 화면(글: str) -> str:
+        d = json.loads(글)
+        if "못 잼" in d:
+            raise RuntimeError(d["못 잼"])
+        w, h = d["최소 창 크기"]
+        return (f"창 「{d['창 제목']}」 · 최소 {w}x{h} · 메모리 {d['메모리 MB']}MB"
+                f" · 최상위 창 {d['떠 있는 최상위 창']}개 · 항목 {d['항목 수']}"
+                f" · 엔진 「{d['엔진 줄']}」 · 원격 「{d['원격 줄']}」"
+                f" · 위 띠 「{d['위 띠']}」 · 아래 띠 「{d['아래 띠']}」")
+    한단("화면 (진짜 창)", ["--화면상태"], "vc-화면상태.json", 화면, 120)
+
+    머리말 = [f"# ★시험표-v{paths.VERSION}", "",
+             f"- 잰 때 {time.strftime('%Y-%m-%d %H:%M:%S')} · 설치본 {paths.frozen()}",
+             f"- 기록 자리 {report._hide_home(str(자리))}",
+             f"- 흡수 폴더 {report._hide_home(폴더) if 폴더 else '(안 줌)'} · --쓴다 {쓸까}"]
+    글 = _시험표글(줄표, 머리말)
+    나갈곳 = 자리 / f"★시험표-v{paths.VERSION}.md"
+    나갈곳.write_text(글, encoding="utf-8")
+    말하기(글 + chr(10) + chr(10) + f"적었다: {나갈곳}")
+    return 1 if any(됐나 is False for _, 됐나, _, _ in 줄표) else 0
 
 
 def _소스글() -> str:
@@ -646,6 +874,16 @@ def _self_check() -> None:
     for 있어야 in ('report["판 적합률"]', '그중 흐린 선'):
         assert not 본문 or 있어야 in 본문, f"--doctor 에 「{있어야}」가 없다"
 
+    # ★ 시험표 — 실패한 줄은 ✘ 로, 안 한 줄은 - 로 **갈라** 적어야 한다.
+    #   「0」과 「안 쟀다」가 한 모양이면 받는 쪽이 못 가른다.
+    표 = _시험표글([("가", True, "a|b", 1.0), ("나", False, "x", 0.0),
+                   ("다", None, "안 했다", 0.0)], ["# 머리"])
+    assert "| 가 | ✔ | a/b |" in 표, "칸 안의 | 가 표를 깬다"
+    assert "| 나 | ✘ |" in 표 and "| 다 | - |" in 표, "실패와 안 함이 안 갈린다"
+    assert "따로 재라" in 표, "따로 재라는 말이 빠졌다 — 교차 시험의 뜻이 흐려진다"
+    assert _모르는스위치(["--시험표", "C:\\어디", "--쓴다"]) == []
+    assert _모르는스위치(["--화면상태"]) == []
+
     print("eb self-check 통과")
 
 
@@ -714,6 +952,9 @@ if __name__ == "__main__":
         # 낯선 PC 가 「그물이 정말 도는지는 확인 못 했다」고 남겼다.
         # 앞서 로그 폭증 방어도 같은 이유로 스위치를 뒀다.
         raise RuntimeError("그물이 도는지 보려고 일부러 터뜨린 것이다")
+
+    if "--시험표" in sys.argv:
+        os._exit(_시험표(sys.argv[1:]))
 
     if "--색인다시" in sys.argv or "--reindex" in sys.argv:
         # **색인은 언제나 다시 만들 수 있다.** 기록(.md)이 원본이고 색인은 그것을 훑어

@@ -572,11 +572,30 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+def _모델자리(설정된: str) -> str:
+    """설정에 적힌 자리에 `.gguf` 가 있으면 거기, 없으면 **사람이 넣는 자리(exe 옆)**.
+
+    ★ 설정 파일은 처음 켤 때 `models_dir()` 을 박아 두는데, 구운 판에서 그건
+      `_internal\\models`(프로그램 속)다. 사람은 exe 옆 `models` 에 넣는다 —
+      그래서 명령줄 흡수는 모델을 찾는데 **서버·창은 「모델 없음」**이었다(시험 쪽이 잡았다).
+    ★ 「기본값과 같으면」으로 가르지 않는다. 판을 다른 폴더로 옮기면 설정에는
+      **옛 폴더** 자리가 남는다 — 거기 gguf 가 없다는 것이 가르는 기준이다.
+    """
+    p = Path(설정된) if 설정된 else None
+    if p is not None and p.is_dir() and any(p.glob("*.gguf")):
+        return str(p)
+    return str(paths.gguf_dir())
+
+
 class EBServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, addr, cfg: dict[str, Any], store: Store, note_store: Notes) -> None:
         super().__init__(addr, Handler)
+        뒤 = cfg.setdefault("backend", {"kind": "local"})
+        if 뒤.get("kind") == "local":
+            # 여기 한 자리에서 정한다 — 아래 모델 자리를 읽는 곳이 셋이다
+            뒤["model_dir"] = _모델자리(뒤.get("model_dir", ""))
         self.cfg = cfg
         self.store = store
         self.notes = note_store
@@ -995,6 +1014,16 @@ def _self_check() -> None:
     tmp.cleanup()
 
     server.shutdown()
+
+    # ★ 설정의 모델 자리에 gguf 가 없으면 exe 옆(사람이 넣는 자리)을 본다.
+    #   구운 판에서 설정이 `_internal\models` 를 가리켜 서버·창이 「모델 없음」이었다.
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as 빈자리:
+        assert _모델자리(빈자리) == str(paths.gguf_dir()), "gguf 없는 자리를 그대로 믿는다"
+        (Path(빈자리) / "m.gguf").write_bytes(b"")
+        assert _모델자리(빈자리) == 빈자리, "gguf 있는 자리를 버린다"
+    assert _모델자리("") == str(paths.gguf_dir())
     print("server self-check 통과")
 
 
