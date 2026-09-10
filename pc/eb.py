@@ -507,6 +507,9 @@ def _시험표(argv: list[str]) -> int:
 
         cfg = srv.load_config()
         n = srv.Notes(str(paths.notes_dir()), str(paths.index_path()), index_now=False)
+        # ★ 파일을 직접 넣은 창고는 색인이 비어 있다 — 그러면 「글이 없다」로 통째로 건너뛴다.
+        #   「있나 없나」는 원본(파일)에 맞춘다. 색인은 파생물이라 기록은 안 건드린다.
+        n.reindex()
         고른, 소 = "", []
         for r in n.conn.execute("SELECT title, body FROM notes"):
             h = [x for _, x in 글모듈.headings(r["body"] or "")]
@@ -536,8 +539,13 @@ def _시험표(argv: list[str]) -> int:
                             f"HTTP {s} · {len(글)}자 · body 없음 {몸없음} · 고른 글 소제목 {len(소)}개",
                             time.perf_counter() - t0))
                 if 소:
-                    s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}&heading={q(소[0])}")
-                    줄표.append(("2단 한 토막", s == 200, f"HTTP {s} · {len(글)}자", 0.0))
+                    # ★ 첫 소제목은 대개 글 전체를 덮는 H1 이라 「한 토막」이 글 한 편이 된다
+                    #   (시험 쪽 3147자 vs 한 편 3226자). 둘째를 재고, **어느 것을 쟀는지 적는다** —
+                    #   이름 없는 값은 「안 바뀔 값」과 견줄 수가 없다.
+                    잰것 = 소[1] if len(소) > 1 else 소[0]
+                    s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}&heading={q(잰것)}")
+                    줄표.append(("2단 한 토막", s == 200,
+                                f"HTTP {s} · {len(글)}자 · 소제목 「{잰것}」", 0.0))
                     s, 글 = 물어(f"/eb/v1/memory/note?title={q(고른)}&heading={q('없는 소제목 zz')}")
                     목록옴 = "headings" in json.loads(글) and "text" not in json.loads(글)
                     줄표.append(("2단 없는 소제목", s == 404 and 목록옴,
