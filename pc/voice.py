@@ -175,7 +175,8 @@ class Talk:
         return False, ""
 
 
-PIPER_DIR = Path("../models/piper")
+# ★ 작업 폴더 기준(`../models/piper`)이면 구운 판에서 못 찾아 윈도 기본 목소리로 조용히 내려앉는다.
+PIPER_DIR = paths.models_dir() / "piper"
 SPEECH_SPEED = 0.92  # 1보다 작으면 빠르게. 너무 빠르면 알아듣기 힘들다
 
 
@@ -519,6 +520,8 @@ class Ears:
 
 
 def _self_check() -> None:
+    # 목소리 모델 자리는 작업 폴더를 따르면 안 된다 — 구운 판에서 못 찾아 기본 목소리로 내려앉는다
+    assert PIPER_DIR.is_absolute(), f"목소리 모델 자리가 작업 폴더 기준이다: {PIPER_DIR}"
     # --- 호출어 판정: 마이크 없이 검사할 수 있는 부분 ---
     # 이름 둘 다 받는다.
     assert heard_wake("불칸 볼륨 올려") == (True, "볼륨 올려")

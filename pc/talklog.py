@@ -25,7 +25,7 @@ MAX_LINES = 5000  # 넘으면 오래된 것부터 버린다. 무한히 쌓이면
 
 # 실제 소리도 남긴다. 받아쓰기가 틀렸을 때 **글자만 봐서는** 마이크가 작아서인지
 # 모델이 약해서인지 못 가른다 — 원본을 다시 돌려봐야 안다.
-AUDIO_DIR = Path("data/recordings")
+AUDIO_DIR = paths.data_dir() / "data" / "recordings"   # 작업 폴더가 아니라 기록 자리 기준
 MAX_AUDIO_FILES = 300  # 넘으면 오래된 것부터 지운다. 목소리를 무한정 쌓아두지 않는다
 
 _lock = threading.Lock()
@@ -179,7 +179,10 @@ def audit() -> str:
 def _self_check() -> None:
     import tempfile
 
-    global LOG_PATH
+    global LOG_PATH, AUDIO_DIR
+    # 녹음은 기록 자리 아래다 — 작업 폴더를 따르면 딴 폴더에서 켤 때 엉뚱한 데 쌓이거나 못 만든다
+    assert paths.data_dir() in AUDIO_DIR.parents, f"녹음 폴더가 작업 폴더를 따른다: {AUDIO_DIR}"
+
     old = LOG_PATH
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +208,6 @@ def _self_check() -> None:
             assert len(read()) == 2, "깨진 줄 하나에 전부 못 읽는다"
 
             # --- 녹음 ---
-            global AUDIO_DIR
             old_audio = AUDIO_DIR
             try:
                 AUDIO_DIR = Path(tmp) / "rec"

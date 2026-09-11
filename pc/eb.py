@@ -1703,6 +1703,8 @@ if __name__ == "__main__":
             "낱말표 있나": (m / "tokenizer.json").exists(),
             "기록 자리": str(paths.data_dir()),
             "런타임 붙듦": pin_runtime(),
+            # 목소리 모델을 못 찾으면 윈도 기본 목소리로 조용히 내려앉는다 — 원격에서 볼 길이 여기뿐이다
+            "목소리 모델 있나": any((m / "piper").glob("*.onnx")) if (m / "piper").is_dir() else False,
         }
         # 사람이 이 값으로 「왜 벡터가 모자라지」를 스스로 가른다. 없어서 못 갈랐다.
         try:

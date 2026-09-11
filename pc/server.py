@@ -611,7 +611,8 @@ class EBServer(ThreadingHTTPServer):
         if hasattr(self.backend, "n_gpu_layers"):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
         self.gate = remote.RemoteGate()
-        self.artifacts = Path(cfg.get("artifact_dir") or "data/artifacts")
+        # ★ 작업 폴더에 기대지 않는다 — 딴 폴더에서 켜면 거기 만들다 접근 거부로 **아예 안 떴다**(시험 쪽).
+        self.artifacts = Path(cfg.get("artifact_dir") or paths.data_dir() / "data" / "artifacts")
         self.artifacts.mkdir(parents=True, exist_ok=True)
 
         # 원격에서 들어온 지시를 처리할 오케스트레이터. 폰과 같은 부품·같은 1단 모델을 쓴다.
@@ -1024,6 +1025,30 @@ def _self_check() -> None:
         (Path(빈자리) / "m.gguf").write_bytes(b"")
         assert _모델자리(빈자리) == 빈자리, "gguf 있는 자리를 버린다"
     assert _모델자리("") == str(paths.gguf_dir())
+
+    # ★ 작업 폴더에 기대지 않는다 — 딴 폴더에서 켜면 결과물 폴더를 거기 만들다 접근 거부로
+    #   **아예 안 떴다**(시험 쪽). 기록 자리와 작업 폴더를 **갈라 놓아야** 잡힌다 —
+    #   소스로 돌 때는 둘이 같은 자리라 옛 코드도 통과한다.
+    import os as _os
+
+    with _tf.TemporaryDirectory() as 기록, _tf.TemporaryDirectory() as 딴데:
+        옛기록, 옛자리 = _os.environ.get("VC_DATA"), _os.getcwd()
+        _os.environ["VC_DATA"] = 기록
+        _os.chdir(딴데)
+        try:
+            s2 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "local"}},
+                          Store(":memory:"), Notes(Path(기록) / "n", index_now=False))
+            try:
+                assert Path(기록) in s2.artifacts.parents, f"결과물 폴더가 작업 폴더를 따른다: {s2.artifacts}"
+                assert not (Path(딴데) / "data").exists(), "작업 폴더에 data 를 만들었다"
+            finally:
+                s2.server_close()
+        finally:
+            _os.chdir(옛자리)
+            if 옛기록 is None:
+                _os.environ.pop("VC_DATA", None)
+            else:
+                _os.environ["VC_DATA"] = 옛기록
     print("server self-check 통과")
 
 
