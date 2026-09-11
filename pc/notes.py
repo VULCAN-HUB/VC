@@ -1723,6 +1723,9 @@ class Notes:
                 "ORDER BY pinned DESC, created DESC LIMIT ?",
                 (f"%{q}%", f"%{q}%", k),
             ).fetchall()
+        # ★ 뜻으로 채우기 **전에** 낱말로 몇 개 걸렸는지 남긴다. 화면이 이것 없이
+        #   「관련 N개야」라고 해서, 어느 글에도 없는 말에도 관련이 있다고 말했다(시험 쪽 9).
+        self.낱말로찾은수 = len(rows)
         rows = self._blend_meaning(ask, rows, k)
         # **같은 것을 두 번 내보내지 않는다.** 낱말 색인이 어긋나면 조인이 같은 파일을
         # 두 줄로 돌려준다. 위에서 고치기는 하지만, 찾는 길에도 그물을 둔다 —
@@ -2761,6 +2764,10 @@ def _self_check() -> None:
         blended = [r["title"] for r in n.search("사과", k=8)]
         assert blended[:len(plain)] == plain, (plain, blended)
         assert "탈것" not in blended, "안 걸린 것이 뜻으로 딸려 들어왔다"
+        # 낱말로 몇 개 걸렸는지 따로 안다 — 화면이 「관련」이라고 우기지 않게
+        assert n.낱말로찾은수 >= 1, "낱말로 걸린 것을 안 센다"
+        n.search("어디에도없는말zqx", k=8)
+        assert n.낱말로찾은수 == 0, "어디에도 없는 말인데 낱말로 걸렸다고 센다"
 
         # 좁힌 조건은 뜻으로 찾은 것에도 그대로 걸린다
         assert all(r["kind"] == "note" for r in n.search("kind:note 사과", k=8))

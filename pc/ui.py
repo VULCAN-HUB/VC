@@ -1272,9 +1272,18 @@ class MainWindow(QWidget):
         self.ensure_on_graph(hits)
         self.graph.focus_on(hits, zoom=FOCUS_ZOOM if narrowing else None)
 
+        # ★ **낱말이 하나도 안 걸렸으면 「관련」이라고 하지 않는다.** 뜻 검색이 빈자리를
+        #   채운 것이라 어느 글에도 없는 말에도 「관련 4개야」가 떴다(시험 쪽 9). 차례는
+        #   그대로 두고 **말만 사실대로** — 문턱으로 자르면 자료가 바뀔 때 무너진다.
+        뜻만 = getattr(self.notes, "낱말로찾은수", None) == 0
         if narrowing:
             self.show_note(hits[0], focus=False)
             said = f"{hits[0]} 얘기야."
+        elif 뜻만:
+            # 조사는 받침을 본다 — 따옴표 밖에 붙이되 받침은 원래 말로 본다
+            앞 = f"{self._감싸기(text)}{orders.tail(text.strip(chr(34) + chr(39)), '이/가')} 든 글은 없어."
+            said = (f"{앞} 뜻으로 가까운 것 {len(hits)}개야." if len(hits) > 1 else
+                    f"{앞} 뜻으로 가장 가까운 건 {orders.josa(hits[0], '이야/야')}.")
         elif len(hits) > 1:
             said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
         else:

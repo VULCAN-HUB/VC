@@ -315,7 +315,25 @@ def facts() -> dict:
         out["onnxruntime"] = onnxruntime.__version__
     except Exception as err:
         out["onnxruntime 실패"] = f"{type(err).__name__}: {err}"
+    try:
+        out["죽음 기록"] = _죽음갈라((paths.data_dir() / DEATH).read_text(
+            encoding="utf-8", errors="replace"))
+    except OSError:
+        out["죽음 기록"] = "없음"
     return out
+
+
+def _죽음갈라(글: str) -> str:
+    """죽음 기록을 **갈라** 센다 — 크기로만 보면 죽지 않은 판도 죽은 것으로 읽힌다.
+
+    ★ faulthandler 는 윈도우에서 **나중에 처리될 예외까지** 먼저 적는다. COM 이 안에서
+      던지고 받는 `0x8001010d`(RPC_E_CANTCALLOUT_ININPUTSYNCCALL)가 창이 「끔 (0)」으로
+      멀쩡히 끝난 판에도 찍혔다(시험 PC 7회) — 그 줄은 죽음이 아니다 [짐작이다: CPython 이
+      비오류 코드와 C++ 예외만 거르고 COM 예외는 안 거르는 것으로 안다].
+    """
+    비치명 = 글.count("code 0x8001010d")
+    return (f"비치명 COM 예외 {비치명}줄 · 그 밖의 네이티브 예외 "
+            f"{글.count('Windows fatal exception') - 비치명}줄 · 파이썬 traceback {글.count('Traceback')}개")
 
 
 def bundle(out_dir: str | Path = "") -> Path:
@@ -470,6 +488,11 @@ def _self_check() -> None:
             stop_watching()
             del os.environ["VC_DATA"]
 
+    # 죽음 기록은 갈라 센다 — 비치명 COM 예외를 죽음과 한 셈에 넣지 않는다
+    갈라 = _죽음갈라("Windows fatal exception: code 0x8001010d\n\n"
+                  "Windows fatal exception: access violation\n"
+                  "Traceback (most recent call last):\n")
+    assert 갈라 == "비치명 COM 예외 1줄 · 그 밖의 네이티브 예외 1줄 · 파이썬 traceback 1개", 갈라
     print("report self-check 통과")
 
 
