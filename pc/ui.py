@@ -1093,6 +1093,10 @@ class MainWindow(QWidget):
         if event.type() in (QEvent.KeyPress, QEvent.MouseButtonPress,
                             QEvent.MouseMove, QEvent.Wheel):
             self.graph.깨우기()
+        # 누름이 어디에 떨어졌는지 최근 넷을 들고 있는다 — 친 말이 글로 새면 자국에 같이 적는다.
+        if event.type() == QEvent.MouseButtonPress and obj.isWidgetType():
+            self._누름들 = (getattr(self, "_누름들", []) +
+                         [f"{type(obj).__name__}:{obj.objectName() or '-'}"])[-4:]
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.detail_body.pop_open()):
             self.detail_body.close_pop()
@@ -1712,6 +1716,12 @@ class MainWindow(QWidget):
             return False
         if not (붙여넣기 or 글자):
             return False
+        # ★ **검색칸을 눌렀는데 친 말이 글로 들어가 저장됐다**(만든 PC 재현, 열린 문제 7).
+        #   이 길로 글이 바뀔 때 초점·최근 누름을 자국에 남긴다 — 그래야 원인이 갈린다.
+        초점 = QApplication.focusWidget()
+        report.trail(f"읽다 쳐서 고치기로 — 초점 "
+                     f"{type(초점).__name__ + ':' + (초점.objectName() or '-') if 초점 else None}"
+                     f" · 최근 누름 {getattr(self, '_누름들', [])}")
         self._고치기로()
         self.detail_body.setFocus()
         if 붙여넣기:
