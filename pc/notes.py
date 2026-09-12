@@ -2114,6 +2114,14 @@ class Notes:
             out.append((r["src"], line))
         return sorted(out)
 
+    def 외딴것수(self) -> int:
+        """외딴 글이 모두 몇 장인가. **목록만 주면 「서른 개야」라고 거짓말한다** —
+        오너 창고를 재 보니 2836장 중 2700장(95%)이 외딴이었다."""
+        return self.conn.execute(
+            "SELECT count(*) FROM notes n WHERE n.pinned = 0"
+            " AND NOT EXISTS (SELECT 1 FROM links l WHERE l.src = n.title OR l.dst = n.title)"
+        ).fetchone()[0]
+
     def 외딴것(self, k: int = 30) -> list[str]:
         """아무 데도 안 이어진 글들. **옵시디언의 「고아 노트」** 자리다.
 
@@ -2477,15 +2485,6 @@ def _self_check() -> None:
             "SELECT heading FROM links WHERE src = ? AND dst = ?", ("아침", "지하철")).fetchone()
         assert head["heading"] == "2호선", head["heading"]
 
-        # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
-        #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
-        n.write(Note(title="외톨이", body="아무것도 안 가리킨다"))
-        n.write(Note(title="세워 둔 것", body="외딴데 고정했다", pinned=True))
-        외딴 = n.외딴것()
-        assert "외톨이" in 외딴, f"외딴 글을 못 찾는다: {외딴}"
-        assert "세워 둔 것" not in 외딴, "고정한 것까지 외딴 것으로 센다"
-        assert "아침" not in 외딴, "이어진 글을 외딴 것으로 센다"
-
         # 아직 없는 항목을 가리키는 링크 — 사람이 쓰다 만 자리다.
         assert n.unresolved() == [("지하철", 1)], n.unresolved()
         n.write(Note(title="지하철", body="2호선 탄다."))
@@ -2563,6 +2562,16 @@ def _self_check() -> None:
         assert "보고서" in picked, "반드시 넣으랬는데 잘렸다"
         assert len(picked) == 3
         assert n.working_set(2)[0] == "고정된 것", "고정한 게 먼저 안 온다"
+
+        # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
+        #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
+        n.write(Note(title="외톨이", body="아무것도 안 가리킨다"))
+        외딴 = n.외딴것()
+        assert "외톨이" in 외딴, f"외딴 글을 못 찾는다: {외딴}"
+        assert "고정된 것" not in 외딴, "고정한 것까지 외딴 것으로 센다"
+        assert "아침" not in 외딴, "이어진 글을 외딴 것으로 센다"
+
+        assert n.외딴것수() >= len(외딴), "모두 몇 장인지를 목록보다 적게 센다"
         sub = n.subgraph(["요약", "보고서"])
         assert set(sub) == {"요약", "보고서"}
         assert all(all(x in sub for x in v) for v in sub.values()), "밖으로 나가는 선이 남았다"

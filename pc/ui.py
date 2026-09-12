@@ -1412,7 +1412,11 @@ class MainWindow(QWidget):
                 return done("외딴 글은 없어. 다 이어져 있어.")
             self.show_results([(t, (self.notes.read(t).body if self.notes.read(t) else ""),
                                 "", "") for t in 외딴], "")
-            return done(f"아무 데도 안 이어진 글 {len(외딴)}개야. 이어 두면 나중에 찾기 쉬워.",
+            # ★ **목록 길이로 말하면 거짓말이 된다.** 오너 창고는 2836장 중 2700장(95%)이
+            #   외딴이라 「서른 개야」가 된다. 모두 몇 장인지 세어 **사실대로** 말한다.
+            모두 = self.notes.외딴것수()
+            꼬리 = f" 최근 {len(외딴)}개만 보여줄게." if 모두 > len(외딴) else ""
+            return done(f"아무 데도 안 이어진 글 {모두}개야.{꼬리} 이어 두면 나중에 찾기 쉬워.",
                         외딴[:3])
 
         # 여기부터는 대상이 있어야 한다.
