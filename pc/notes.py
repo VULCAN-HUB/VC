@@ -1015,10 +1015,20 @@ class Notes:
         return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts
 
     def notes_files(self):
-        """항목 파일만. 지난 판은 항목이 아니다 — 세면 항목 수가 스무 배가 된다."""
-        for path in self.root.rglob("*.md"):
-            if not self._is_history(path):
-                yield path
+        """항목 파일만. 지난 판은 항목이 아니다 — 세면 항목 수가 스무 배가 된다.
+
+        ★★ **훑는 중에 폴더가 사라져도 멈추면 안 된다.** `rglob` 은 게으르게 도는데,
+        도는 사이에 남이 폴더를 지우면 `FileNotFoundError` 로 **색인이 통째로 터진다.**
+        실제로 그랬다(지난 판 폴더가 생겼다 지워지는 사이). 밖에서 파일을 만지는 것이
+        이 물건의 정상 쓰임이다 — 옵시디언·동기화 도구·사람 손. **한 폴더 때문에
+        20년치가 안 보이면 안 된다.**
+        """
+        try:
+            for path in self.root.rglob("*.md"):
+                if not self._is_history(path):
+                    yield path
+        except (FileNotFoundError, PermissionError, OSError):
+            return      # 사라진 자리까지만 세고 멈춘다. 다음 훑기가 마저 본다
 
     # --- 지난 판 -------------------------------------------------------
 
@@ -1567,6 +1577,15 @@ class Notes:
         path = self.path_of(title)
         if not path.exists():
             return False
+        # ★★ **지우기 전에 한 판 남긴다.** 지난 판이 없는 글(한 번 쓰고 만 글)은
+        #   지우면 **통째로 사라진다.** 5분 규칙도 건너뛴다 — 되돌릴 만한 지점이
+        #   바로 이 자리다. 파일 한 장 값으로 실수를 되돌릴 수 있다.
+        #   (`keep_history` 가 「확인창이 다시 돌아올 수 있다고 말해 놓고 못 돌아가면
+        #    그건 거짓말이다」라고 적어 둔 그 뜻을 지우기에도 적용한다.)
+        try:
+            self.keep_history(path, read_text(path), always=True)
+        except OSError:
+            pass        # 못 남겨도 지우기는 되어야 한다
         # 뒤에서 훑는 실이 방금 그 파일을 읽고 있을 수 있다. 윈도우는 **열려 있는
         # 파일을 못 지운다** — 잠깐 기다렸다 다시 하면 대개 통과한다. 검사에서 실제로
         # 났다(색인 중에 지우기).
@@ -3039,6 +3058,15 @@ def _self_check() -> None:
             "SELECT count(*) FROM vectors WHERE path = ?", (str(갓쓴자리),)).fetchone()[0] == 1,             "갓 쓴 글 말고 딴 글이 채워졌다 — 읽힌 글이 차례에서 앞선다"
         while n.embed_some(9):
             pass
+
+        # ★★ **지운 글도 되살릴 수 있어야 한다.** 지난 판이 없는 글은 지우면 통째로
+        #   사라졌다 — 지우기 전에 한 판 남긴다(5분 규칙을 건너뛴다).
+        n.write(Note(title="한 번 쓰고 지울 글", body="이 글은 되살릴 수 있어야 한다."))
+        assert not n.history("한 번 쓰고 지울 글"), "아직 지난 판이 있을 리 없다"
+        n.delete("한 번 쓰고 지울 글")
+        지난 = n.history("한 번 쓰고 지울 글")
+        assert 지난, "지운 글이 통째로 사라졌다 — 되살릴 길이 없다"
+        assert "되살릴 수 있어야" in 지난[0][1].read_text(encoding="utf-8"), 지난
 
         # 지우면 벡터도 같이 사라진다 — 유령이 검색에 남으면 안 된다
         n.delete("탈것")
