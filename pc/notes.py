@@ -1585,23 +1585,30 @@ class Notes:
             if changed % 500 == 0:
                 self.conn.commit()
         for gone in set(known) - seen:
-            stem = Path(gone).stem
-            self._drop_search(gone)
-            self.conn.execute("DELETE FROM notes WHERE path = ?", (gone,))
-            # **같은 제목이 아직 살아 있으면 딸린 것을 안 지운다.**
-            #
-            # 링크·태그·별칭은 경로가 아니라 **제목**으로 묶여 있다. 그래서 파일을
-            # 다른 폴더로 옮기면, 새 자리에 방금 넣은 링크를 옛 자리 정리가 지웠다 —
-            # 폴더 한 번 정리했을 뿐인데 링크가 통째로 사라진다.
-            still = self.conn.execute(
-                "SELECT 1 FROM notes WHERE title = ? LIMIT 1", (stem,)).fetchone()
-            if still is None:
-                self.conn.execute("DELETE FROM links WHERE src = ?", (stem,))
-                self.conn.execute("DELETE FROM tags WHERE title = ?", (stem,))
-                self.conn.execute("DELETE FROM aliases WHERE title = ?", (stem,))
+            self.forget(gone, commit=False)
             changed += 1
         self.conn.commit()
         return changed
+
+    def forget(self, gone: str | Path, commit: bool = True) -> None:
+        """색인에서만 지운다. 파일은 이미 없다(밖에서 지웠거나 옮겼다).
+
+        **같은 제목이 아직 살아 있으면 딸린 것을 안 지운다.** 링크·태그·별칭은 경로가
+        아니라 **제목**으로 묶여 있다. 그래서 파일을 다른 폴더로 옮기면, 새 자리에 방금
+        넣은 링크를 옛 자리 정리가 지웠다 — 폴더 한 번 정리했을 뿐인데 링크가 통째로 사라진다.
+        """
+        gone = str(gone)
+        stem = Path(gone).stem
+        self._drop_search(gone)
+        self.conn.execute("DELETE FROM notes WHERE path = ?", (gone,))
+        still = self.conn.execute(
+            "SELECT 1 FROM notes WHERE title = ? LIMIT 1", (stem,)).fetchone()
+        if still is None:
+            self.conn.execute("DELETE FROM links WHERE src = ?", (stem,))
+            self.conn.execute("DELETE FROM tags WHERE title = ?", (stem,))
+            self.conn.execute("DELETE FROM aliases WHERE title = ?", (stem,))
+        if commit:
+            self.conn.commit()
 
     # --- 첨부 -----------------------------------------------------------
 
@@ -1822,6 +1829,18 @@ class Notes:
         후보.discard("")
         if 후보:
             rows.sort(key=lambda r: (r["title"].strip() not in 후보, ))
+        # ★★ **없어진 파일이 계속 걸렸다.** 밖에서(옵시디언·탐색기) 글을 지우면 색인은
+        #   다음 훑기 전까지 그대로라, 검색은 그 글을 주는데 펼치면 404 다 — AI 는
+        #   찾은 줄 알고 2단을 부르고 800자를 버린다. 사람 화면에서는 빈 글이 열린다.
+        #   내놓기 직전에 **몇 장만** 확인한다(다섯 장이면 stat 다섯 번, 0.1ms 수준).
+        #   없으면 색인에서도 지운다 — 그냥 빼기만 하면 다음 물음에서 또 걸린다.
+        살아있는 = []
+        for r in rows:
+            if Path(r["path"]).exists():
+                살아있는.append(r)
+            else:
+                self.forget(r["path"])
+        rows = 살아있는
         if rows:
             self.conn.executemany(
                 "UPDATE notes SET used_at = ?, use_count = use_count + 1 WHERE path = ?",
@@ -2463,6 +2482,13 @@ def _self_check() -> None:
         n.write(Note(title="alpha", body="작은 글"))
         assert n.read("Alpha").body.startswith("큰"), "대소문자만 다른 제목이 서로를 덮는다"
         assert n.read("alpha").body.startswith("작은"), "대소문자만 다른 제목이 서로를 덮는다"
+        # ★★ **밖에서 지운 글이 검색에 계속 걸렸다.** 옵시디언·탐색기로 지우면 색인은
+        #   다음 훑기 전까지 그대로라, 검색은 주는데 펼치면 없다 — AI 는 찾은 줄 알고
+        #   2단을 부르고 800자를 버린다. 내놓기 직전에 확인하고 색인에서도 지운다.
+        n.write(Note(title="사라질 글", body="곧 없어질 몸이다"))
+        next(n.root.rglob("사라질 글.md")).unlink()
+        assert n.search("없어질") == [], "밖에서 지운 글이 아직 걸린다"
+        assert n.search("없어질") == [], "한 번 빼고 색인에 그대로 뒀다 — 다음에 또 걸린다"
 
         # ★ **블록 참조** — 소제목이 없는 긴 글에서 한 자리를 가리키는 유일한 길이다.
         #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 7장뿐이라 값이 크다.
