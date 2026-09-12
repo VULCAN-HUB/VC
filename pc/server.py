@@ -496,8 +496,8 @@ class Handler(BaseHTTPRequestHandler):
             #   옵시디언·메모장으로 고친 것에는 안 붙는데, 이 물건은 **옵시디언 대용**이라
             #   밖에서 고치는 것이 주된 길이다. 실제로 재 보니 밖에서 보탠 줄을 AI 가
             #   `force` 없이 통째로 지웠다(201 이 떨어졌다).
-            #   밖에서 고친 것을 뒤늦게 알아내는 길(파일 시각 견주기)은 30초마다 도는
-            #   색인이 그 신호를 지워 **때를 놓친다.**
+            #   ※ `notes._남의손인가` 가 지문으로 그것을 가려내긴 한다 — 그래서 **지난 판은
+            #     반드시 남는다.** 다만 그건 「덮은 뒤에 되살릴 수 있다」이지 「안 덮는다」가 아니다.
             #   → **덮어쓰기는 늘 `force` 를 받는다.** 되돌리기 어려운 일은 명시적으로 한다.
             #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
             if mode == "replace" and old is not None and not body.get("force"):
@@ -531,7 +531,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.notes._vec_cache = None
             except Exception:
                 pass        # 벡터를 못 만들어도 저장은 끝났다
-            return self._send(201, {"title": title, "path": str(path), "mode": mode})
+            답 = {"title": title, "path": str(path), "mode": mode}
+            # ★★ **force 로 덮었으면 되돌릴 자리를 알려 준다.** 지난 판은 남지만
+            #   AI 가 그것을 볼 길이 없었다(화면에서만 된다) — 안전망이 반쪽이었다.
+            #   덮은 그 자리에서 「되돌리려면 여기」를 주면 AI 가 스스로 고칠 수 있다.
+            if mode == "replace" and old is not None:
+                지난판 = self.server.notes.history(title)
+                if 지난판:
+                    언제, 파일 = 지난판[0]
+                    답["undo"] = {"when": 언제, "path": str(파일),
+                                  "chars": len(old.body),
+                                  "how": "그 파일의 몸을 읽어 mode=replace · force 로 다시 쓴다"}
+            return self._send(201, 답)
 
         if url.path == "/eb/v1/analyze":
             return self._analyze()
@@ -1130,8 +1141,19 @@ def _self_check() -> None:
     assert "force" in json.dumps(막힘[1], ensure_ascii=False), f"뚫는 법을 안 알려 준다: {막힘[1]}"
     assert note_store.read("카페 단골").body.startswith("정정"), "사람 손질이 덮였다"
     # 정말 덮어야 할 때는 force로 뚫는다 — 다만 눌러서 뚫는 길이 있어야 한다.
-    assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "새로 씀",
-                                          "mode": "replace", "force": True})[0] == 201
+    뚫음 = call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "새로 씀",
+                                        "mode": "replace", "force": True})
+    assert 뚫음[0] == 201, 뚫음
+    # ★★ **덮었으면 되돌릴 자리를 알려 준다.** 지난 판은 남는데(밖에서 고친 글은
+    #   `_남의손인가` 가 지문으로 가려내 반드시 남긴다) AI 가 **그것을 볼 길이 없었다** —
+    #   화면에서만 된다. 안전망이 반쪽이었다. 덮은 그 자리에서 되돌릴 곳을 준다.
+    덮음 = call("POST", "/eb/v1/memory", {"title": "밖에서 고친 글",
+                                        "text": "정말 갈아치운다.",
+                                        "mode": "replace", "force": True})
+    assert 덮음[0] == 201, 덮음
+    되돌 = 덮음[1].get("undo") or {}
+    assert 되돌.get("path") and Path(되돌["path"]).is_file(), f"되돌릴 자리를 안 준다: {덮음[1]}"
+    assert "사람이 손으로" in Path(되돌["path"]).read_text(encoding="utf-8"),         "지난 판에 사람 손질이 없다 — 덮으면 영영 사라진다"
 
     # 바로 위에서 「카페 단골」을 통째로 덮어 링크가 사라졌다. 이을 것을 하나 만들고 잰다.
     call("POST", "/eb/v1/memory", {"title": "이음 시험", "text": "[[카페 단골]] 을 가리킨다"})
