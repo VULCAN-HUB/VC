@@ -187,7 +187,30 @@ class Handler(BaseHTTPRequestHandler):
                 models=[m for m in self.server.picked["using"].values() if m],
                 capabilities=["inference", "log", "memory", "skills"],
             )
-            return self._send(200, hello.__dict__)
+            몸 = dict(hello.__dict__)
+            # ★★ **창고가 무엇을 아는지 한 번에 알려 준다.** 이게 없으면 AI 는 이 창고에
+            #   무엇이 들었는지 모른 채 **헛검색을 여러 번** 한다 — 한 번이 800자다.
+            #   오너 창고에서 재 본 갈래: 일 2373 · 규칙 271 · 결정 120 · 일정 30.
+            #   이 몇 줄(수백 자)을 보면 「결정 쪽을 좁혀 묻자」가 바로 나온다.
+            #   ※ 좁히는 문법도 같이 적는다 — **아는 길을 안 알려 주면 없는 것과 같다.**
+            #     (오너 지시 2026-09-12: 크레딧을 줄이는 것이 성능이다.)
+            try:
+                c = self.server.notes.conn
+                갈래 = {r[0]: r[1] for r in c.execute(
+                    "SELECT kind, count(*) FROM notes GROUP BY kind "
+                    "ORDER BY 2 DESC LIMIT 12")}
+                몸["store"] = {
+                    "notes": c.execute("SELECT count(*) FROM notes").fetchone()[0],
+                    "kinds": 갈래,
+                    "tags": [r[0] for r in c.execute(
+                        "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
+                    "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
+                            "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
+                            "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다."),
+                }
+            except Exception:
+                pass        # 판을 못 만들어도 인사는 해야 한다
+            return self._send(200, 몸)
 
         if url.path == "/eb/v1/memory/search":
             # ★★ **꺼내기는 두 단이다.** 예전엔 걸린 여덟 장의 **몸을 통째로** 준다 —
@@ -871,6 +894,12 @@ def _self_check() -> None:
     assert call("GET", "/eb/v1/hello")[0] == 200
 
     status, hello = call("GET", "/eb/v1/hello")
+    # ★ **창고 판이 인사에 실려야 한다.** 없으면 AI 는 이 창고에 무엇이 들었는지 모른 채
+    #   헛검색을 여러 번 한다 — 한 번이 800자다. 좁히는 문법도 같이 적는다.
+    판 = hello.get("store") or {}
+    assert 판.get("notes") is not None, f"창고 판이 없다: {hello}"
+    assert "kinds" in 판 and "how" in 판, f"갈래나 쓰는 법이 빠졌다: {판}"
+    assert "kind:" in 판["how"] and "k=" in 판["how"], f"좁히는 법을 안 알려 준다: {판['how']}"
     assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
     # 지금 쓰기로 정해진 모델들이 나온다(사양 자동 또는 사용자 선택).
     assert isinstance(hello["models"], list)
