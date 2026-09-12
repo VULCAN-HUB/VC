@@ -248,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
                     "tags": [r[0] for r in c.execute(
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
-                            "-kind:일 처럼 빼기도 된다(가장 많은 갈래를 빼면 잡담이 준다). "
+                            "-kind:일 처럼 빼기도 된다. "
                             "year:2026 · path:2026/09 · title:회의록(=file:, 제목만 본다) 도 된다. "
                             "\"따옴표\" 는 그 구절 그대로다. A OR B(또는) 는 하나라도 든 것. k= 로 개수(기본 5, 위 50). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다 "
@@ -258,9 +258,9 @@ class Handler(BaseHTTPRequestHandler):
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
                             # ★ 인사는 **세션마다 한 번** 나가는 값이다. 이 줄은 한 번의
                             #   헛검색(800자)을 막아 주므로 남기되, 잰 값은 짧게만 적는다.
-                            "★ 안 나오면 위 kinds 중 하나로 좁혀 다시 물어라(kind:결정) — 가장 많은 갈래가 "
-                            "밀어내던 것이라 목록 밖에 있던 글이 1~4등으로 올라온다. "
-                            "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다(답의 link_to 중 맞는 것을 [[제목]]으로 이어라). "
+                            "★ 안 나오면 위 kinds 중 하나로 좁혀 다시 물어라(kind:결정) — 가장 많은 갈래가 밀어내서 "
+                            "목록 밖에 있던 글이 1~4등으로 올라온다. "
+                            "쓰기는 memory 에 POST(덧붙기가 기본). 답의 link_to 중 맞는 것을 [[제목]]으로 이어라. "
                             "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
                             "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다)."
                             + ("" if 큰모델있나 else
