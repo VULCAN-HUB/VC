@@ -1454,6 +1454,15 @@ def _self_check() -> None:
             ):
         assert not 글 or 글.count(있어야) >= 2, f"{까닭} ({글.count(있어야)}군데)"
 
+    # ★★ **원격에 열어 둔 길은 다 실재해야 한다.** `/eb/v1/notes` 가 목록에 있었는데
+    #   그런 길이 없었다(옛 이름이 남았다) — 나중에 그 이름을 만들면 **의도치 않게
+    #   원격에 열린다.** 여기서 목록과 진짜 길을 견준다.
+    import remote as _r
+
+    소스 = Path(__file__).read_text(encoding="utf-8", errors="replace")
+    for 길 in _r.REMOTE_ALLOWED:
+        assert f'"{길}"' in 소스, f"원격에 열어 둔 길이 실재하지 않는다: {길}"
+
     print("server self-check 통과")
 
 

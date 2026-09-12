@@ -38,7 +38,9 @@ REMOTE_ALLOWED = (
     "/eb/v1/hello",
     "/eb/v1/ask",
     "/eb/v1/graph",
-    "/eb/v1/notes",
+    # ★ `/eb/v1/notes` 가 여기 있었는데 **그런 길은 없다**(옛 이름이 남았다).
+    #   없는 길을 열어 두면 나중에 그 이름을 만들 때 **의도치 않게 원격에 열린다.**
+    #   기억을 꺼내는 길(`/eb/v1/memory/*`)은 일부러 안 연다 — 원격은 `ask` 로 묻는다.
     "/eb/v1/skills",
     "/eb/v1/artifacts",
     "/eb/v1/remote/close",
