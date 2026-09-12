@@ -249,6 +249,9 @@ class Handler(BaseHTTPRequestHandler):
                     #   창만 그것을 봤다 — 서버로만 쓰는 AI 는 모른 채 그물을 믿는다.
                     **({"broken_rename": " → ".join(하다만)}
                        if (하다만 := self.server.notes.이름바꾸다만것()) else {}),
+                    # ★ **안 이어진 글이 몇 장인가.** 오너 창고는 2820장 중 2700장(95%)이라
+                    #   그물이 사실상 비어 있다 — AI 가 그것을 알아야 `link_to` 를 챙긴다.
+                    "orphans": self.server.notes.외딴것수(),
                     "tags": [r[0] for r in c.execute(
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
