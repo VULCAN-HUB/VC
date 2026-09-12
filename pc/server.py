@@ -507,11 +507,14 @@ class Handler(BaseHTTPRequestHandler):
                 path = self.server.notes.write(note)
             # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
             #   못 찾아 **다시 검색한다** — 그게 800자다. 뒤에서 도는 실은 30초마다라 그
-            #   사이가 빈다. `vec_pending` 은 **최근 것부터** 주므로(mtime DESC) 방금 쓴
-            #   글이 맨 앞이다. 한 장 만드는 값은 10ms 쯤이라 쓰기 길에 얹어도 된다.
+            #   사이가 빈다.
+            #   ★ **`embed_some(1)` 로는 안 된다** — 그 차례의 첫 키가 `used_at DESC` 라
+            #   검색으로 읽힌 글들이 앞선다. 빈 창고에서는 됐는데(읽힌 글이 없었다) 실무
+            #   창고에서 검색을 스무 번 돌린 뒤에는 **엉뚱한 글이 채워졌다.**
+            #   `embed_one` 으로 **이 글만** 콕 집는다. 10ms 쯤이라 쓰기 길에 얹어도 된다.
             #   ※ 임베더가 아직 없으면(모델 없음·아직 안 올림) 아무 일도 안 한다.
             try:
-                self.server.notes.embed_some(1)
+                self.server.notes.embed_one(path)
                 self.server.notes._vec_cache = None
             except Exception:
                 pass        # 벡터를 못 만들어도 저장은 끝났다
@@ -948,6 +951,10 @@ def _self_check() -> None:
             return [[0.1] * 8 for _ in 글들]
     쓰던것 = getattr(server.notes, "_embed", None)
     server.notes.use_embedder(가짜임베더())
+    # ★★ **읽힌 글이 앞선 상태에서 재야 한다.** `vec_pending` 의 첫 키가 `used_at DESC` 라
+    #   검색으로 읽힌 글들이 앞선다 — 빈 창고에서는 그런 글이 없어 **우연히 통과한다.**
+    #   실무 창고에서 검색을 스무 번 돌린 뒤에는 엉뚱한 글이 채워졌다.
+    #   여기서도 먼저 검색을 한 번 돌려 `used_at` 을 찍어 두고 잰다.
     call("POST", "/eb/v1/memory", {"title": "방금 쓴 글", "text": "이 글은 바로 벡터가 생겨야 한다."})
     있나 = server.notes.conn.execute(
         "SELECT count(*) FROM vectors v JOIN notes n ON n.path = v.path "

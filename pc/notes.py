@@ -1223,6 +1223,26 @@ class Notes:
         return [r["path"] for r in self.conn.execute(
             "SELECT path FROM notes WHERE vec_mtime != mtime ORDER BY used_at DESC NULLS LAST, mtime DESC")]
 
+    def embed_one(self, path) -> bool:
+        """**이 글 하나**의 벡터를 지금 만든다. 만들었으면 True.
+
+        ★★ `embed_some` 은 `vec_pending` 차례대로 하는데, 그 차례의 **첫 키가
+        `used_at DESC`** 다 — 검색으로 읽힌 글들이 앞선다. 그래서 방금 쓴 글을
+        채우려고 `embed_some(1)` 을 불러도 **엉뚱한 글이 채워진다.**
+        실제로 그랬다: 빈 창고에서는 됐는데(읽힌 글이 없어 mtime 차례였다) 실무 창고에서
+        검색을 스무 번 돌린 뒤에는 안 됐다. **작은 창고가 우연히 통과시킨 자리다.**
+        """
+        낡 = self.conn.execute(
+            "SELECT 1 FROM notes WHERE path = ? AND vec_mtime != mtime", (str(path),)).fetchone()
+        if 낡 is None:
+            return False
+        옛것 = self.vec_pending
+        try:
+            self.vec_pending = lambda: [str(path)]      # 이 한 장만 만든다
+            return self.embed_some(1) > 0
+        finally:
+            self.vec_pending = 옛것
+
     def embed_some(self, limit: int = 32) -> int:
         """벡터가 없는 항목을 조금씩 만든다. 2만 개면 8분짜리 일이라 뒤에서 돈다.
 
@@ -3005,6 +3025,20 @@ def _self_check() -> None:
         assert n.vec_left() == 1, "밖에서 고친 것을 색인이 모른다"
         나온 = [t for t, _ in n.semantic("잠수함", k=3)]
         assert 나온 and 나온[0] == "밖에서 고칠 글",             f"밖에서 고친 뒤 낡은 뜻으로 답한다 — 조용히 틀린다: {나온}"
+
+        # ★★ **`embed_some(1)` 로는 방금 쓴 글을 못 채운다.** `vec_pending` 의 첫 키가
+        #   `used_at DESC` 라 **검색으로 읽힌 글들이 앞선다.** 빈 창고에서는 그런 글이 없어
+        #   우연히 통과하는데, 실무 창고(검색을 스무 번 돌린 뒤)에서는 엉뚱한 글이 채워졌다.
+        #   `embed_one` 은 그 글만 콕 집는다 — 여기서 되돌리면 터진다.
+        n.conn.execute("UPDATE notes SET used_at = 1, vec_mtime = 0")
+        n.conn.commit()
+        n.write(Note(title="갓 쓴 글", body="이 글은 바로 벡터가 생겨야 한다."))
+        갓쓴자리 = n.path_of("갓 쓴 글")
+        assert n.embed_one(갓쓴자리), "갓 쓴 글의 벡터를 못 만들었다"
+        assert n.conn.execute(
+            "SELECT count(*) FROM vectors WHERE path = ?", (str(갓쓴자리),)).fetchone()[0] == 1,             "갓 쓴 글 말고 딴 글이 채워졌다 — 읽힌 글이 차례에서 앞선다"
+        while n.embed_some(9):
+            pass
 
         # 지우면 벡터도 같이 사라진다 — 유령이 검색에 남으면 안 된다
         n.delete("탈것")
