@@ -197,23 +197,41 @@ class Handler(BaseHTTPRequestHandler):
             # 예전처럼 몸까지 받으려면 `full=1` 을 붙인다 — 붙여 쓰던 쪽을 안 깨린다.
             args = parse_qs(url.query)
             q = (args.get("q") or [""])[0]
-            k = int((args.get("k") or ["8"])[0])
+            # ★★ **기본을 다섯으로 둔다.** 여덟을 주면 한 번에 1272자가 나가는데,
+            #   오너 창고(2794장)·얼린 물음 20개로 재 보니 **6~8등에 정답이 하나도 없었다**
+            #   — 다섯으로 줄여도 맞힌 물음 수가 그대로(6/20)이고 글자만 802자로 준다(37% ↓).
+            #   더 줄이면 손해다: 셋이면 4/20 으로 떨어진다. 더 필요하면 `k=` 로 올려 다시 묻는다.
+            k = int((args.get("k") or ["5"])[0])
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
             rows = self.server.notes.search(q, k)
             out = []
             for r in rows:
                 몸 = r["body"]
+                # ★★ **빈 칸과 기본값은 안 보낸다.** 여덟 장이면 그것만으로 수백 자다.
+                #   재 본 값(오너 창고 2794장·물음 20개): 한 장 195자 중
+                #   `created` 33 · `pinned` 15 · `headings` 14 · `links` 11 · `kind` 11 —
+                #   이 창고에서는 `headings`·`links` 가 **거의 다 빈 배열**이었다.
+                #   JSON 에서 빠진 칸은 「없다」로 읽힌다. 없는 것을 굳이 적어 보낼 이유가 없다.
+                #   ※ **오너 지시(2026-09-12): 크레딧을 줄이는 것이 성능이다.**
+                #     AI 가 한 번 꺼낼 때 나가는 글자가 곧 값이다.
                 한장 = {
                     "title": r["title"],
-                    "kind": r["kind"],
-                    "pinned": bool(r["pinned"]),
-                    "created": r["created"],
-                    "summary": notes.요약(몸),
-                    # 소제목은 **펼칠 자리의 목록**이다. 이름만 준다 — 깊이는 2단에서 안 쓴다.
-                    "headings": [h for _, h in notes.headings(몸)][:20],
+                    # 물음을 넘겨 **그 물음에 걸린 줄**을 요약으로 받는다. 글자 수는 같은데
+                    # AI 가 「이 글이 답하나」를 1단에서 가릴 수 있어 2단 호출이 준다.
+                    "summary": notes.요약(몸, 물음=q),
                     "chars": len(몸),
-                    "links": self.server.notes.neighbors(r["title"]),
                 }
+                if r["kind"] and r["kind"] != "note":
+                    한장["kind"] = r["kind"]           # 보통은 note 다
+                if r["pinned"]:
+                    한장["pinned"] = True              # 거짓은 안 보낸다
+                if r["created"]:
+                    한장["created"] = str(r["created"])[:10]   # 날짜면 족하다. 시·분은 안 쓴다
+                # 소제목은 **펼칠 자리의 목록**이다. 이름만 준다 — 깊이는 2단에서 안 쓴다.
+                if 머리 := [h for _, h in notes.headings(몸)][:20]:
+                    한장["headings"] = 머리
+                if 이웃 := self.server.notes.neighbors(r["title"]):
+                    한장["links"] = 이웃
                 if 통째로:
                     한장["body"] = 몸
                 out.append(한장)
@@ -883,6 +901,27 @@ def _self_check() -> None:
     assert status == 200 and len(found["results"]) == 1
     assert found["results"][0]["links"] == ["VC"], "연결이 안 실려 온다"
 
+    # ★★ **1단은 AI 가 크레딧을 태우는 자리다**(오너 지시 2026-09-12: 크레딧을 줄이는 것이
+    #   성능이다). 재 본 값(오너 창고 2794장·얼린 물음 20개): 한 장 195자 중 `created` 33 ·
+    #   `pinned` 15 · `headings` 14 · `links` 11 — 이 창고에서는 뒤 둘이 **거의 다 빈 배열**이라
+    #   그것만 빼도 1716 → 1272자였다. **빈 칸과 기본값은 안 보낸다.** 없는 칸은 「없다」로 읽힌다.
+    #   (위 「카페 단골」은 일부러 `pinned: True` 로 넣은 글이라 그것으로는 못 잰다 —
+    #    안 꽂힌 보통 글로 잰다.)
+    call("POST", "/eb/v1/memory",
+         {"title": "긴 회의", "text": "첫 줄은 인사다." + chr(10) * 2
+                                    + "예산은 삼천만 원으로 정했다." + chr(10) * 2 + "끝."})
+    status, 걸린 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("예산"))
+    골라 = [r for r in 걸린["results"] if r["title"] == "긴 회의"]
+    assert 골라, "방금 넣은 글을 못 찾는다"
+    한장 = 골라[0]
+    assert "pinned" not in 한장, "거짓인 pinned 를 실어 보낸다"
+    assert "kind" not in 한장, "기본값 note 를 실어 보낸다"
+    assert len(한장.get("created", "")) <= 10, f"1단이 시각까지 실어 보낸다: {한장.get('created')}"
+    assert "headings" not in 한장 and "links" not in 한장, "빈 목록을 실어 보낸다"
+    # ★ **요약은 물음에 걸린 줄을 고른다.** 첫 문장만 주면 AI 가 「이 글이 답하나」를 못 가려
+    #   2단을 여러 번 부른다 — 그게 값이다. 글자 수는 그대로인데 고를 수 있게 된다.
+    assert "삼천만" in 한장["summary"], f"요약이 물음을 안 본다: {한장['summary']}"
+
     # ★★ **꺼내기는 두 단이다.** 1단은 몸을 안 준다 — 생기다 말면 여덟 장에
     # 46,000자가 다시 나간다(재 본 값: 평균 5,814자 · 최대 184,467자).
     달 = chr(10)
@@ -1149,7 +1188,8 @@ def _self_check() -> None:
             # 새로 만든 벡터를 `semantic()` 이 보려면 찾는 쪽 캐시를 비워야 한다.
             ("self.notes._vec_cache = None", "찾는 쪽 캐시를 안 비워 새 벡터가 안 보인다"),
             # 구운 판에는 콘솔이 없다 — print 만으로는 알림이 아무 데도 안 남는다.
-            ("report.trail(말)", "알림이 기록 파일에 안 남아 구운 판에서 못 본다")):
+            ("report.trail(말)", "알림이 기록 파일에 안 남아 구운 판에서 못 본다"),
+            ):
         assert not 글 or 글.count(있어야) >= 2, f"{까닭} ({글.count(있어야)}군데)"
 
     print("server self-check 통과")

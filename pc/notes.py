@@ -544,29 +544,48 @@ def headings(body: str) -> list[tuple[int, str]]:
     return out
 
 
-def 요약(body: str, extra: dict | None = None, 길이: int = 120) -> str:
-    """한 줄로 무슨 글인지 밝힌다. 앞머리에 적힌 것이 있으면 그것, 없으면 몸의 첫 줄.
+def 요약(body: str, extra: dict | None = None, 길이: int = 120,
+       물음: str = "") -> str:
+    """한 줄로 무슨 글인지 밝힌다. **물음을 주면 그 물음에 걸린 줄**을 고른다.
 
     ★★ **꺼내기 1단에 쓰는 것이다.** 찾은 글의 몸을 통째로 주면 여덟 장에
     **46,000자(≈ 18,000토큰)** 이 나가는데(재 본 값: 평균 5,814자 · 최대 184,467자),
     그중 실제로 읽는 것은 몇 줄이다. 1단은 **무엇이 있는지**만 보이고,
     고른 구획만 2단에서 펼친다.
+
+    ★★ **`물음` 을 받는 까닭 — 같은 글자로 더 알려 준다.** 첫 문장만 주면 AI 는
+    「이 글이 내 물음에 답하나」를 못 가려서 **2단을 여러 번 부른다**(그게 값이다).
+    물음의 말이 든 줄을 대신 주면 **글자 수는 그대로인데** 고를 수 있게 된다.
+    못 찾으면 예전처럼 첫 문장으로 내려간다 — 나빠지는 자리가 없다.
     """
     for 열쇠 in ("요약", "summary", "description", "설명"):
         값 = (extra or {}).get(열쇠)
         if isinstance(값, str) and 값.strip():
             return 값.strip()[:길이]
+    줄들, 첫줄 = [], ""
     담 = False
     for 줄 in body.splitlines():
         굳 = 줄.strip()
         if 굳.startswith(("```", "~~~")):
             담 = not 담
             continue
-        # 앞머리·소제목·줄자는 「무슨 글인가」에 답하지 않는다. 몸의 첫 문장을 찾는다.
+        # 앞머리·소제목·줄자는 「무슨 글인가」에 답하지 않는다.
         if 담 or not 굳 or 굳.startswith(("#", "---", "===", ">", "|")):
             continue
-        return re.sub(r"[*`~\[\]]", "", 굳)[:길이]
-    return ""
+        굳 = re.sub(r"[*`~\[\]]", "", 굳)
+        if not 첫줄:
+            첫줄 = 굳
+        줄들.append(굳)
+    if 물음 and 줄들:
+        # 물음의 **두 글자 이상 낱말**이 몇 개나 든 줄인가. 가장 많이 든 줄을 준다.
+        낱말 = [w for w in re.split(r"[^0-9A-Za-z가-힣]+", 물음) if len(w) >= 2]
+        if 낱말:
+            점수 = [(sum(1 for w in 낱말 if w in 줄), -i, 줄)
+                    for i, 줄 in enumerate(줄들)]
+            맞은, _, 고른 = max(점수)
+            if 맞은:
+                return 고른[:길이]
+    return 첫줄[:길이]
 
 
 def parse_links(body: str) -> list[tuple[str, str]]:
