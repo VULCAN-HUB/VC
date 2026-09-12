@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import base64
 import hmac
 import json
@@ -199,6 +201,10 @@ class Handler(BaseHTTPRequestHandler):
                 갈래 = {r[0]: r[1] for r in c.execute(
                     "SELECT kind, count(*) FROM notes GROUP BY kind "
                     "ORDER BY 2 DESC LIMIT 12")}
+                # ★ **더 잘 찾는 길이 있으면 AI 도 알아야 한다.** 큰 뜻 모델을 받으면
+                #   같은 창고에서 찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개).
+                #   AI 가 이걸 보면 오너에게 알려 줄 수 있다 — 안 알려 주면 있는 줄도 모른다.
+                큰모델있나 = (paths.models_dir() / "e5-base" / "model.onnx").is_file()
                 몸["store"] = {
                     "notes": c.execute("SELECT count(*) FROM notes").fetchone()[0],
                     "kinds": 갈래,
@@ -211,7 +217,11 @@ class Handler(BaseHTTPRequestHandler):
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
                             "갈래를 모르면 좁히지 마라 — 틀리게 좁히면 크게 잃는다. "
                             "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다. "
-                            "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다."),
+                            "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다."
+                            + ("" if 큰모델있나 else
+                               " ※ 더 잘 찾으려면 큰 뜻 모델 e5-base 를 받으라고 "
+                               "사람에게 알려라(화면 「받을 모델」 칸, 296MB). "
+                               "[잰 것] 같은 창고에서 찾은 물음 10 → 12.")),
                 }
             except Exception:
                 pass        # 판을 못 만들어도 인사는 해야 한다
@@ -997,6 +1007,21 @@ def _self_check() -> None:
     #   그래서 **적힌 길은 다 실제로 돌아야 한다** — 여기서 한 번씩 불러 본다.
     for 길 in ("brief=1", "q=", "k="):
         assert 길 in 판["how"], f"안내에 「{길}」 이 없다 — 만든 길을 AI 가 모른다"
+    # ★★ **큰 뜻 모델이 없으면 그 사실을 AI 에게 말해야 한다.** 받으면 같은 창고에서
+    #   찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개). AI 가 이걸 봐야
+    #   사람에게 알려 줄 수 있다 — **있는 줄도 모르면 없는 것과 같다.**
+    #   이 PC 에는 그 모델이 있을 수 있으니 **없는 자리**를 만들어 잰다.
+    옛모델자리 = os.environ.get("VC_MODELS")
+    with tempfile.TemporaryDirectory() as 빈자리:
+        os.environ["VC_MODELS"] = 빈자리
+        _, 큰것없을때 = call("GET", "/eb/v1/hello")
+        assert "e5-base" in (큰것없을때.get("store") or {}).get("how", ""),             f"큰 모델이 없는데 알려 주지 않는다: {(큰것없을때.get('store') or {}).get('how', '')}"
+    if 옛모델자리 is None:
+        os.environ.pop("VC_MODELS", None)
+    else:
+        os.environ["VC_MODELS"] = 옛모델자리
+    _, 큰것있을때 = call("GET", "/eb/v1/hello")
+    assert "e5-base" not in (큰것있을때.get("store") or {}).get("how", "")         or not (paths.models_dir() / "e5-base" / "model.onnx").is_file(),         "이미 받았는데 또 받으라고 한다"
     st_b, _ = call("GET", "/eb/v1/memory/search?brief=1&q=" + urllib.parse.quote("VC"))
     assert st_b == 200, f"안내가 brief=1 을 말하는데 안 돈다: {st_b}"
     assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
