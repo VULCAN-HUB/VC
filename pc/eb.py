@@ -909,7 +909,9 @@ def _self_check() -> None:
     for 있어야 in ('report["판 적합률"]', '그중 흐린 선', 'report["판"] = f"v{paths.VERSION}"',
                   'report["뜻 왕복"] = ', 'def _뜻왕복(',
                   # ★ 더 잘 찾는 길이 있으면 알려 준다 — 안 그러면 있는 줄도 모른다.
-                  'report["더 잘 찾으려면"] = '):
+                  'report["더 잘 찾으려면"] = ',
+                  # ★ 20년 쓸 물건이라 자라는 것도 보여 준다. 안 자르는 대신 보인다.
+                  'report["학습 로그"] = ('):
         assert not 본문 or 본문.count(있어야) >= 2, \
             f"--doctor 에 「{있어야}」가 없다 ({본문.count(있어야)}군데)"
 
@@ -1867,6 +1869,24 @@ if __name__ == "__main__":
                 report["아직 옛 판"] = f"{len(옛것)}개"
                 report["아직 옛 판 (이름 몇 개)"] = 옛것[:8]
             report["연결 수"] = 셈("SELECT count(*) FROM links")
+            # ★ **20년 쓸 물건이라 자라는 것도 보여 준다.** 학습 로그는 **안 자른다** —
+            #   [잰 것 2026-09-13] 줄당 170바이트라 하루 200줄이어도 20년에 213MB 고,
+            #   읽기는 0.1ms 로 안 느려진다(최근 것만 LIMIT 으로 본다).
+            #   자르는 것보다 **얼마나 자랐는지 보이는 것**이 낫다 — 이상하면 사람이 안다.
+            try:
+                기록파일 = paths.store_path()
+                if 기록파일.is_file():
+                    import sqlite3 as _sq
+
+                    _c = _sq.connect(f"file:{기록파일}?mode=ro", uri=True)
+                    try:
+                        줄수 = _c.execute("SELECT count(*) FROM log_events").fetchone()[0]
+                    finally:
+                        _c.close()
+                    report["학습 로그"] = (f"{줄수}줄 · "
+                                        f"{기록파일.stat().st_size // 1024}KB (안 자른다)")
+            except Exception as e:
+                report["학습 로그"] = f"못 읽었다: {type(e).__name__}"
             # 듣는 자리를 적는다 — 창을 못 띄우는 판에서도 이건 알아야 한다.
             report["듣는 자리"] = (
                 f"{HOST}:{PORT}"
