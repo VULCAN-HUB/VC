@@ -1486,6 +1486,12 @@ class Notes:
         #   **이미 있는 파일의 제목이 나와 다르면** 지문 꼬리를 붙여 갈라 놓는다.
         #   ※ `자리.stem` 을 보면 안 된다 — 그건 **내가 적은 글자**지 파일의 진짜 이름이
         #     아니다. 폴더에서 대소문자를 무시하고 맞는 **실제 이름**을 찾아 견준다.
+        #   ★★ **폴더를 늘 훑으면 안 된다.** 처음엔 새 글마다 `folder.glob("*.md")` 를 돌았는데,
+        #     같은 연/월 폴더에 글이 쌓이자 **한 장 쓰는 데 17ms → 785ms**(2만 장 시험에서 45배)가
+        #     됐다. 쓰기가 O(장수)가 된 것이다. 윈도우는 이름의 대소문자를 안 가리므로
+        #     **`exists()` 가 먼저 True 를 준다** — 그때만 폴더를 훑어 진짜 이름을 본다.
+        if not 자리.exists():
+            return 자리
         있는것 = next((f for f in folder.glob("*.md")
                      if f.name.lower() == 자리.name.lower()), None)
         if 있는것 is not None and 있는것.name != 자리.name:
@@ -2600,6 +2606,19 @@ def _self_check() -> None:
         n.write(Note(title="alpha", body="작은 글"))
         assert n.read("Alpha").body.startswith("큰"), "대소문자만 다른 제목이 서로를 덮는다"
         assert n.read("alpha").body.startswith("작은"), "대소문자만 다른 제목이 서로를 덮는다"
+        # ★★ **그 막이가 쓰기를 O(장수)로 만들면 안 된다.** 처음엔 새 글마다 폴더를 훑어
+        #   2만 장 시험에서 한 장 쓰기가 17ms → 785ms(45배)가 됐다. `exists()` 로 먼저 거른다.
+        import time as _t
+
+        많이 = n.root / "2026" / "09"
+        많이.mkdir(parents=True, exist_ok=True)
+        for _i in range(300):
+            (많이 / f"채움 {_i}.md").write_text("채우는 글", encoding="utf-8")
+        t0 = _t.perf_counter()
+        for _i in range(20):
+            n.path_of(f"아주 새 글 {_i}")
+        든시간 = (_t.perf_counter() - t0) / 20
+        assert 든시간 < 0.01, f"새 글 자리 찾기가 폴더를 훑는다: 한 번에 {든시간 * 1000:.1f}ms"
         # ★★ **밖에서 지운 글이 검색에 계속 걸렸다.** 옵시디언·탐색기로 지우면 색인은
         #   다음 훑기 전까지 그대로라, 검색은 주는데 펼치면 없다 — AI 는 찾은 줄 알고
         #   2단을 부르고 800자를 버린다. 내놓기 직전에 확인하고 색인에서도 지운다.
