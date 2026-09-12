@@ -2211,8 +2211,12 @@ def _self_check() -> None:
     if 본문:
         import collections
 
-        선언 = re.findall(r"^(?:class |def )?([A-Za-z_][A-Za-z_0-9]*)\s*(?:=[^=]|\()",
-                         본문, re.M)
+        # `이름(` 은 **부르는 것**이라 정의가 아니다 — `def`/`class` 와 맨 왼쪽 대입만 센다.
+        # `_` 는 버리는 이름이라 여러 번 나와도 된다. 두 글자 이상만 본다.
+        선언 = [이름 for 이름 in
+               (re.findall(r"^(?:class|def)\s+([A-Za-z_][A-Za-z_0-9]*)", 본문, re.M)
+                + re.findall(r"^([A-Z][A-Z_0-9]+)\s*=[^=]", 본문, re.M))
+               if 이름.strip("_")]
         겹친 = sorted(이름 for 이름, 수 in collections.Counter(선언).items() if 수 > 1)
         assert not 겹친, f"같은 이름을 두 번 정의했다 — 앞엣것은 죽은 코드다: {겹친}"
 
