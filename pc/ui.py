@@ -1422,7 +1422,8 @@ class MainWindow(QWidget):
                     break
 
         hit = self.notes.resolve(name) if name else None
-        if what in ("열기", "곁에", "덧붙이기", "이름바꾸기", "지우기", "되돌리기"):
+        if what in ("열기", "곁에", "덧붙이기", "이름바꾸기", "지우기", "되돌리기",
+                    "고정", "고정풀기"):
             if hit is None and name:
                 # **없는 것을 시키면 지어내지 않는다.** 찾아 주는 편이 낫다.
                 return False
@@ -1455,6 +1456,21 @@ class MainWindow(QWidget):
             self._undo = ("이름바꾸기", hit, extra)
             return done(f"'{hit}'{orders.tail(hit, '을/를')} "
                         f"'{extra}'{orders.tail(extra, '으로/로')} 바꿨어.", [extra])
+        # ★ **고정은 결정 22 로 「늘 먼저」 나오는 힘인데 말로 시키는 길이 없었다** —
+        #   화면 단추로만 됐다(옵시디언의 star 자리다). 되돌리기 쉬운 일이라 안 되묻는다.
+        if what in ("고정", "고정풀기"):
+            쪽 = self.notes.read(hit) if hit else None
+            if 쪽 is None:
+                return False
+            켬 = what == "고정"
+            if 쪽.pinned == 켬:
+                return done(f"'{hit}'{orders.tail(hit, '은/는')} 이미 "
+                            + ("고정돼 있어." if 켬 else "고정 안 돼 있어."))
+            쪽.pinned = 켬
+            self.notes.write(쪽)
+            self.refresh()
+            return done(f"'{hit}'{orders.tail(hit, '을/를')} "
+                        + ("고정했어. 이제 늘 먼저 나와." if 켬 else "고정 풀었어."), [hit])
         if what == "지우기":
             # **되돌릴 수 없다.** 시킨 말이 맞는지 눈으로 보고 누르게 한다.
             if not self._agreed("지울까?", orders.spoken(order), "지운다"):
