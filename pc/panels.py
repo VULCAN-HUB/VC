@@ -781,6 +781,20 @@ class Indexer(QThread):
         self.notes = notes.__class__(notes.root, notes.index_path, index_now=False)
         self.again = False   # 도는 중에 또 부탁받았다
 
+    def 뜻모델바꿈(self, 새자리: str) -> None:
+        """뜻 모델이 바뀌었다. **다음 훑기에 새 모델로 다시 만든다.**
+
+        ★★ 예전에는 `model_dir` 을 **만들 때 한 번** 정하고 `_embed_tried` 로 잠갔다 —
+        화면에서 뜻 모델을 바꿔도, **다시 켜도** 옛 모델을 계속 썼다(고르는 칸을 낸
+        그날 바로 드러났다). 크기가 다르면 `use_embedder` 가 옛 벡터를 버리므로
+        **처음부터 다시 만든다** — 2794장에 3분쯤이다. 그 말은 부르는 쪽이 한다.
+        """
+        if 새자리 and 새자리 != self.model_dir:
+            self.model_dir = 새자리
+            self._embed_tried = False
+            self.notes.use_embedder(None)      # 옛 임베더를 놓는다
+            self.ask()
+
     def run(self) -> None:
         while True:
             self.again = False
@@ -933,6 +947,7 @@ class ModelPicker(HudPanel):
 
     ROLE_LABEL = {"chat": "글자", "vision": "사진", "stt": "받아쓰기", "voice": "목소리",
                   "meaning": "뜻 검색"}
+    meaning_changed = pyqtSignal(str)      # 뜻 모델을 바꿨다 — 새 모델 자리
 
     def __init__(self, link: "ServerLink", say: Callable[[str], None]) -> None:
         super().__init__(corner=8)
@@ -1068,8 +1083,15 @@ class ModelPicker(HudPanel):
             self.refresh()
             return
         label = self.ROLE_LABEL[role]
-        self.say(f"{label} 모델을 {name or '자동'}(으)로 바꿨어."
-                 " 받아쓰기·목소리는 다시 켤 때 적용돼.")
+        if role == "meaning":
+            # ★ **뜻 모델은 바꾸면 벡터를 처음부터 다시 만든다.** 크기가 달라 섞일 수
+            #   없어서다. 2794장에 3분쯤 — 그 말을 안 하면 「멈췄나」 싶다.
+            self.meaning_changed.emit(str(paths.meaning_dir(name)))
+            self.say(f"{label} 모델을 {name or '자동'}(으)로 바꿨어."
+                     " 뜻 벡터를 처음부터 다시 만들어 — 글이 많으면 몇 분 걸려.")
+        else:
+            self.say(f"{label} 모델을 {name or '자동'}(으)로 바꿨어."
+                     " 받아쓰기·목소리는 다시 켤 때 적용돼.")
         self.refresh()
         self.refresh_downloads()
         # 받는 동안 진행률이 움직여야 멈춘 건지 도는 건지 안다.
@@ -1498,6 +1520,19 @@ def _self_check() -> None:
     res.show_hits([("보통 글", "기본 갈래는 안 적는다", "", "note")], "기본")
     글자 = " ".join(w.text() for w in res.items if hasattr(w, "text"))
     assert "note ·" not in 글자, f"기본 갈래까지 적어 줄만 길어진다: {글자!r}"
+
+    # ★★ **뜻 모델을 바꾸면 훑는 실이 새 모델을 써야 한다.** 예전에는 `model_dir` 을
+    #   만들 때 한 번 정하고 `_embed_tried` 로 잠가서, 바꿔도 **다시 켜도** 옛 모델을
+    #   계속 썼다 — 고르는 칸만 있고 아무 일도 안 일어났다.
+    import tempfile as _t
+    with _t.TemporaryDirectory() as _tmp:
+        from notes import Notes as _N
+        idx = Indexer(_N(Path(_tmp) / "n", ":memory:", index_now=False), model_dir="옛자리")
+        idx._embed_tried = True
+        idx.뜻모델바꿈("옛자리")
+        assert idx._embed_tried, "같은 자리인데 괜히 다시 만든다"
+        idx.뜻모델바꿈("새자리")
+        assert idx.model_dir == "새자리" and not idx._embed_tried,             "뜻 모델을 바꿨는데 훑는 실이 옛 모델을 그대로 쓴다"
 
     res.show_hits([], "")
     assert res.rows.count() == 0, "다시 그렸는데 옛 결과가 남았다"

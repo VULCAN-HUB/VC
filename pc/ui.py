@@ -647,6 +647,9 @@ class MainWindow(QWidget):
         self.feed = ActivityFeed()
         # 쓸 모델을 고르는 칸. 사양이 다른 PC에서도 각자 맞게 쓴다(결정 42).
         self.models = ModelPicker(self.link, lambda t: self.report(t, [ROOT]))
+        # 뜻 모델을 바꾸면 훑는 실이 새 모델로 벡터를 다시 만든다 — 안 이으면
+        # 고르는 칸만 있고 **아무 일도 안 일어난다**(그 칸을 낸 날 바로 드러났다).
+        self.models.meaning_changed.connect(lambda 자리: self.indexer.뜻모델바꿈(자리))
 
         # 외부 PC가 붙으려 할 때만 뜬다. 폰이 없거나 안 들고 있을 때 여기서 승인한다.
         self.gate_card = RemoteGateCard(self.link, lambda t: self.report(t, [ROOT]))
