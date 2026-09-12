@@ -176,6 +176,24 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- 라우팅 ---------------------------------------------------------
 
+    # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
+    #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
+    #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename",
+                  "/eb/v1/ask", "/eb/v1/log")
+
+    def _길없다(self, path: str) -> dict:
+        답 = {"error": "not found", "path": path}
+        딴쪽 = self.POST_PATHS if self.command == "GET" else self.GET_PATHS
+        if path in 딴쪽:
+            답["hint"] = ("그 길은 POST 다" if self.command == "GET" else "그 길은 GET 이다")
+            return 답
+        이쪽 = self.GET_PATHS if self.command == "GET" else self.POST_PATHS
+        가까운 = [c for c in 이쪽 if c.startswith(path.rsplit("/", 1)[0])]
+        답["paths"] = 가까운 or list(이쪽)
+        return 답
+
     def do_GET(self) -> None:
         url = urlparse(self.path)
 
@@ -252,6 +270,13 @@ class Handler(BaseHTTPRequestHandler):
             # 예전처럼 몸까지 받으려면 `full=1` 을 붙인다 — 붙여 쓰던 쪽을 안 깨린다.
             args = parse_qs(url.query)
             q = (args.get("q") or [""])[0]
+            # ★ **딴 이름으로 물어도 받아 준다.** `query=`·`text=`·`search=` 로 부르면
+            #   전에는 **조용히 빈 검색**이 돌아 창고 앞머리를 줬다 — AI 는 그것이 답인 줄 안다.
+            if not q:
+                for 딴이름 in ("query", "text", "search", "찾기"):
+                    if args.get(딴이름):
+                        q = args[딴이름][0]
+                        break
             # ★★ **기본을 다섯으로 둔다.** 여덟을 주면 한 번에 1272자가 나가는데,
             #   오너 창고(2794장)·얼린 물음 20개로 재 보니 **6~8등에 정답이 하나도 없었다**
             #   — 다섯으로 줄여도 맞힌 물음 수가 그대로(6/20)이고 글자만 802자로 준다(37% ↓).
@@ -445,7 +470,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": s.id, "from": s.from_ip, "bound": s.bound_ip, "log": s.log}
                 for s in self.server.gate.active()]})
 
-        return self._send(404, {"error": "not found"})
+        return self._send(404, self._길없다(url.path))
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
@@ -650,7 +675,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "bad decision"})
             return self._decide(parts[3], decision)
 
-        return self._send(404, {"error": "not found"})
+        return self._send(404, self._길없다(url.path))
 
     # --- 성장 루프 (결정 17·18) -----------------------------------------
 
@@ -1309,6 +1334,14 @@ def _self_check() -> None:
     상태, 따라감 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("가리키는 글"))
     assert "[[새 이름]]" in 따라감["text"], f"가리키던 링크를 안 따라 고쳤다: {따라감['text']}"
     assert call("POST", "/eb/v1/memory/rename", {"title": "새 이름", "to": "가리키는 글"})[0] == 409
+
+    # ★★ **틀렸을 때 무엇이 틀렸는지 말해 준다.** 안 그러면 AI 가 짐작으로 다시 두드린다.
+    상태, 다른이름 = call("GET", "/eb/v1/memory/search?query=" + urllib.parse.quote("조이는지"))
+    assert 상태 == 200 and 다른이름["results"], "q 를 딴 이름으로 줬더니 빈 검색이 돌았다"
+    상태, 길틀림 = call("GET", "/eb/v1/memory/delete?title=x")
+    assert 상태 == 404 and "POST" in (길틀림.get("hint") or ""), f"메서드가 틀렸다고 안 말한다: {길틀림}"
+    상태, 없는길 = call("GET", "/eb/v1/memory/all")
+    assert 상태 == 404 and 없는길.get("paths"), f"있는 길을 안 알려 준다: {없는길}"
 
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
