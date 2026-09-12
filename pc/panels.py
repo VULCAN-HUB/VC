@@ -696,7 +696,20 @@ class Results(QWidget):
                 남은 = 벗김[len(title):].lstrip(" 	:·-—") 
                 if 남은.strip():          # 제목뿐인 글은 그대로 둔다. 지우면 빈 줄만 남는다
                     body = 남은
+        # ★★ **물음을 통째로 찾으면 긴 물음은 절대 안 맞는다.** 사람이 문장으로 물으면
+        #   그 글자열이 본문에 그대로 있을 리 없어, 늘 앞머리만 보여 주고 있었다 —
+        #   「걸린 낱말 둘레만 잘라 온다」는 이 함수의 뜻이 긴 물음에서는 죽어 있었다.
+        #   통째로 먼저 보고, 없으면 **긴 낱말부터** 찾는다(긴 것이 더 또렷하다).
         at = body.lower().find(query.lower()) if query else -1
+        if at < 0 and query:
+            낮 = body.lower()
+            from notes import 물음낱말
+
+            for 말 in 물음낱말(query):
+                at = 낮.find(말.lower())
+                if at >= 0:
+                    query = 말       # 아래에서 이 낱말 둘레로 자른다
+                    break
         if at < 0:
             return " ".join(body[:width * 4].split())[:width] + ("…" if len(body) > width else "")
         # 걸린 낱말이 발췌 앞쪽에 오게 잡는다. 가운데에 두면 잘라낼 때 밀려 나간다.
@@ -1458,6 +1471,12 @@ def _self_check() -> None:
     assert len(res.items) == 4, "제목과 걸린 줄이 짝으로 안 나온다"
     # 걸린 낱말 둘레를 잘라 온다 — 앞머리만 주면 왜 걸렸는지 모른다.
     assert "견적서" in res.snippet("가" * 200 + " 견적서 보냄 " + "나" * 200, "견적서")
+    # ★ **긴 물음으로도 걸린 자리를 집어야 한다.** 예전에는 물음을 통째로 찾아서
+    #   문장으로 물으면 늘 앞머리만 보여 줬다 — 「걸린 낱말 둘레」라는 뜻이 죽어 있었다.
+    #   조사도 넘는다: 물음 「견적서를」 · 본문 「견적서」.
+    긴것 = res.snippet("가" * 200 + " 견적서 보냄 " + "나" * 200,
+                      "지난주에 보낸 견적서를 어디에 뒀나")
+    assert "견적서" in 긴것, f"긴 물음에서 걸린 자리를 못 집는다: {긴것}"
     assert res.snippet("짧은 글", "없는말") == "짧은 글"
     got = []
     res.picked.connect(got.append)

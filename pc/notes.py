@@ -544,6 +544,27 @@ def headings(body: str) -> list[tuple[int, str]]:
     return out
 
 
+def 물음낱말(물음: str) -> list[str]:
+    """물음에서 **찾을 만한 낱말**을 뽑는다. 긴 것부터.
+
+    ★★ **한국어는 조사가 붙어서 글자 그대로는 거의 안 맞는다.** 물음은 「예산을」인데
+    본문은 「예산은」이라 `in` 이 거짓이다. 그래서 세 글자 이상인 낱말은 **끝 한 글자를
+    뗀 것도** 같이 준다 — 조사는 대개 한 글자다(은·는·이·가·을·를·의·에·도).
+    형태소 분석기를 들이지 않는 이유: 사전과 짐이 늘고, 여기서 필요한 것은 그만큼이 아니다.
+
+    한 곳에서 정한다 — 요약 고르기(AI 1단)와 발췌(사람 화면)가 **같은 규칙**을 써야
+    「화면에는 보이는데 AI 는 못 본다」가 안 생긴다.
+    """
+    out: list[str] = []
+    for w in re.split(r"[^0-9A-Za-z가-힣]+", 물음 or ""):
+        if len(w) >= 2:
+            out.append(w)
+            if len(w) >= 3:
+                out.append(w[:-1])      # 조사 한 글자를 뗀 것
+    # 긴 것이 더 또렷하다. 같은 길이면 먼저 나온 것.
+    return sorted(dict.fromkeys(out), key=len, reverse=True)
+
+
 def 요약(body: str, extra: dict | None = None, 길이: int = 120,
        물음: str = "") -> str:
     """한 줄로 무슨 글인지 밝힌다. **물음을 주면 그 물음에 걸린 줄**을 고른다.
@@ -578,7 +599,7 @@ def 요약(body: str, extra: dict | None = None, 길이: int = 120,
         줄들.append(굳)
     if 물음 and 줄들:
         # 물음의 **두 글자 이상 낱말**이 몇 개나 든 줄인가. 가장 많이 든 줄을 준다.
-        낱말 = [w for w in re.split(r"[^0-9A-Za-z가-힣]+", 물음) if len(w) >= 2]
+        낱말 = 물음낱말(물음)
         if 낱말:
             점수 = [(sum(1 for w in 낱말 if w in 줄), -i, 줄)
                     for i, 줄 in enumerate(줄들)]
@@ -2694,6 +2715,11 @@ def _self_check() -> None:
     card = meaning_card("회의록", "가" * 5000)
     assert card.startswith("회의록" + chr(10))
     assert len(card) == len("회의록") + 1 + CARD_CHARS, len(card)
+    # ★★ **한국어는 조사가 붙어서 글자 그대로는 거의 안 맞는다.** 물음은 「예산을」인데
+    #   본문은 「예산은」이라 `in` 이 거짓이다 — 끝 한 글자를 뗀 것도 같이 본다.
+    assert "예산" in 물음낱말("이번 회의에서 예산을 얼마로 정했나"), 물음낱말("예산을")
+    assert 요약("첫 줄은 인사다." + chr(10) * 2 + "예산은 삼천만 원으로 정했다.",
+              물음="이번 회의에서 예산을 얼마로 정했나").startswith("예산은"),         "요약이 물음에 걸린 줄을 못 고른다 — 조사 때문에 어긋난다"
     assert meaning_card("이름만", "") == "이름만"
     assert meaning_card("빈몸", "   ") == "빈몸"
 
