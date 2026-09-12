@@ -33,3 +33,5 @@ pc/version.txt
 # 자체점검을 소스 폴더에서 돌리면 뿌리에 떨어지는 부스러기.
 /data/
 /eb_config.json
+# 소스로 돌릴 때의 설정 — 열쇠(pair_token)가 들어 있다. 첫 커밋부터 따라가고 있었다.
+pc/eb_config.json

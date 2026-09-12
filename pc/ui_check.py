@@ -1362,10 +1362,22 @@ def run() -> None:
     # ★ **키운 글자가 다음에 켤 때 그대로여야 한다.** 켤 때마다 다시 키워야 하면 있으나 마나다.
     import paths as _paths
 
-    win.글자키우기(0.2)
-    assert abs(_paths.load_config().get("글자배율", 0) - 1.2) < 0.001,         f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
-    win.글자키우기(0)                     # 제자리로
-    assert abs(_theme.배율() - 1.0) < 0.001, _theme.배율()
+    # ★★ **검사는 진짜 설정을 건드리면 안 된다.** 처음엔 기록 자리를 안 바꾸고 불러서
+    #   소스 폴더의 `pc/eb_config.json`(git 이 따라가는 파일)에 `글자배율` 이 써졌고
+    #   **커밋에 섞였다.** 잠깐 쓰는 자리로 돌려놓고 잰다.
+    with tempfile.TemporaryDirectory() as _잠깐:
+        _옛 = os.environ.get("VC_DATA")
+        os.environ["VC_DATA"] = _잠깐
+        try:
+            win.글자키우기(0.2)
+            assert abs(_paths.load_config().get("글자배율", 0) - 1.2) < 0.001,                 f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
+            win.글자키우기(0)                     # 제자리로
+            assert abs(_theme.배율() - 1.0) < 0.001, _theme.배율()
+        finally:
+            if _옛 is None:
+                os.environ.pop("VC_DATA", None)
+            else:
+                os.environ["VC_DATA"] = _옛
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다
