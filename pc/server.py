@@ -234,7 +234,9 @@ class Handler(BaseHTTPRequestHandler):
                             "가장 많은 갈래가 밀어내던 것이라 목록 밖에 있던 글이 1~4등으로 "
                             "올라온다 [잰 것: 20물음 중 셋]. 틀린 갈래면 0건이니 다른 갈래로 한 번 더. "
                             "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다. "
-                            "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다."
+                            "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
+                            "잘못 넣은 것은 memory/delete 에 POST(되돌릴 자리를 같이 준다), "
+                            "제목 고치기는 memory/rename(가리키던 링크도 같이 고친다)."
                             + ("" if 큰모델있나 else
                                " ※ 더 잘 찾으려면 큰 뜻 모델 e5-base 를 받으라고 "
                                "사람에게 알려라(화면 「받을 모델」 칸, 296MB). "
@@ -601,6 +603,43 @@ class Handler(BaseHTTPRequestHandler):
                                   "chars": len(old.body),
                                   "how": "그 파일의 몸을 읽어 mode=replace · force 로 다시 쓴다"}
             return self._send(201, 답)
+
+        # ★★ **AI 가 제가 잘못 쓴 글을 못 지우고, 제목도 못 고쳤다.** 화면에서는 둘 다 되는데
+        #   문이 없었다 — 옵시디언에서는 당연한 일이고, 창고가 AI 의 바깥 기억이라면
+        #   **잘못 넣은 것을 치우는 길**이 없는 쪽이 이상하다.
+        #   지우기는 **되돌릴 수 있다**(지우기 전에 한 판 남긴다) — 그래서 승인 없이 연다.
+        #   이름 바꾸기는 **가리키던 링크까지 따라 고친다**(`rename`) — 옵시디언과 같다.
+        if url.path == "/eb/v1/memory/delete":
+            title = body.get("title", "")
+            if not isinstance(title, str) or not title.strip():
+                return self._send(400, {"error": "title required"})
+            title = title.strip()
+            지난판 = self.server.notes.history(title)
+            if not self.server.notes.delete(title):
+                가까운 = self.server.notes.titles_like(title, k=5)
+                답 = {"error": "no such note", "title": title}
+                if 가까운:
+                    답["did_you_mean"] = 가까운
+                return self._send(404, 답)
+            답 = {"title": title, "deleted": True}
+            지난판 = self.server.notes.history(title) or 지난판
+            if 지난판:
+                언제, 파일 = 지난판[0]
+                답["undo"] = {"when": 언제, "path": str(파일),
+                              "how": "그 파일의 몸을 읽어 memory 에 다시 쓴다"}
+            return self._send(200, 답)
+
+        if url.path == "/eb/v1/memory/rename":
+            old_t, new_t = body.get("title", ""), body.get("to", "")
+            if not isinstance(old_t, str) or not isinstance(new_t, str)                     or not old_t.strip() or not new_t.strip():
+                return self._send(400, {"error": "title and to required"})
+            old_t, new_t = old_t.strip(), new_t.strip()
+            if self.server.notes.read(new_t) is not None:
+                return self._send(409, {"error": "그 제목은 이미 있다", "title": new_t})
+            if not self.server.notes.rename(old_t, new_t):
+                return self._send(404, {"error": "no such note", "title": old_t})
+            return self._send(200, {"title": new_t, "was": old_t,
+                                    "note": "가리키던 [[링크]]도 같이 고쳤다"})
 
         if url.path == "/eb/v1/analyze":
             return self._analyze()
@@ -1254,6 +1293,24 @@ def _self_check() -> None:
                  {"title": None, "text": "없는 제목"}):
         상태, 답 = call("POST", "/eb/v1/memory", 나쁜몸)
         assert 상태 == 400, f"글자 아닌 것에 400 을 안 준다: {상태} {답}"
+
+    # ★★ **잘못 넣은 것을 치우는 길**과 **제목 고치는 길**. 화면에서는 둘 다 되는데 문이 없었다 —
+    #   창고가 AI 의 바깥 기억이라면 잘못 넣은 것을 못 치우는 쪽이 이상하다.
+    assert call("POST", "/eb/v1/memory", {"title": "지울 글", "text": "잘못 넣었다"})[0] == 201
+    상태, 지움 = call("POST", "/eb/v1/memory/delete", {"title": "지울 글"})
+    assert 상태 == 200 and 지움.get("deleted"), 지움
+    assert 지움.get("undo"), "지우고 되돌릴 자리를 안 알려 준다"
+    assert call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("지울 글"))[0] == 404
+    assert call("POST", "/eb/v1/memory/delete", {"title": "없는 글이다"})[0] == 404
+    assert call("POST", "/eb/v1/memory/delete", {"title": "  "})[0] == 400
+
+    assert call("POST", "/eb/v1/memory", {"title": "옛 이름", "text": "몸"})[0] == 201
+    assert call("POST", "/eb/v1/memory", {"title": "가리키는 글", "text": "여기 [[옛 이름]] 본다"})[0] == 201
+    상태, 바꿈 = call("POST", "/eb/v1/memory/rename", {"title": "옛 이름", "to": "새 이름"})
+    assert 상태 == 200, 바꿈
+    상태, 따라감 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("가리키는 글"))
+    assert "[[새 이름]]" in 따라감["text"], f"가리키던 링크를 안 따라 고쳤다: {따라감['text']}"
+    assert call("POST", "/eb/v1/memory/rename", {"title": "새 이름", "to": "가리키는 글"})[0] == 409
 
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
