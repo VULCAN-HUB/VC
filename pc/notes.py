@@ -2114,6 +2114,20 @@ class Notes:
             out.append((r["src"], line))
         return sorted(out)
 
+    def 외딴것(self, k: int = 30) -> list[str]:
+        """아무 데도 안 이어진 글들. **옵시디언의 「고아 노트」** 자리다.
+
+        이 창고는 AI 가 3천 장을 붓는 물건이라 외딴 글이 쌓이기 쉽다 —
+        이어지지 않은 글은 그물에서 빠져 뜻 검색 말고는 닿을 길이 없다.
+        고정한 것은 뺀다(사람이 일부러 세워 둔 것이다).
+        """
+        return [r[0] for r in self.conn.execute(
+            "SELECT n.title FROM notes n WHERE n.pinned = 0"
+            " AND NOT EXISTS (SELECT 1 FROM links l WHERE l.src = n.title OR l.dst = n.title)"
+            " AND NOT EXISTS (SELECT 1 FROM aliases a JOIN links l2 ON l2.dst = a.alias"
+            "                 WHERE a.title = n.title)"
+            " ORDER BY n.mtime DESC LIMIT ?", (k,))]
+
     def unresolved(self) -> list[tuple[str, int]]:
         """아무 데도 안 닿는 링크와 그것을 가리키는 항목 수.
 
@@ -2462,6 +2476,15 @@ def _self_check() -> None:
         head = n.conn.execute(
             "SELECT heading FROM links WHERE src = ? AND dst = ?", ("아침", "지하철")).fetchone()
         assert head["heading"] == "2호선", head["heading"]
+
+        # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
+        #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
+        n.write(Note(title="외톨이", body="아무것도 안 가리킨다"))
+        n.write(Note(title="세워 둔 것", body="외딴데 고정했다", pinned=True))
+        외딴 = n.외딴것()
+        assert "외톨이" in 외딴, f"외딴 글을 못 찾는다: {외딴}"
+        assert "세워 둔 것" not in 외딴, "고정한 것까지 외딴 것으로 센다"
+        assert "아침" not in 외딴, "이어진 글을 외딴 것으로 센다"
 
         # 아직 없는 항목을 가리키는 링크 — 사람이 쓰다 만 자리다.
         assert n.unresolved() == [("지하철", 1)], n.unresolved()

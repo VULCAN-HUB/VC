@@ -1404,6 +1404,17 @@ class MainWindow(QWidget):
             self.graph.focus_on([hit] + near, zoom=FOCUS_ZOOM)
             return done(f"'{hit}'에 이어진 것 {len(near)}개야.", [hit] + near[:2])
 
+        # ★ **외딴 글**(옵시디언의 「고아 노트」). 이 창고는 AI 가 3천 장을 붓는 물건이라
+        #   안 이어진 글이 쌓이기 쉽고, 그물에서 빠지면 닿을 길이 거의 없다.
+        if what == "외딴것":
+            외딴 = self.notes.외딴것()
+            if not 외딴:
+                return done("외딴 글은 없어. 다 이어져 있어.")
+            self.show_results([(t, (self.notes.read(t).body if self.notes.read(t) else ""),
+                                "", "") for t in 외딴], "")
+            return done(f"아무 데도 안 이어진 글 {len(외딴)}개야. 이어 두면 나중에 찾기 쉬워.",
+                        외딴[:3])
+
         # 여기부터는 대상이 있어야 한다.
         if what == "만들기":
             if self.notes.read(name) is not None:
