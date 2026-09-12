@@ -245,6 +245,10 @@ class Handler(BaseHTTPRequestHandler):
                 몸["store"] = {
                     "notes": c.execute("SELECT count(*) FROM notes").fetchone()[0],
                     "kinds": 갈래,
+                    # ★ 하다 만 이름 바꾸기가 있으면 **링크가 반쯤 끊긴 상태**다.
+                    #   창만 그것을 봤다 — 서버로만 쓰는 AI 는 모른 채 그물을 믿는다.
+                    **({"broken_rename": " → ".join(하다만)}
+                       if (하다만 := self.server.notes.이름바꾸다만것()) else {}),
                     "tags": [r[0] for r in c.execute(
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
@@ -1368,6 +1372,18 @@ def _self_check() -> None:
     상태, 따라감 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("가리키는 글"))
     assert "[[새 이름]]" in 따라감["text"], f"가리키던 링크를 안 따라 고쳤다: {따라감['text']}"
     assert call("POST", "/eb/v1/memory/rename", {"title": "새 이름", "to": "가리키는 글"})[0] == 409
+
+    # ★ **하다 만 이름 바꾸기**는 링크가 반쯤 끊긴 상태다. 창만 그것을 봤다 —
+    #   서버로만 쓰는 AI 는 모른 채 그물을 믿는다. 인사에 실어야 알 수 있다.
+    (note_store.root.parent / "vc-이름바꾸다만것.txt").write_text(
+        "옛 이름" + chr(9) + "새 이름" + chr(10), encoding="utf-8")
+    try:
+        _, 하다만인사 = call("GET", "/eb/v1/hello")
+        assert (하다만인사.get("store") or {}).get("broken_rename"),             f"하다 만 이름 바꾸기를 안 알려 준다: {하다만인사.get('store')}"
+    finally:
+        (note_store.root.parent / "vc-이름바꾸다만것.txt").unlink(missing_ok=True)
+    _, 멀쩡인사 = call("GET", "/eb/v1/hello")
+    assert "broken_rename" not in (멀쩡인사.get("store") or {}), "멀쩡한데 끊겼다고 한다"
 
     # ★★ **틀렸을 때 무엇이 틀렸는지 말해 준다.** 안 그러면 AI 가 짐작으로 다시 두드린다.
     상태, 다른이름 = call("GET", "/eb/v1/memory/search?query=" + urllib.parse.quote("조이는지"))
