@@ -511,12 +511,62 @@ def parse_embeds(body: str) -> list[tuple[str, str]]:
             if m.group(1).strip() and not is_attachment(m.group(1).strip())]
 
 
+# 줄 끝에 달린 블록 이름. 옵시디언이 `[[글#^a1b2c3]]` 으로 한 **줄·문단**을 가리키는 길이다.
+# 소제목이 없는 긴 글에서 딱 한 자리를 가리킬 수 있는 유일한 수단이라 우리에게도 값이 크다
+# — 꺼내기 2단이 푸는 문제(1300자 중 필요한 건 몇 줄)를 사람 쪽에서 푸는 것과 같다.
+# 이름에 한글을 받는다 — 옵시디언은 영숫자만 받지만 이 창고는 한글로 적힌다.
+# 앞에 빈칸이 있어야 한다: 글 가운데의 `^` (거듭제곱·코드)를 블록 이름으로 읽으면 안 된다.
+BLOCK_RE = re.compile(r"(?:(?<=\s)|^)\^([\w-]{1,64})[ 	]*$")
+
+
+def block(body: str, bid: str) -> str:
+    """`^이름` 이 달린 **한 덩이**를 잘라 온다. 없으면 빈 글.
+
+    덩이는 그 줄부터 위로 **빈 줄까지**다 — 옵시디언이 문단 끝에 이름을 달기 때문이다.
+    목록 줄에 달렸으면 그 줄 하나만 준다(위 항목까지 끌어오면 딴 말이 섞인다).
+    이름 자체(`^이름`)는 떼고 준다 — 읽는 쪽에 쓸모가 없다.
+    """
+    want = bid.strip().lstrip("^").lower()
+    if not want:
+        return ""
+    줄들 = body.splitlines()
+    for i, 줄 in enumerate(줄들):
+        m = BLOCK_RE.search(줄)
+        if not m or m.group(1).lower() != want:
+            continue
+        끝 = 줄[:m.start()].rstrip()
+        if 끝.lstrip().startswith(("-", "*", "+")) or re.match(r"\s*\d+[.)]", 끝):
+            return 끝.strip()          # 목록 한 줄
+        모음 = [끝] if 끝 else []
+        j = i - 1
+        while j >= 0 and 줄들[j].strip():
+            모음.insert(0, 줄들[j])
+            j -= 1
+        return chr(10).join(모음).strip()
+    return ""
+
+
+def blocks(body: str) -> list[str]:
+    """이 글에 달린 블록 이름들. 없는 이름을 물었을 때 **있는 것을 보여 주려고** 쓴다."""
+    out = []
+    for 줄 in body.splitlines():
+        m = BLOCK_RE.search(줄)
+        if m:
+            out.append(m.group(1))
+    return out
+
+
 def section(body: str, heading: str) -> str:
     """소제목 아래 한 토막만 잘라 온다.
 
     `![[보고서#8월 정산]]`으로 부르면 보고서 전체가 아니라 그 자리만 보여야 한다.
     다음 소제목이 같거나 더 높은 층이면 거기서 끊는다 — 하위 소제목은 그 토막에 속한다.
+
+    `#^이름` 은 소제목이 아니라 **블록**이다. 옵시디언과 같은 꼴이라 여기서 갈라 보낸다
+    — 부르는 쪽(화면 끼워넣기 · 꺼내기 2단)을 안 고쳐도 둘 다 되게 하려는 것이다.
     """
+    if heading.strip().startswith("^"):
+        return block(body, heading)
     want = heading.strip().lower()
     lines = body.splitlines()
     depth, out, on = 0, [], False
@@ -2359,6 +2409,25 @@ def _self_check() -> None:
         assert "정산 끝" in cut and "잔금" in cut, cut
         assert "지난달" not in cut, "다른 토막까지 끌고 왔다"
         assert section(n.read("보고서").body, "없는 소제목") == ""
+
+        # ★ **블록 참조** — 소제목이 없는 긴 글에서 한 자리를 가리키는 유일한 길이다.
+        #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 7장뿐이라 값이 크다.
+        #   옵시디언과 같은 꼴(`[[글#^이름]]`)이라 그쪽에서 적은 것이 그대로 닿는다.
+        블록글 = chr(10).join(["첫 문단이다.", "두 줄째다. ^앞칸", "",
+                             "- 첫 항목", "- 둘째 항목 ^목록칸", "- 셋째 항목", "",
+                             "수식은 2^10 이다."])
+        n.write(Note(title="블록 시험", body=블록글))
+        몸 = n.read("블록 시험").body
+        assert block(몸, "^앞칸") == "첫 문단이다." + chr(10) + "두 줄째다.", block(몸, "^앞칸")
+        assert block(몸, "목록칸") == "- 둘째 항목", "목록은 그 줄만 줘야 한다"
+        assert block(몸, "없는이름") == ""
+        assert block(몸, "10") == "", "글 가운데의 ^ 를 블록 이름으로 읽었다 (2^10)"
+        assert blocks(몸) == ["앞칸", "목록칸"], blocks(몸)
+        # 부르는 쪽을 안 고쳐도 되게 `section` 이 갈라 보낸다.
+        assert section(몸, "^앞칸") == block(몸, "^앞칸"), "section 이 블록을 안 넘겨준다"
+        # 링크로도 닿아야 한다 — 이름에 한글이 들어가도 마찬가지다.
+        n.write(Note(title="블록 부름", body="여기 봐: [[블록 시험#^목록칸]]"))
+        assert "블록 시험" in n.neighbors("블록 부름"), "블록 링크가 연결로 안 잡힌다"
 
         # 화면에 올릴 것 고르기 — 20년치를 다 그릴 수는 없다.
         n.write(Note(title="고정된 것", body="", pinned=True))

@@ -219,6 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                             "year:2026 · path:2026/09 도 된다. "
                             "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다 "
+                            "(heading=^이름 은 그 블록 한 덩이만. 없으면 있는 이름을 알려 준다) "
                             "(아주 긴 글은 2만 자에서 자르고 cut 으로 말한다. full=1 로 뚫는다). "
                             "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
@@ -322,9 +323,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not 토막:
                     # 없는 소제목에 **글 통째**를 돌려주면 아끼려던 것이 그대로 나간다.
                     # 없다고 말하고 **있는 소제목을 보여 준다.**
-                    return self._send(404, {"error": "no such heading", "title": title,
-                                            "heading": heading,
-                                            "headings": [h for _, h in notes.headings(note.body)][:20]})
+                    # ★ `#^이름` 은 블록이다 — 그때는 **있는 블록 이름**을 보여 줘야 쓸모가 있다.
+                    #   소제목 목록을 주면 AI 가 없는 길을 또 두드린다.
+                    블록이냐 = heading.strip().startswith("^")
+                    없다 = {"error": "no such block" if 블록이냐 else "no such heading",
+                           "title": title, "heading": heading}
+                    있는것 = (notes.blocks(note.body) if 블록이냐
+                            else [h for _, h in notes.headings(note.body)])[:20]
+                    if 있는것:
+                        없다["blocks" if 블록이냐 else "headings"] = 있는것
+                    return self._send(404, 없다)
                 return self._send(200, {"title": title, "heading": heading, "text": 토막,
                                         "chars": len(토막)})
             # ★★ **`q=` 를 주면 그 둘레만 준다.** 긴 글은 소제목이 없으면 통째로 나가는데,
@@ -1186,6 +1194,19 @@ def _self_check() -> None:
     status, 없음 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("긴 기록")
                         + "&heading=" + urllib.parse.quote("없는 칸"))
     assert status == 404 and "둘째 칸" in 없음["headings"], 없음
+
+    # ★ **블록 참조**(`#^이름`) — 소제목이 없는 긴 글에서 한 자리를 가리키는 길이다.
+    #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 일곱 장뿐이라 값이 크다.
+    블록몸 = 달.join(["앞 문단.", "", "여기가 답이다. ^답칸", "", "뒤 문단."])
+    assert call("POST", "/eb/v1/memory", {"title": "블록 기록", "text": 블록몸})[0] == 201
+    status, 블 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("블록 기록")
+                     + "&heading=" + urllib.parse.quote("^답칸"))
+    assert status == 200 and 블["text"] == "여기가 답이다.", 블
+    assert "뒤 문단" not in 블["text"], "블록 밖까지 딸려왔다"
+    # 없는 블록에는 **있는 블록 이름**을 준다. 소제목 목록을 주면 없는 길을 또 두드린다.
+    status, 블없 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("블록 기록")
+                       + "&heading=" + urllib.parse.quote("^없는칸"))
+    assert status == 404 and 블없.get("blocks") == ["답칸"], 블없
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
     assert status == 200 and 통째["results"][0]["body"], "full=1 이 안 먹는다"

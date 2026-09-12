@@ -224,6 +224,9 @@ class NoteView(QTextBrowser):
 
         out = notes.EMBED_RE.sub(embed, body)
         out = notes.LINK_RE.sub(link, out)
+        # 블록 이름(`^a1b2`)은 **가리키는 표지**지 읽을 글이 아니다. 옵시디언도 안 보여 준다.
+        # 지우지 말고 화면에서만 감춘다 — 원본 파일에는 그대로 있어야 링크가 닿는다.
+        out = chr(10).join(notes.BLOCK_RE.sub("", 줄) for 줄 in out.splitlines())
         # 칠하는 판단도 뽑는 판단과 **같은 자리**를 쓴다. 따로 두면 갈라진다 —
         # 목록엔 안 들어가는 색상 코드가 본문에서만 태그처럼 칠해지고 있었다.
         def 태그(m):
