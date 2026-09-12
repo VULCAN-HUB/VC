@@ -215,16 +215,26 @@ NARROW = {
     "path": "경로", "경로": "경로",
     "kind": "종류", "종류": "종류",
     "year": "해", "해": "해", "년": "해",
+    # 옵시디언의 `file:` 자리다. **제목만** 보고 싶을 때가 있다 —
+    # 본문에 그 말이 많은 글이 제목이 그 말인 글을 덮어 버리기 때문이다.
+    "title": "제목", "제목": "제목", "file": "제목",
 }
 
 
 class Ask:
     """물음을 뜯어 놓은 것. 낱말·구절·좁히는 말·뺄 것."""
 
-    __slots__ = ("terms", "phrases", "narrow", "minus_terms", "minus_phrases", "raw")
+    __slots__ = ("terms", "phrases", "narrow", "minus_terms", "minus_phrases", "raw", "또는")
 
     def __init__(self, raw: str) -> None:
         self.raw = raw
+        # ★ **「이것 아니면 저것」도 찾을 수 있어야 한다.** 옵시디언은 `TODO OR FIXME` 가
+        #   되는데 우리는 낱말을 늘 AND 로 묶어 **0건**이었다. 「하나라도 든 것」은
+        #   흔한 물음이다(급한 것 모으기·여러 이름으로 불리는 것). 한글 「또는」도 받는다.
+        #   ※ 낱말로 안 쓰이게 조각내기 **전에** 뽑아낸다.
+        self.또는 = bool(re.search(r"(?:(?<=\s)|^)(?:OR|또는)(?=\s)", raw))
+        if self.또는:
+            raw = re.sub(r"(?:(?<=\s)|^)(?:OR|또는)(?=\s)", " ", raw)
         self.terms: list[str] = []
         self.phrases: list[str] = []
         self.narrow: list[tuple[str, str]] = []
@@ -264,7 +274,7 @@ class Ask:
         """FTS5에 줄 말. 없으면 빈 문자열."""
         want = ['"%s"*' % t for t in self.terms]
         want += ['"%s"' % p.replace('"', "") for p in self.phrases]
-        out = " AND ".join(want)
+        out = (" OR " if self.또는 else " AND ").join(want)
         drop = ['"%s"*' % t for t in self.minus_terms]
         drop += ['"%s"' % p.replace('"', "") for p in self.minus_phrases]
         if drop:
@@ -1732,6 +1742,7 @@ class Notes:
         "경로": "n.path LIKE ?",
         "종류": "n.kind = ?",
         "해": "substr(n.created, 1, 4) = ?",
+        "제목": "n.title LIKE ?",
     }
     _NARROW_ARG = {
         "태그": lambda v: v.lstrip("#") + "%",
@@ -1741,6 +1752,7 @@ class Notes:
         "경로": lambda v: "%" + v.replace("/", chr(92)) + "%",
         "종류": lambda v: v,
         "해": lambda v: v,
+        "제목": lambda v: "%" + v + "%",
     }
 
     def _narrow_sql(self, narrow: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
@@ -2489,6 +2501,19 @@ def _self_check() -> None:
         next(n.root.rglob("사라질 글.md")).unlink()
         assert n.search("없어질") == [], "밖에서 지운 글이 아직 걸린다"
         assert n.search("없어질") == [], "한 번 빼고 색인에 그대로 뒀다 — 다음에 또 걸린다"
+        # ★ **「이것 아니면 저것」** — 옵시디언은 `TODO OR FIXME` 가 되는데 우리는 0건이었다.
+        n.write(Note(title="할일 가", body="TODO 고치기"))
+        n.write(Note(title="할일 나", body="FIXME 급함"))
+        assert sorted(r["title"] for r in n.search("TODO OR FIXME")) == ["할일 가", "할일 나"],             "OR 로 묶은 물음이 하나도 안 걸린다"
+        assert sorted(r["title"] for r in n.search("TODO 또는 FIXME")) == ["할일 가", "할일 나"],             "한글 「또는」이 안 먹는다"
+        assert [r["title"] for r in n.search("TODO")] == ["할일 가"], "OR 없이도 그대로여야 한다"
+        # ★ **제목만 보기**(옵시디언 `file:`). 본문에 그 말이 여러 번 나오는 글이
+        #   제목이 그 말인 글을 덮는 일이 흔하다 — 그때 이것 하나로 갈린다.
+        n.write(Note(title="회의록 2026", body="본문에는 그 말이 없다"))
+        n.write(Note(title="딴 글", body="회의록 회의록 회의록"))
+        assert [r["title"] for r in n.search("title:회의록")] == ["회의록 2026"], "제목만 좁히기가 안 된다"
+        assert [r["title"] for r in n.search("제목:회의록")] == ["회의록 2026"], "한글 이름이 안 먹는다"
+        assert [r["title"] for r in n.search("-title:회의록 회의록")] == ["딴 글"], "제목 빼기가 안 된다"
 
         # ★ **블록 참조** — 소제목이 없는 긴 글에서 한 자리를 가리키는 유일한 길이다.
         #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 7장뿐이라 값이 크다.

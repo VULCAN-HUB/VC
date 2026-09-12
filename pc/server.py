@@ -221,8 +221,8 @@ class Handler(BaseHTTPRequestHandler):
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
                             "-kind:일 처럼 빼기도 된다(가장 많은 갈래를 빼면 잡담이 준다). "
-                            "year:2026 · path:2026/09 도 된다. "
-                            "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
+                            "year:2026 · path:2026/09 · title:회의록(=file:, 제목만 본다) 도 된다. "
+                            "\"따옴표\" 는 그 구절 그대로다. A OR B(또는) 는 하나라도 든 것. k= 로 개수(기본 5, 위 50). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다 "
                             "(heading=^이름 은 그 블록 한 덩이만. 없으면 있는 이름을 알려 준다) "
                             "(아주 긴 글은 2만 자에서 자르고 cut 으로 말한다. full=1 로 뚫는다). "

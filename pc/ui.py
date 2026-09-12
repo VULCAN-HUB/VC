@@ -311,9 +311,10 @@ class MainWindow(QWidget):
         #   오늘만 다섯 번 나왔다. 자체점검이 이 둘을 견준다(`ui_check`).
         self.ask_box.setToolTip(
             "한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다" + chr(10)
-            + "좁히기 — kind:결정 · tag:이름 · year:2026 · path:2026/09" + chr(10)
+            + "좁히기 — kind:결정 · tag:이름 · year:2026 · path:2026/09 · title:이름(=file:)" + chr(10)
             + "빼기 — -kind:일 (잡담이 준다) · -낱말" + chr(10)
-            + '"따옴표" 는 그 구절 그대로')
+            + '"따옴표" 는 그 구절 그대로' + chr(10)
+            + "하나라도 — TODO OR FIXME (또는)")
         self.ask_box.setObjectName("ask")
         self.ask_box.setFixedWidth(240)
         self.ask_box.returnPressed.connect(lambda: self.ask(self.ask_box.text()))
