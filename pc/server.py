@@ -678,6 +678,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(title, str) or not title.strip():
                 return self._send(400, {"error": "title required"})
             title = title.strip()
+            # ★★ **가리키던 글들이 허공을 보게 된다.** 세 글이 `[[중요글]]` 로 가리키는데
+            #   말없이 지워지면 그물이 조용히 끊긴다 — 지우는 쪽은 그 사실을 모른다.
+            #   막지는 않는다(지우기는 되돌릴 수 있다). **말은 해 준다.**
+            가리키던 = [t for t, _ in self.server.notes.backlinks(title)][:10]
             지난판 = self.server.notes.history(title)
             if not self.server.notes.delete(title):
                 가까운 = self.server.notes.titles_like(title, k=5)
@@ -686,6 +690,9 @@ class Handler(BaseHTTPRequestHandler):
                     답["did_you_mean"] = 가까운
                 return self._send(404, 답)
             답 = {"title": title, "deleted": True}
+            if 가리키던:
+                답["was_linked_from"] = 가리키던
+                답["warn"] = f"{len(가리키던)}장이 이 글을 가리키고 있었다 — 이제 허공을 가리킨다"
             지난판 = self.server.notes.history(title) or 지난판
             if 지난판:
                 언제, 파일 = 지난판[0]
@@ -1365,6 +1372,12 @@ def _self_check() -> None:
     assert 상태 == 200 and 지움.get("deleted"), 지움
     assert 지움.get("undo"), "지우고 되돌릴 자리를 안 알려 준다"
     assert call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("지울 글"))[0] == 404
+    # ★ 가리키던 글이 있으면 **말은 해 준다**(막지는 않는다 — 지우기는 되돌릴 수 있다).
+    assert call("POST", "/eb/v1/memory", {"title": "가리켜지는 글", "text": "몸"})[0] == 201
+    assert call("POST", "/eb/v1/memory", {"title": "가리키는 쪽", "text": "[[가리켜지는 글]] 본다"})[0] == 201
+    상태, 지움2 = call("POST", "/eb/v1/memory/delete", {"title": "가리켜지는 글"})
+    assert 상태 == 200 and 지움2.get("was_linked_from") == ["가리키는 쪽"],         f"가리키던 글을 안 알려 준다: {지움2}"
+
     assert call("POST", "/eb/v1/memory/delete", {"title": "없는 글이다"})[0] == 404
     assert call("POST", "/eb/v1/memory/delete", {"title": "  "})[0] == 400
 

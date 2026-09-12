@@ -1488,7 +1488,14 @@ class MainWindow(QWidget):
                         + ("고정했어. 이제 늘 먼저 나와." if 켬 else "고정 풀었어."), [hit])
         if what == "지우기":
             # **되돌릴 수 없다.** 시킨 말이 맞는지 눈으로 보고 누르게 한다.
-            if not self._agreed("지울까?", orders.spoken(order), "지운다"):
+            # ★ **가리키던 글이 있으면 그것도 보여 준다.** 세 글이 이 글을 가리키는데
+            #   말없이 지우면 그물이 조용히 끊긴다 — 누르기 전에 알아야 할 것이다.
+            가리키던 = [t for t, _ in self.notes.backlinks(hit)] if hit else []
+            물음 = orders.spoken(order) + (
+                f"{chr(10)}{len(가리키던)}장이 이 글을 가리키고 있어: "
+                + " · ".join(가리키던[:3]) + (" 외" if len(가리키던) > 3 else "")
+                if 가리키던 else "")
+            if not self._agreed("지울까?", 물음, "지운다"):
                 return done("안 지웠어.")
             self.notes.delete(hit)
             self.clear_detail()
@@ -2259,7 +2266,10 @@ class MainWindow(QWidget):
         if self.editing is None:
             return
         gone = self.editing
-        if not self._agreed("지울까?", f"'{gone}' 항목을 지운다. 파일이 사라진다.", "지운다"):
+        가리키던 = [t for t, _ in self.notes.backlinks(gone)]
+        꼬리 = (f"{chr(10)}{len(가리키던)}장이 이 글을 가리키고 있어: "
+                + " · ".join(가리키던[:3]) + (" 외" if len(가리키던) > 3 else "")) if 가리키던 else ""
+        if not self._agreed("지울까?", f"'{gone}' 항목을 지운다. 파일이 사라진다." + 꼬리, "지운다"):
             return
         self._save_timer.stop()
         self.editing = None
