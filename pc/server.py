@@ -682,6 +682,47 @@ class EBServer(ThreadingHTTPServer):
 
         threading.Thread(target=loop, daemon=True).start()
 
+    def start_embedding(self, every_sec: int = 30) -> None:
+        """뜻 벡터를 뒤에서 채운다. **창이 없어도 자라야 한다.**
+
+        ★★ 채우는 길이 화면(`panels.Indexer`)에만 있었다. 그래서 `--no-ui` 로 서버만
+        띄우면 — 도움말이 「폰만 쓰거나 원격만 쓸 때」라고 적어 둔 정식 쓰임이다 —
+        새 글의 뜻 벡터가 **영영 안 만들어진다.** AI 가 `/eb/v1/memory/search` 로만
+        꺼내 쓰면 낱말로 걸리는 것만 보이고, 그것을 알 길이 없다.
+
+        같은 사고를 잣대에서 겪었다: 글을 고쳐 놓고 벡터를 안 만든 채 재고서
+        「글을 고쳐도 안 찾는다」고 적었다. **안 채우는 것은 조용히 틀린다.**
+
+        `Indexer` 와 **같은 차례**를 밟는다 — 안 그러면 화면이 만든 벡터와 여기서
+        만든 벡터가 갈린다. `use_embedder` 가 폭을 재서 크기가 달라졌으면 옛것을 버린다.
+        """
+        def loop() -> None:
+            from brain import onnx_embedder, pin_runtime
+
+            from notes import EMBED_TOKENS
+
+            # Qt 가 딸고 온 2019년 런타임 위에서 onnxruntime 을 올리면 통째로 죽는다.
+            # 뜻 검색이 꺼지는 것이 서버가 죽는 것보다 낫다.
+            if not pin_runtime():
+                return
+            embed = onnx_embedder(paths.meaning_dir(), max_tokens=EMBED_TOKENS)
+            if embed is None:
+                return          # 모델이 없다. 낱말 검색은 그대로 돈다
+            # sqlite 연결은 실마다 하나가 원칙이다 — 화면 쪽도 그렇게 한다.
+            내것 = self.notes.__class__(self.notes.root, self.notes.index_path,
+                                        index_now=False)
+            내것.use_embedder(embed)
+            while True:
+                try:
+                    내것.reindex()
+                    while 내것.embed_some(16):
+                        pass
+                except Exception as e:  # 못 채워도 서버는 계속 떠 있어야 한다
+                    print(f"[뜻 벡터 실패] {e}")
+                time.sleep(every_sec)
+
+        threading.Thread(target=loop, daemon=True).start()
+
     def start_analyzer(self, every_sec: int = 900) -> None:
         """주기적으로 스스로 돌아본다. 사용자가 시키지 않아도 성장은 계속된다.
 
@@ -707,6 +748,7 @@ def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
     server = EBServer((host, port), cfg, store, note_store)
     server.start_analyzer(cfg.get("analyze_every_sec", 900))
     server.start_housekeeping()
+    server.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다
     print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
     print(f"페어링 토큰: {cfg['pair_token']}")
     server.serve_forever()
@@ -1049,6 +1091,28 @@ def _self_check() -> None:
                 _os.environ.pop("VC_DATA", None)
             else:
                 _os.environ["VC_DATA"] = 옛기록
+    # ★ **뜻 벡터를 채우는 실은 서버에도 있어야 한다.** 예전에는 화면(`panels.Indexer`)에만
+    #   있어서 `--no-ui` 로 띄우면 새 글의 벡터가 영영 안 만들어졌다 — 안 채우는 것은
+    #   **조용히** 틀린다(잣대에서 같은 사고로 곁실험 넷이 무너졌다).
+    #   정의 한 곳과 부르는 자리 둘, 합쳐 셋이 다 있어야 한다.
+    #   구운 판에는 소스가 없다 — 그때는 건너뛴다(없어서 못 재는 것과 재서 틀린 것은 다른 말이다).
+    글 = ""
+    for 이름 in ("server.py", "eb.py"):
+        try:
+            글 += Path(__file__).with_name(이름).read_text(encoding="utf-8")
+        except OSError:
+            글 = ""
+            print("  (구운 판이라 벡터 실 검사는 건너뛴다)")
+            break
+    #   ★★ **세는 검사는 제 몸을 센다.** 처음에 `count("start_embedding(") >= 3` 으로 썼더니
+    #   이 검사문 안의 글자까지 세어 **부르는 자리를 지워도 통과했다.** 되돌려 보고서야 알았다.
+    #   자리마다 **따로** 센다 — 코드 한 번 + 이 검사문 한 번이라 **둘** 이 바닥이다.
+    for 있어야, 까닭 in (
+            ("def start_embedding(", "벡터를 채우는 실이 서버에 없다"),
+            ("eb.start_embedding()", "창 있는 판이 벡터 실을 안 띄운다"),
+            ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다")):
+        assert not 글 or 글.count(있어야) >= 2, f"{까닭} ({글.count(있어야)}군데)"
+
     print("server self-check 통과")
 
 

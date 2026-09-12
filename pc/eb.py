@@ -54,6 +54,7 @@ def start_server(cfg: dict) -> srv.EBServer:
     eb = srv.EBServer((HOST, PORT), cfg, store, notes)
     eb.start_analyzer(cfg.get("analyze_every_sec", 900))
     eb.start_housekeeping()
+    eb.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다 (--no-ui)
     threading.Thread(target=eb.serve_forever, daemon=True).start()
     return eb
 
