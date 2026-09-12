@@ -1344,7 +1344,14 @@ def run() -> None:
     좁히라는말 = "처럼 갈래로 좁혀 봐"
     assert not 본문 or 본문.count(좁히라는말) >= 1,         "뜻으로만 찾았을 때 갈래로 좁히라는 말이 없다"
 
-    print("ui self-check 통과")
+    print("ui self-check 통과", flush=True)
+    # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다
+    #   세그폴트를 냈다(파이썬이 위젯을 먼저 거두고 C++ 쪽이 그걸 다시 만지는 자리다).
+    #   `--모두검사` 에서는 그것이 「✘ ui_check」로 보여, 검사가 터진 줄 알고 딴 데를 팠다.
+    #   **검사는 이미 다 끝났다.** 끝났다고 말한 뒤 곧장 나간다 — 정리는 OS 가 한다.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 
