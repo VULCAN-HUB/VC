@@ -1305,6 +1305,17 @@ class MainWindow(QWidget):
             앞 = f"{self._감싸기(text)}{orders.tail(text.strip(chr(34) + chr(39)), '이/가')} 든 글은 없어."
             said = (f"{앞} 뜻으로 가까운 것 {len(hits)}개야." if len(hits) > 1 else
                     f"{앞} 뜻으로 가장 가까운 건 {orders.josa(hits[0], '이야/야')}.")
+            # ★ **여기가 좁히기가 제일 잘 듣는 자리다.** 낱말이 하나도 안 걸려 뜻으로만
+            #   채운 물음은, 가장 많은 갈래가 나머지를 밀어내고 있을 때가 많다. 재 보니
+            #   갈래로 좁히면 목록 밖이던 글이 1~4등으로 올라왔다(얼린 물음 20개 중 셋).
+            #   되는데 안 알려 주면 없는 것과 같아서, 바로 이 자리에서만 한 줄 붙인다.
+            #   예로 드는 갈래는 **제일 많은 것 다음**이다 — 밀어내는 쪽(오너 창고는
+            #   2373/2794 장이 `일`)을 예로 들면 좁혀도 그대로다.
+            갈래들 = [g for g, in self.notes.conn.execute(
+                "SELECT kind FROM notes WHERE kind != '' GROUP BY kind "
+                "ORDER BY count(*) DESC LIMIT 2")]
+            if len(갈래들) > 1:
+                said += f" 안 보이면 kind:{갈래들[1]} 처럼 갈래로 좁혀 봐."
         elif len(hits) > 1:
             said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
         else:
