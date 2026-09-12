@@ -1310,8 +1310,26 @@ class Notes:
     def semantic(self, text: str, k: int = 8) -> list[tuple[str, float]]:
         """뜻이 가까운 항목들. `(제목, 가까움)`, 가까운 순."""
         embed = getattr(self, "_embed", None)
+        if embed is None or not text.strip():
+            return []
+        # ★★ **낡은 벡터로 재면 조용히 틀린다.** 밖에서(옵시디언·메모장) 글을 고치면
+        #   그 글의 벡터가 낡는데, 채우는 실은 30초마다 돈다. 그 사이에 물으면
+        #   **고치기 전 뜻**으로 답한다 — 아무 표시도 없다. 실제로 그랬다: 밖에서
+        #   「안개 속 등대가 …」를 넣고 바로 그 뜻으로 물으니 그 글이 안 나왔다.
+        #   (오늘 잣대에서 낡은 벡터에 속아 곁실험 넷이 무너진 것과 같은 종류다.)
+        #
+        #   **몇 장 안 낡았으면 여기서 채운다**(한 장에 10ms 쯤). 많이 낡았으면
+        #   그냥 둔다 — 첫 색인처럼 수천 장이 밀린 자리에서 검색을 붙들면 안 된다.
+        #   문턱이 아니라 **k 와의 관계**로 정한다: 한 번에 보여 줄 수만큼만 따라잡는다.
+        try:
+            낡은수 = self.vec_left()
+            if 0 < 낡은수 <= max(k, 8):
+                while self.embed_some(8):
+                    pass
+        except Exception:
+            pass        # 못 채워도 찾기는 돌아야 한다
         got = self._vectors()
-        if embed is None or got is None or not text.strip():
+        if got is None:
             return []
         import numpy as np
 
@@ -2960,11 +2978,33 @@ def _self_check() -> None:
         큰모델 = lambda 글들, 머리="": [[0.1] * 768 for _ in 글들]
         n.use_embedder(큰모델)
         n.search("아무 말이나")          # 옛 384 벡터가 남아 있으면 여기서 터졌다
-        assert n.vec_left() > 0, "크기가 다른 모델을 끼웠는데 옛 벡터를 그대로 뒀다"
-        assert n.conn.execute("SELECT count(*) FROM vectors").fetchone()[0] == 0
-        assert n.vec_left() > 0, "버렸으면 다시 만들 거리가 있어야 한다"
+        # ★ 옛 벡터는 버려졌고, **새 크기로 다시 만들어져 있거나 아직 안 만들어졌거나**
+        #   둘 중 하나다(찾기가 몇 장 안 낡았으면 그 자리에서 따라잡는다). 어느 쪽이든
+        #   **384 짜리가 남아 있으면 안 된다** — 그것이 섞이면 말없이 엉뚱한 순위가 된다.
+        남은폭 = n.conn.execute("SELECT length(vec) FROM vectors LIMIT 1").fetchone()
+        assert 남은폭 is None or 남은폭[0] == 768 * 2,             f"크기가 다른 모델을 끼웠는데 옛 벡터를 그대로 뒀다: {남은폭}"
         while n.embed_some(9):
             pass
+        assert n.vec_left() == 0 and n.conn.execute(
+            "SELECT length(vec) FROM vectors LIMIT 1").fetchone()[0] == 768 * 2,             "새 크기로 다시 안 만들어졌다"
+
+        # ★★ **밖에서 고친 글은 바로 그 뜻으로 찾혀야 한다.** 옵시디언·메모장으로 고치는 것은
+        #   흔한 일인데, 채우는 실은 30초마다 돈다. 그 사이에 물으면 **고치기 전 뜻**으로
+        #   답한다 — 아무 표시도 없이 조용히 틀린다. 몇 장 안 낡았으면 찾는 자리에서 따라잡는다.
+        n.use_embedder(작은모델 := (lambda 글들, 머리="": [
+            [1.0 if "잠수함" in 글 else 0.0, 1.0 if "김치" in 글 else 0.0, 0.1] for 글 in 글들]))
+        n.write(Note(title="밖에서 고칠 글", body="김치 이야기다."))
+        n.write(Note(title="딴 김치 글", body="김치 이야기다."))
+        n.reindex()
+        while n.embed_some(9):
+            pass
+        파일 = n.path_of("밖에서 고칠 글")
+        파일.write_text(파일.read_text(encoding="utf-8").rstrip()
+                       + chr(10) + "잠수함 이야기로 바꿨다." + chr(10), encoding="utf-8")
+        n.reindex()                       # 화면·서버가 주기로 하는 일까지만
+        assert n.vec_left() == 1, "밖에서 고친 것을 색인이 모른다"
+        나온 = [t for t, _ in n.semantic("잠수함", k=3)]
+        assert 나온 and 나온[0] == "밖에서 고칠 글",             f"밖에서 고친 뒤 낡은 뜻으로 답한다 — 조용히 틀린다: {나온}"
 
         # 지우면 벡터도 같이 사라진다 — 유령이 검색에 남으면 안 된다
         n.delete("탈것")
