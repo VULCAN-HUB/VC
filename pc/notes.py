@@ -1123,8 +1123,21 @@ class Notes:
 
         `notes`가 onnxruntime을 직접 물고 있으면, 모델이 없는 PC에서 항목 하나
         여는 것도 못 하게 된다. 재료는 밖에서 넣는다.
+
+        ★ **모델이 바뀌었으면 여기서 옛 벡터를 버린다.** 예전에는 화면 쪽에서만
+        크기를 맞춰 봐서, 명령줄로 재는 길(`--찾기점수`)에는 그 방어가 없었다 —
+        구운 판(384)이 만든 벡터를 소스(e5-base 768)로 재다 `matmul` 에서 통째로
+        터졌다. **부르는 쪽마다 맡기면 반드시 한 군데가 빠진다**(따옴표 네 군데·
+        태그 두 군데와 같은 무늬). 재료가 들어오는 이 문 하나에서 본다.
         """
         self._embed = embed
+        if embed is None:
+            return
+        try:
+            width = len(_call_embed(embed, ["크기 재기"], "query: ")[0])
+        except Exception:
+            return        # 모델이 시원찮으면 뜻 검색만 꺼진다. 찾기는 살아야 한다
+        self.drop_vectors_if_changed(width)
         self._vec_cache = None
 
     def vec_left(self) -> int:
@@ -2783,6 +2796,14 @@ def _self_check() -> None:
         # 섞이면 곱셈이 안 맞아 터지거나 **말없이 엉뚱한 순위**가 나온다.
         assert not n.drop_vectors_if_changed(3), "같은 크기인데 버렸다"
         assert n.drop_vectors_if_changed(768), "크기가 달라졌는데 안 버렸다"
+
+        # ★★ **딴 크기 모델을 끼워도 찾기가 터지면 안 된다.** 화면 쪽에서만 크기를
+        #   맞춰 보던 탓에 명령줄로 재는 길에서 `matmul` 이 통째로 터졌다(768 대 384).
+        #   재료가 들어오는 문(`use_embedder`)에서 버리게 고쳤다 — 여기서 되돌리면 터진다.
+        큰모델 = lambda 글들, 머리="": [[0.1] * 768 for _ in 글들]
+        n.use_embedder(큰모델)
+        n.search("아무 말이나")          # 옛 384 벡터가 남아 있으면 여기서 터졌다
+        assert n.vec_left() > 0, "크기가 다른 모델을 끼웠는데 옛 벡터를 그대로 뒀다"
         assert n.conn.execute("SELECT count(*) FROM vectors").fetchone()[0] == 0
         assert n.vec_left() > 0, "버렸으면 다시 만들 거리가 있어야 한다"
         while n.embed_some(9):

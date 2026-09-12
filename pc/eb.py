@@ -876,6 +876,13 @@ def _self_check() -> None:
     본문2 = _소스글()
     assert not 본문2 or '정답칸.split(";")' in 본문2, "정답을 여럿 못 받는다"
     assert not 본문2 or "min(자리) if 자리 else 0" in 본문2, "여럿 중 제일 위를 안 센다"
+    # ★ 찾기점수는 **재기 전에 색인을 파일에 맞추고**, 재는 자리(항목·못 만든 벡터)를 같이 적는다.
+    #   빈 색인에서 「1등 0 · 밖 20」이 그럴듯하게 나와 사람을 속인 자리다.
+    #   (검사문이 한 번 쓰므로 진짜 코드까지 **둘 이상**이어야 한다)
+    for 있어야, 몇번, 까닭 in (
+            ("n.reindex()   # 파일이 원본이다", 2, "찾기점수가 색인을 파일에 안 맞춘다"),
+            ("아직 못 만든 벡터 {n.vec_left()}개", 2, "찾기점수가 재는 자리를 안 적는다")):
+        assert not 본문2 or 본문2.count(있어야) >= 몇번, f"{까닭} ({본문2.count(있어야)}군데)"
 
     # (이 글자들은 이 파일에서 `--doctor` 자리에만 있다 — 진단 묶음 쪽은 report.py 다)
     본문 = _소스글()
@@ -1323,6 +1330,10 @@ if __name__ == "__main__":
             os._exit(1)
 
         n = Notes(paths.notes_dir(), str(paths.index_path()), index_now=False)
+        # ★ **빈 색인에서도 「1등 0 · 밖 20」이라는 그럴듯한 숫자가 나온다.** 창고를 사본으로
+        #   옮겨 재다 색인을 안 옮겼더니 20개가 전부 밖이었고 3초에 끝났다 — 못 찾은 게
+        #   아니라 **아무것도 안 보고 있었다.** 재기 전에 파일에 맞춘다.
+        n.reindex()   # 파일이 원본이다
         n.use_embedder(onnx_embedder(paths.meaning_dir()))
         # ★ `--제목벡터빼고` 로 **제목 벡터를 빼고** 같은 물음을 다시 잰다.
         # 뜻 검색은 「카드 벡터」와 「제목 벡터」 중 가까운 쪽을 쓰는데, 그 최댓값이
@@ -1400,8 +1411,12 @@ if __name__ == "__main__":
         if 여럿 := sum(1 for l in 물음표.read_text(encoding="utf-8").splitlines()
                        if ";" in l.partition("|")[2]):
             뺌 += f" · 정답을 여럿 적은 물음 {여럿}개"
+        # ★ **재는 자리를 같이 적는다.** 항목이 0이거나 벡터가 덜 찼으면 점수가 통째로
+        #   낮게 나오는데, 숫자만 보면 「물건이 못 찾는다」로 읽힌다. 둘을 갈라 적는다.
+        재는자리 = (f" · 항목 {n.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}개"
+                  f" · 아직 못 만든 벡터 {n.vec_left()}개")
         said = (f"물음 {센것}개 · 1등 {일등} · 3등 안 {셋안} · 목록 밖 {밖}"
-                f" · {clock.perf_counter() - t0:.1f}초{뺌}{chr(10)}{chr(10)}"
+                f" · {clock.perf_counter() - t0:.1f}초{재는자리}{뺌}{chr(10)}{chr(10)}"
                 + chr(10).join(줄))
         (paths.data_dir() / "vc-찾기점수.txt").write_text(said, encoding="utf-8")
         n.conn.close()
