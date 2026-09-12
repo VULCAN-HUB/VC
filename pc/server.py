@@ -473,6 +473,17 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     def do_POST(self) -> None:
+        # ★★ **쓰기가 막히면 서버가 답도 없이 끊겼다.** 읽기 전용 파일·잠긴 파일·꽉 찬
+        #   디스크에서 `WriteBlocked` 가 그대로 새 나간다 — 창은 잡는데(ui.py) 문은 안 잡았다.
+        #   AI 는 성공인지 실패인지도 모른 채 다음 일을 한다. **왜 못 썼는지 말한다.**
+        try:
+            return self._post()
+        except notes.WriteBlocked as 막힘:
+            return self._send(507, {"error": "못 썼다 — 그 자리에 쓸 수 없다",
+                                    "where": str(막힘),
+                                    "hint": "읽기 전용이거나 잠겼거나 자리가 없다"})
+
+    def _post(self) -> None:
         url = urlparse(self.path)
 
         # 인증보다 먼저 본문을 읽어 비운다. 안 읽고 401을 보내면 남은 바이트가 소켓에
@@ -1342,6 +1353,22 @@ def _self_check() -> None:
     assert 상태 == 404 and "POST" in (길틀림.get("hint") or ""), f"메서드가 틀렸다고 안 말한다: {길틀림}"
     상태, 없는길 = call("GET", "/eb/v1/memory/all")
     assert 상태 == 404 and 없는길.get("paths"), f"있는 길을 안 알려 준다: {없는길}"
+
+    # ★ **못 쓰면 못 썼다고 말해야 한다.** 읽기 전용 파일에서 `WriteBlocked` 가 그대로
+    #   새 나가 서버가 답도 없이 연결을 끊었다 — AI 는 성공인지 실패인지도 모른다.
+    import os as _os
+    import stat as _stat
+
+    assert call("POST", "/eb/v1/memory", {"title": "막힌 글", "text": "첫 판"})[0] == 201
+    막힌파일 = note_store.path_of("막힌 글")
+    _os.chmod(막힌파일, _stat.S_IREAD)
+    try:
+        상태, 못씀 = call("POST", "/eb/v1/memory",
+                        {"title": "막힌 글", "text": "둘째 판", "mode": "replace", "force": True})
+        assert 상태 == 507, f"못 쓰고도 그렇게 말하지 않는다: {상태} {못씀}"
+        assert 못씀.get("hint"), 못씀
+    finally:
+        _os.chmod(막힌파일, _stat.S_IWRITE)
 
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
