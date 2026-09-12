@@ -270,7 +270,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "title required"})
             note = self.server.notes.read(title)
             if note is None:
-                return self._send(404, {"error": "no such note", "title": title})
+                # ★★ **없다고만 하면 AI 는 처음부터 다시 찾는다 — 그게 800자다.**
+                #   제목을 조금 틀리게 적는 것은 AI 가 흔히 하는 실수인데(앞을 잘라 보내거나
+                #   괄호를 빼먹는다), 지금까지는 아무 실마리 없이 404 만 돌려줬다.
+                #   **없는 소제목에는 이미 있는 소제목 목록을 주고 있었다** — 제목도 같아야 한다.
+                #   `titles_like` 는 `[[` 를 칠 때 쓰던 것이라 값이 더 안 든다.
+                가까운 = self.server.notes.titles_like(title, k=5)
+                답 = {"error": "no such note", "title": title}
+                if 가까운:
+                    답["did_you_mean"] = 가까운
+                return self._send(404, 답)
             if heading:
                 토막 = notes.section(note.body, heading)
                 if not 토막:
@@ -972,6 +981,12 @@ def _self_check() -> None:
     assert status == 200 and 토막["text"].strip() == "여기만 읽고 싶다", 토막
     assert "가가가" not in 토막["text"], "다른 칸까지 딸려왔다"
     # 없는 소제목은 **글 통째로 바꾸지 않고** 없다고 말하며 있는 것을 보인다
+    # ★ **없다고만 하면 AI 는 처음부터 다시 찾는다 — 그게 800자다.** 제목을 조금 틀리게
+    #   적는 것은 AI 가 흔히 하는 실수다(앞을 자르거나 괄호를 빼먹는다). 실마리를 준다.
+    status, 틀림 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("긴 기"))
+    assert status == 404, status
+    assert "긴 기록" in (틀림.get("did_you_mean") or []),         f"제목을 틀렸을 때 가까운 것을 안 알려 준다: {틀림}"
+
     status, 없음 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("긴 기록")
                         + "&heading=" + urllib.parse.quote("없는 칸"))
     assert status == 404 and "둘째 칸" in 없음["headings"], 없음

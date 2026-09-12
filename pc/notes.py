@@ -1813,22 +1813,62 @@ class Notes:
         # 2등에 남아 있는데 따옴표를 붙여도 안 빠졌다. 좁히라고 친 것을 넓히면 안 된다.
         if ask.phrases:
             return rows
-        hits = self.semantic(ask.plain(), k=k)
+        where, args = self._narrow_sql(ask.narrow)
+        # ★★ **좁힌 뒤에 세야 한다. 세고 나서 좁히면 전멸한다.**
+        #   `kind:결정` 처럼 좁혀 물으면 뜻으로 뽑은 k 개를 그 조건으로 걸러 내는데,
+        #   그 k 개 안에 그 갈래가 하나도 없으면 **0장**이 된다. 실제로 그랬다 —
+        #   오너 창고(2794장, 결정은 120장)에서 「kind:결정 …」 이 한 장도 안 나왔다.
+        #   `--찾기점수` 의 `--빼고` 가 **이미 같은 교훈을 적어 뒀는데**(넉넉히 뽑아 놓고
+        #   빼고 나서 위에서 여덟을 센다) 여기서 되풀이됐다.
+        #   좁힘이 있으면 넉넉히 뽑는다. 좁힘이 없으면 예전 그대로 — 값을 더 안 쓴다.
+        #   ★ 좁힘이 없어도 넉넉히 뽑는다 — **갈래를 골고루 섞으려면 섞을 것이 있어야 한다.**
+        #     `semantic` 은 행렬곱 한 번이라 k 를 늘려도 드는 값이 거의 같다(정렬만 는다).
+        hits = self.semantic(ask.plain(), k=k * 40)
         if not hits:
             return rows
-        where, args = self._narrow_sql(ask.narrow)
         seen = {r["title"] for r in rows}
         out = list(rows)
+        # ★★ **한 갈래가 목록을 다 차지하면 다른 갈래의 답이 영영 안 보인다.**
+        #   오너 창고(2794장)는 대화 로그 조각(`kind: 일`)이 2373장이라, 뜻으로 뽑은
+        #   다섯 장이 전부 그 조각으로 채워졌다. 정답은 대부분 결정·규칙·일정 쪽인데도.
+        #   [잰 것] 갈래당 상한을 두니 찾은 물음이 **6/20 → 9~10/20** 으로 늘었다
+        #   (같은 다섯 장·같은 글자 수인데). 문턱이 아니라 **k 와의 관계**로 정한다.
+        #   ※ **뜻으로 채우는 자리에만** 건다. 낱말로 딱 맞은 것은 안 건드린다 —
+        #     그것이 뜻만 비슷한 것에 밀리면 검색을 못 믿게 된다(앞서 겪은 자리다).
+        # **갈래를 돌아가며 한 장씩 뽑는다**(라운드로빈). 갈래가 하나뿐인 창고에서는
+        # 그냥 차례대로 뽑는 것과 같아 손해가 없고, 여러 갈래면 골고루 섞인다.
+        묶음: dict[str, list] = {}
+        차례: list[str] = []
         for title, _ in hits:
-            if title in seen or len(out) >= k:
+            if title in seen:
                 continue
             sql = "SELECT * FROM notes n WHERE n.title = ?"
             if where:
                 sql += " AND " + " AND ".join(where)   # 좁힌 조건은 뜻에도 그대로
             got = self.conn.execute(sql, (title, *args)).fetchone()
-            if got is not None:
-                out.append(got)
-                seen.add(title)
+            if got is None:
+                continue
+            갈 = got["kind"] or "note"
+            if 갈 not in 묶음:
+                묶음[갈], _ = [], 차례.append(갈)
+            묶음[갈].append(got)
+        # 낱말로 이미 든 갈래는 **한 바퀴 뒤로 민다** — 그쪽은 이미 자리를 얻었다.
+        먼저든갈래 = {r["kind"] or "note" for r in rows}
+        차례.sort(key=lambda 갈: 갈 in 먼저든갈래)
+        층 = 0
+        while len(out) < k:
+            더넣었나 = False
+            for 갈 in 차례:
+                if len(out) >= k:
+                    break
+                if 층 < len(묶음[갈]):
+                    골라 = 묶음[갈][층]
+                    out.append(골라)
+                    seen.add(골라["title"])
+                    더넣었나 = True
+            if not 더넣었나:
+                break
+            층 += 1
         return out
 
     def titles_like(self, part: str, k: int = 12) -> list[str]:
@@ -2821,6 +2861,28 @@ def _self_check() -> None:
 
         # 좁힌 조건은 뜻으로 찾은 것에도 그대로 걸린다
         assert all(r["kind"] == "note" for r in n.search("kind:note 사과", k=8))
+        # ★★ **좁힌 뒤에 세야 한다. 세고 나서 좁히면 전멸한다.** 뜻으로 뽑은 k 개를
+        #   좁힘으로 걸러 내면, 그 k 개 안에 그 갈래가 없을 때 **0장**이 된다 —
+        #   오너 창고(2794장·결정 120장)에서 「kind:결정 …」 이 한 장도 안 나왔다.
+        #   갈래가 드문 글을 만들어 두고, 흔한 글 쪽 말로 물어도 그것이 잡히는지 본다.
+        #   흔한 글은 물음과 **꼭 맞게**, 드문 글은 **살짝 덜 닮게** 적는다 —
+        #   그래야 드문 글이 뜻 순위에서 확실히 뒤로 밀려 k 밖으로 나간다.
+        n.write(Note(title="드문 갈래 글", body="등대 이야기다.", kind="희귀"))
+        for i in range(20):
+            n.write(Note(title=f"흔한 글 {i}", body="등대와 안개와 뱃길과 항해 이야기다."))
+        n.reindex()
+        while n.embed_some(16):
+            pass
+        좁힌것 = n.search("kind:희귀 등대와 안개와 뱃길과 항해", k=3)
+        assert 좁힌것 and 좁힌것[0]["title"] == "드문 갈래 글",             f"좁혀 물었더니 전멸했다: {[r['title'] for r in 좁힌것]}"
+        # ★★ **한 갈래가 목록을 다 차지하면 다른 갈래의 답이 영영 안 보인다.**
+        #   위에서 흔한 글 20장(갈래 note)과 드문 갈래 글 1장을 넣어 뒀다.
+        #   **좁히지 않고** 물어도 드문 갈래 것이 다섯 안에 들어야 한다 —
+        #   오너 창고(대화 조각 2373/2794)에서 이것 하나로 찾은 물음이 6/20 → 10/20 이 됐다.
+        #   ※ **낱말이 겹치면 안 된다** — 낱말로 다섯 장이 차면 뜻 검색을 아예 안 부른다.
+        #     그래서 본문에 없는 말로, 뜻만 가깝게 묻는다.
+        섞인것 = [r["kind"] or "note" for r in n.search("해안 불빛이 배를 이끄는 이야기", k=5)]
+        assert "희귀" in 섞인것, f"한 갈래가 목록을 다 차지한다: {섞인것}"
 
         # 글이 바뀌면 벡터도 다시 만든다
         n.write(Note(title="과일", body="바나나로 바꿨다."))
