@@ -1328,9 +1328,15 @@ def run() -> None:
 
     # ★ **아는 길을 안 알려 주면 없는 것과 같다.** 좁히는 문법이 화면 어디에도 없으면
     #   쓰는 사람이 발견할 길이 없다 — AI 한테는 인사로 알려 주면서 사람한테는 안 알려 줬다.
+    # ★★ **AI 한테 알려 준 길은 사람한테도 알려 준다.** `notes.NARROW` 의 이름이 늘면
+    #   화면 안내도 같이 늘어야 한다 — 되는데 아무도 모르는 길이 오늘만 다섯 번 나왔다.
+    #   서버 쪽은 `hello` 의 `how` 를 같은 규칙으로 지킨다(`server._self_check`).
+    import notes as _n
+
     안내 = win.ask_box.placeholderText() + " " + win.ask_box.toolTip()
-    for 있어야 in ("kind:", "tag:"):
-        assert 있어야 in 안내, f"검색칸이 좁히는 법을 안 알려 준다: {안내!r}"
+    안적힌 = [이름 for 이름 in _n.NARROW if 이름.isascii() and f"{이름}:" not in 안내]
+    assert not 안적힌, f"검색칸이 좁히는 법을 안 알려 준다: {sorted(안적힌)}"
+    assert "-kind:" in 안내, "빼는 법을 안 알려 준다 — 잡담이 많은 창고에서 제일 쓸모 있다"
 
     print("ui self-check 통과")
 

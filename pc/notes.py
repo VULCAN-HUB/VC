@@ -94,30 +94,6 @@ TEMPLATE_DIR = "_서식"
 SLOT_RE = re.compile(r"\{\{\s*(날짜|시각|제목|date|time|title)\s*\}\}", re.I)          # 노트 폴더 안. `_`로 시작해 항목 폴더와 눈으로 갈린다
 
 
-# `#0E1116` 같은 색상 코드. 3·4·6·8자리 16진수는 태그로 안 센다.
-def _call_embed(embed, texts: list[str], prefix: str):
-    """접두사를 받는 임베더면 넘기고, 아니면 그냥 부른다.
-
-    밖에서 끼우는 물건이라 어떤 꼴일지 모른다. 못 받는 것에 억지로 넘겨 터지면
-    뜻 검색이 통째로 죽는다.
-    """
-    try:
-        return embed(texts, prefix)
-    except TypeError:
-        return embed(texts)
-
-
-def _pack(vec) -> bytes:
-    """벡터를 바이트로. **반정밀도로 줄인다.**
-
-    가까운 정도를 재는 데 소수점 아래 자리가 다 필요하지 않다. 2만 개면 벡터를
-    올려 두는 데만 186MB가 드는데, 절반이면 93MB다. 순위는 바뀌지 않는다.
-    """
-    import numpy as np
-
-    return np.asarray(vec, dtype="float16").tobytes()
-
-
 # 글을 읽을 때 차례로 시도할 것들. 20년 치에는 딴 도구가 만든 옛 파일이 섞인다 —
 # 윈도우 한글판에서 만든 것은 대개 cp949 다.
 # `utf-8-sig` 가 먼저다. 윈도우 도구(메모장·PowerShell `Set-Content -Encoding UTF8`)는
@@ -160,146 +136,6 @@ def read_text(path: Path) -> str:
     # 파서가 CR 에 걸려 **별칭·태그가 통째로 사라진다**(자체점검이 잡았다).
     return text.replace(chr(13) + chr(10), chr(10)).replace(chr(13), chr(10))
 
-
-def _read(path: Path) -> str | None:
-    """읽기만 한다. 읽는 사이 사라진 파일 하나 때문에 전체 색인이 멈추면 안 된다."""
-    try:
-        return read_text(path)
-    except OSError:
-        return None
-
-
-TERM_RE = re.compile(r"[\w가-힣]+")  # 물음을 낱말로 끊는다. 기호는 버린다
-
-# 물음 한 조각: `tag:할일` · `"정확한 구절"` · `-빼기` · 그냥 낱말.
-PIECE_RE = re.compile(r'(-?)(?:(\w+):)?(?:"([^"]*)"|(\S+))')
-
-# 좁히는 말과 그것이 걸리는 곳. 여기 없는 이름(`tag:`가 아닌 `xyz:`)은 **그냥 낱말
-# 둘**로 친다 — 값만 남기고 이름을 버리면 `결정:22` 같은 진짜 글자가 조용히 사라진다.
-NARROW = {
-    "tag": "태그", "태그": "태그",
-    "path": "경로", "경로": "경로",
-    "kind": "종류", "종류": "종류",
-    "year": "해", "해": "해", "년": "해",
-}
-
-
-class Ask:
-    """물음을 뜯어 놓은 것. 낱말·구절·좁히는 말·뺄 것."""
-
-    __slots__ = ("terms", "phrases", "narrow", "minus_terms", "minus_phrases", "raw")
-
-    def __init__(self, raw: str) -> None:
-        self.raw = raw
-        self.terms: list[str] = []
-        self.phrases: list[str] = []
-        self.narrow: list[tuple[str, str]] = []
-        self.minus_terms: list[str] = []
-        self.minus_phrases: list[str] = []
-        for minus, key, quoted, bare in PIECE_RE.findall(raw):
-            word = quoted if quoted else bare
-            if not word:
-                continue
-            kind = NARROW.get((key or "").lower())
-            if kind and not minus:
-                self.narrow.append((kind, word))
-                continue
-            if kind and minus:
-                self.narrow.append(("빼기:" + kind, word))
-                continue
-            if key:                      # 모르는 이름은 통째로 낱말로 친다
-                word = f"{key}:{word}"
-            if quoted:
-                (self.minus_phrases if minus else self.phrases).append(word)
-            else:
-                # 낱말 안의 기호는 FTS가 못 읽는다. 쪼개서 다 들어가게 한다.
-                bits = TERM_RE.findall(word)
-                (self.minus_terms if minus else self.terms).extend(bits)
-
-    def empty(self) -> bool:
-        return not (self.terms or self.phrases or self.narrow)
-
-    def plain(self) -> str:
-        """좁히는 말(`tag:할일`)을 뺀 **사람 말만**.
-
-        뜻으로 찾을 때 문법 글자를 그대로 넘기면 벡터가 그것도 뜻으로 읽는다.
-        """
-        return " ".join([*self.phrases, *self.terms]).strip()
-
-    def match(self) -> str:
-        """FTS5에 줄 말. 없으면 빈 문자열."""
-        want = ['"%s"*' % t for t in self.terms]
-        want += ['"%s"' % p.replace('"', "") for p in self.phrases]
-        out = " AND ".join(want)
-        drop = ['"%s"*' % t for t in self.minus_terms]
-        drop += ['"%s"' % p.replace('"', "") for p in self.minus_phrases]
-        if drop:
-            gone = " OR ".join(drop)
-            out = f"({out}) NOT ({gone})" if out else ""
-        return out
-HEX_COLOR = re.compile(r"(?i)[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8}")
-
-
-def is_attachment(name: str) -> bool:
-    return Path(name).suffix.lower() in ATTACH_EXT
-
-
-INDEX_SCHEMA = """
-CREATE TABLE IF NOT EXISTS notes (
-    path      TEXT PRIMARY KEY,
-    id        TEXT NOT NULL,
-    title     TEXT NOT NULL,
-    kind      TEXT NOT NULL,
-    pinned    INTEGER NOT NULL DEFAULT 0,
-    created   TEXT NOT NULL,
-    mtime     REAL NOT NULL,
-    body      TEXT NOT NULL,
-    use_count INTEGER NOT NULL DEFAULT 0,
-    used_at   REAL,
-    -- 벡터를 만들 때의 mtime. 다르면 다시 만들어야 한다는 뜻이다.
-    vec_mtime REAL NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_notes_kind ON notes (kind);
--- 제목으로 찾는 일이 잦다(링크 해석). PK는 경로라 제목엔 색인이 따로 필요하다.
-CREATE INDEX IF NOT EXISTS idx_notes_title ON notes (title);
-
-CREATE TABLE IF NOT EXISTS links (
-    src     TEXT NOT NULL,
-    dst     TEXT NOT NULL,
-    heading TEXT NOT NULL DEFAULT '',
-    -- 0 = 사람이 손으로 이은 진한 선, 1 = 흡수해 온 글에 들어 있던 흐린 선.
-    -- ★ 예전에는 흡수 글의 `[[ ]]` 를 **아예 안 넣었다.** 진한 선과 섞이면
-    -- 「사람이 이은 것」의 뜻이 흐려진다는 까닭이었는데, 실제 자료가 사실상
-    -- 전부 흡수분이라 **그물이 통째로 비었다**(3142장에 이음 0). 안 넣는 대신
-    -- 갈라서 넣는다 — 원문 문자열은 본문에 있으니 언제든 다시 만들 수 있다.
-    흐림    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (src, dst, heading)
-);
-CREATE INDEX IF NOT EXISTS idx_links_dst ON links (dst);
-
--- 태그. 같은 항목에 같은 태그가 여러 번 나와도 한 줄이다.
-CREATE TABLE IF NOT EXISTS tags (
-    title TEXT NOT NULL,
-    tag   TEXT NOT NULL,
-    PRIMARY KEY (title, tag)
-);
-CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags (tag);
-
--- 별칭. 다른 이름으로도 [[링크]]가 닿는다. 별칭은 온 저장소에서 하나뿐이다.
-CREATE TABLE IF NOT EXISTS aliases (
-    alias TEXT PRIMARY KEY,
-    title TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_aliases_title ON aliases (title);
-"""
-
-# 낱말 색인. `LIKE '%낱말%'`은 "voice 튜닝"처럼 **떨어져 있는 두 낱말**을 못 찾고,
-# 20년치에서는 훑는 값도 감당이 안 된다. FTS5는 SQLite에 들어 있어 새 짐이 없다.
-# `unicode61`은 한글을 낱말로 끊고, 뒤에 붙는 조사는 앞자리 맞추기(`저장*`)로 걸린다.
-SEARCH_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
-    path UNINDEXED, title, body, tokenize='unicode61 remove_diacritics 2');
-"""
 
 # 뜻으로 찾기 위한 벡터. **낱말이 안 맞아도** 찾으라고 두는 것이다 —
 # "작년에 배포 엎었던 거"처럼 사람은 낱말이 아니라 모양으로 기억한다.
@@ -2363,6 +2199,22 @@ class Notes:
 
 def _self_check() -> None:
     import tempfile
+
+    # ★★ **같은 이름을 두 번 정의하면 앞엣것은 죽는다 — 그런데 고칠 때는 앞엣것이 먼저 보인다.**
+    #   실제로 `NARROW` 를 앞에서 고쳤는데 뒤엣것이 이겨 **조용히 안 먹었다.**
+    #   되돌려 터뜨려 보고서야 알았다. 이 파일은 한때 90~330줄이 통째로 되풀이됐다.
+    #   (구운 판에는 소스가 없다 — 그때는 건너뛴다.)
+    try:
+        본문 = Path(__file__).read_text(encoding="utf-8")
+    except OSError:
+        본문 = ""
+    if 본문:
+        import collections
+
+        선언 = re.findall(r"^(?:class |def )?([A-Za-z_][A-Za-z_0-9]*)\s*(?:=[^=]|\()",
+                         본문, re.M)
+        겹친 = sorted(이름 for 이름, 수 in collections.Counter(선언).items() if 수 > 1)
+        assert not 겹친, f"같은 이름을 두 번 정의했다 — 앞엣것은 죽은 코드다: {겹친}"
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "notes"
