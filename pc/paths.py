@@ -26,7 +26,7 @@ APP_NAME = "VC"
 # 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
 # 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
 # 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
-VERSION = "0.1.99"
+VERSION = "0.2.0"
 
 
 def _qt_runtime_first() -> bool:
@@ -462,6 +462,23 @@ def _self_check() -> None:
 
     # 판은 굽는 스크립트가 숫자 셋으로 쪼개 쓴다. 모양이 틀리면 거기서 깨진다.
     assert re.fullmatch(r"\d+\.\d+\.\d+", VERSION), VERSION
+
+    # ★★ **판 태그가 이미 있으면 그 판은 나간 것이다 — 올려야 한다.**
+    #   실제로 `v0.1.99` 태그를 `VERSION = 0.1.98` 인 커밋에 달았다. 커밋 메시지의
+    #   따옴표가 셸을 깨면서 판 올리는 `sed` 도 같이 안 먹었는데 그걸 못 봤다 —
+    #   구운 판이 `--doctor` 에 「v0.1.98」 을 찍어서야 알았다.
+    #   **사람이 눈으로 볼 일이 아니다.** 여기서 막는다.
+    #   (소스가 아니면 `git` 이 없다 — 그때는 건너뛴다.)
+    try:
+        import subprocess
+
+        있는태그 = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent.parent), "tag", "--list",
+             f"v{VERSION}"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        있는태그 = ""
+    assert not 있는태그, (
+        f"v{VERSION} 태그가 이미 있다 — 이 판은 나갔다. paths.VERSION 을 올려라")
 
     print("paths self-check 통과")
 
