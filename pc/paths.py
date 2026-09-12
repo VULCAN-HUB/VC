@@ -306,6 +306,29 @@ def config_path() -> Path:
     return data_dir() / "eb_config.json"
 
 
+def load_config() -> dict:
+    """설정을 읽는다. 없거나 깨졌으면 빈 사전 — **설정 한 줄 때문에 프로그램이 죽지 않는다.**"""
+    import json as _j
+
+    try:
+        값 = _j.loads(config_path().read_text(encoding="utf-8"))
+        return 값 if isinstance(값, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(값: dict) -> bool:
+    """설정을 쓴다. 못 써도 터지지 않는다(돌아가는 데 꼭 필요한 것이 아니다)."""
+    import json as _j
+
+    try:
+        config_path().parent.mkdir(parents=True, exist_ok=True)
+        config_path().write_text(_j.dumps(값, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _self_check() -> None:
     import tempfile
 

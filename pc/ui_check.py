@@ -1344,6 +1344,29 @@ def run() -> None:
     좁히라는말 = "처럼 갈래로 좁혀 봐"
     assert not 본문 or 본문.count(좁히라는말) >= 1,         "뜻으로만 찾았을 때 갈래로 좁히라는 말이 없다"
 
+    # ★★ **글자 크기를 한 자리에서 곱한다.** 전에는 `font-size:11px` 이 서른다섯 군데
+    #   박혀 있어 4K 화면이나 눈이 불편한 사람이 키울 길이 없었다(옵시디언은 Ctrl +/-).
+    #   바꾸다 **f-string 이 아닌 자리**를 건드리면 스타일시트에 `{theme.글자(11)}` 이
+    #   글자 그대로 남아 그 칸의 크기가 통째로 죽는다 — 눈으로는 잘 안 보인다. 여기서 센다.
+    import theme as _theme
+    from PyQt5.QtWidgets import QWidget as _QWidget
+
+    남은것 = [type(w).__name__ for w in [win] + win.findChildren(_QWidget)
+             if "글자(" in w.styleSheet()]
+    assert not 남은것, f"스타일시트에 치환 안 된 글자 크기가 남았다: {남은것[:5]}"
+    앞 = _theme.글자(12)
+    _theme.배율바꾸기(1.5)
+    assert _theme.글자(12) == "18px", _theme.글자(12)
+    _theme.배율바꾸기(1.0)
+    assert _theme.글자(12) == 앞, "배율을 되돌려도 안 돌아온다"
+    # ★ **키운 글자가 다음에 켤 때 그대로여야 한다.** 켤 때마다 다시 키워야 하면 있으나 마나다.
+    import paths as _paths
+
+    win.글자키우기(0.2)
+    assert abs(_paths.load_config().get("글자배율", 0) - 1.2) < 0.001,         f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
+    win.글자키우기(0)                     # 제자리로
+    assert abs(_theme.배율() - 1.0) < 0.001, _theme.배율()
+
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다
     #   세그폴트를 냈다(파이썬이 위젯을 먼저 거두고 C++ 쪽이 그걸 다시 만지는 자리다).

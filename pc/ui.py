@@ -194,6 +194,12 @@ class MainWindow(QWidget):
         # 구별할 길이 없다.** 400 이면 보이고 300 이면 안 보였다(재 봤다).
         # 여유를 조금 두고 여기서 바닥을 친다.
         self.setMinimumHeight(430)
+        # ★ 지난번에 키워 둔 글자 크기를 그대로 되살린다 — 켤 때마다 다시 키워야 하면
+        #   있으나 마나다. 값이 없거나 깨졌으면 1.0 이다(설정 한 줄에 창이 안 죽는다).
+        try:
+            theme.배율바꾸기(float(paths.load_config().get("글자배율", 1.0)))
+        except (TypeError, ValueError):
+            theme.배율바꾸기(1.0)
         self._apply_style()
 
         left = self._build_head()
@@ -209,7 +215,7 @@ class MainWindow(QWidget):
 
         wordmark = QLabel("VC")
         wordmark.setStyleSheet(
-            f"color:{theme.T.TEXT.name()}; font-family:{theme.SANS}; font-size:22px;"
+            f"color:{theme.T.TEXT.name()}; font-family:{theme.SANS}; font-size:{theme.글자(22)};"
             "font-weight:700; letter-spacing:1px;"
         )
         tagline = QLabel("VULCAN  ·  Local-first Ambient AI Workspace")
@@ -231,7 +237,7 @@ class MainWindow(QWidget):
         # 엔진 상태. 어떤 모델이 지금 올라와 있는지 화면에서 바로 보이게 한다(결정 36).
         self.engine_label = QLabel()
         self.engine_label.setStyleSheet(
-            f"color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO}; font-size:10px;")
+            f"color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
         engine_timer = QTimer(self)
         engine_timer.timeout.connect(self.refresh_engine)
         engine_timer.start(4000)
@@ -596,7 +602,7 @@ class MainWindow(QWidget):
         self.embeds_head = QLabel("끼워 넣은 것")
         self.embeds_head.setStyleSheet(
             f"color:{theme.css(theme.T.ACCENT, 0.5)}; font-family:{theme.MONO};"
-            "font-size:10px; letter-spacing:1px; padding-top:4px;")
+            f"font-size:{theme.글자(10)}; letter-spacing:1px; padding-top:4px;")
         self.embeds_head.hide()
         self.embeds = Results(limit=3)
         self.embeds.picked.connect(self.show_note)
@@ -606,7 +612,7 @@ class MainWindow(QWidget):
         self.backs_head = QLabel("가리킨 곳")
         self.backs_head.setStyleSheet(
             f"color:{theme.css(theme.T.ACCENT, 0.5)}; font-family:{theme.MONO};"
-            "font-size:10px; letter-spacing:1px; padding-top:4px;")
+            f"font-size:{theme.글자(10)}; letter-spacing:1px; padding-top:4px;")
         self.backs_head.hide()
         self.backs = Results(limit=4)
         self.backs.picked.connect(self.show_note)
@@ -759,22 +765,22 @@ class MainWindow(QWidget):
         # 선택자 없는 속성과 선택자 규칙을 한 문자열에 섞으면 뒤쪽이 통째로 무시된다.
         self.setStyleSheet(f"""
             QWidget {{ background: {theme.T.BG.name()}; color: {theme.T.TEXT.name()};
-                       font-family: {theme.SANS}; font-size: 12px; }}
+                       font-family: {theme.SANS}; font-size:{theme.글자(12)}; }}
             QLabel {{ background: transparent; }}
             QFrame#panel {{ background: {theme.T.PANEL.name()};
                             border-left: 1px solid {theme.css(theme.T.ACCENT, 0.12)}; }}
             QFrame#hud {{ background: {theme.css(theme.T.ACCENT, 0.03)};
                           border: 1px solid {theme.css(theme.T.ACCENT, 0.12)}; border-radius: 6px; }}
-            QLabel#say {{ color: {theme.T.TEXT.name()}; font-size: 14px; padding: 12px 16px;
+            QLabel#say {{ color: {theme.T.TEXT.name()}; font-size:{theme.글자(14)}; padding: 12px 16px;
                           background: {theme.css(theme.T.ACCENT, 0.05)};
                           border-left: 2px solid {theme.T.ACCENT.name()}; border-radius: 3px; }}
             QLabel#chip {{ color: {theme.T.ACCENT.name()}; background: {theme.css(theme.T.ACCENT, 0.1)};
                            border: 1px solid {theme.css(theme.T.ACCENT, 0.3)}; border-radius: 3px;
-                           padding: 2px 8px; font-family: {theme.MONO}; font-size: 9px;
+                           padding: 2px 8px; font-family: {theme.MONO}; font-size:{theme.글자(9)};
                            font-weight: 600; letter-spacing: 1px; }}
             QPushButton {{ background: transparent; color: {theme.css(theme.T.DIM, 0.6)};
                            border: 1px solid {theme.css(theme.T.DIM, 0.2)}; border-radius: 3px;
-                           padding: 5px 12px; font-family: {theme.MONO}; font-size: 10px;
+                           padding: 5px 12px; font-family: {theme.MONO}; font-size:{theme.글자(10)};
                            letter-spacing: 1px; }}
             QPushButton:hover {{ color: {theme.T.TEXT.name()}; border-color: {theme.css(theme.T.ACCENT, 0.5)}; }}
             QPushButton#primary {{ color: {theme.T.ACCENT.name()};
@@ -794,12 +800,12 @@ class MainWindow(QWidget):
                                                  background: {theme.css(theme.T.ACCENT, 0.12)}; }}
             QLineEdit#ask {{ background: {theme.css(theme.T.ACCENT, 0.04)};
                              border: 1px solid {theme.css(theme.T.ACCENT, 0.2)}; border-radius: 3px;
-                             padding: 5px 10px; color: {theme.T.TEXT.name()}; font-size: 12px; }}
+                             padding: 5px 10px; color: {theme.T.TEXT.name()}; font-size:{theme.글자(12)}; }}
             QLineEdit#ask:focus {{ border-color: {theme.css(theme.T.ACCENT, 0.6)};
                                    background: {theme.css(theme.T.ACCENT, 0.08)}; }}
             QComboBox#pick {{ background: {theme.css(theme.T.ACCENT, 0.05)};
                               border: 1px solid {theme.css(theme.T.ACCENT, 0.18)}; border-radius: 3px;
-                              padding: 3px 8px; color: {theme.css(theme.T.DIM, 0.75)}; font-size: 11px; }}
+                              padding: 3px 8px; color: {theme.css(theme.T.DIM, 0.75)}; font-size:{theme.글자(11)}; }}
             QComboBox#pick:hover {{ border-color: {theme.css(theme.T.ACCENT, 0.5)}; }}
             QComboBox#pick QAbstractItemView {{ background: {theme.T.PANEL.name()};
                                                 color: {theme.T.TEXT.name()};
@@ -815,11 +821,11 @@ class MainWindow(QWidget):
             QListView#link_pop::item {{ padding: 3px 8px; }}
             /* 확인창. 시스템 회색 상자 그대로면 말투만 우리 것이고 모습은 윈도우다. */
             QMessageBox {{ background: {theme.T.PANEL.name()}; }}
-            QMessageBox QLabel {{ color: {theme.T.TEXT.name()}; font-size: 12px; }}
+            QMessageBox QLabel {{ color: {theme.T.TEXT.name()}; font-size:{theme.글자(12)}; }}
             QMessageBox QPushButton {{ background: {theme.css(theme.T.ACCENT, 0.05)};
                                        border: 1px solid {theme.css(theme.T.ACCENT, 0.22)};
                                        border-radius: 3px; padding: 5px 16px;
-                                       color: {theme.css(theme.T.DIM, 0.85)}; font-size: 11px; }}
+                                       color: {theme.css(theme.T.DIM, 0.85)}; font-size:{theme.글자(11)}; }}
             QMessageBox QPushButton:hover {{ border-color: {theme.css(theme.T.ACCENT, 0.6)};
                                              color: {theme.T.TEXT.name()}; }}
             QScrollArea {{ background: transparent; }}
@@ -1083,12 +1089,36 @@ class MainWindow(QWidget):
             ("Alt+Left", self.go_back),
             ("Alt+Right", self.go_forward),
             ("Ctrl+\\", self.open_side_here),
+            # ★ **글자 크기.** 옵시디언과 같은 손버릇이다. `Ctrl+=` 와 `Ctrl++` 둘 다 받는다
+            #   — 자판에 따라 어느 쪽이 오는지 다르다.
+            ("Ctrl+=", lambda: self.글자키우기(0.1)),
+            ("Ctrl++", lambda: self.글자키우기(0.1)),
+            ("Ctrl+-", lambda: self.글자키우기(-0.1)),
+            ("Ctrl+0", lambda: self.글자키우기(0)),
             ("Esc", self.escape),
         ):
             QShortcut(QKeySequence(keys), self, activated=act)
         # **Esc 는 앱 전체에서 먼저 본다.** 목록이 뜬 동안 키가 어느 길로 오든
         # 우리가 먼저 잡는다 — 위 `eventFilter` 설명 참고.
         QApplication.instance().installEventFilter(self)
+
+    def 글자키우기(self, 만큼: float) -> None:
+        """글자를 키우거나 줄인다. `만큼=0` 이면 제자리(1.0)로.
+
+        ★ 화면 곳곳에 크기가 픽셀로 박혀 있어 **키울 길이 아예 없었다** — 4K 화면이나
+        눈이 불편한 사람은 쓸 수가 없다. 옵시디언은 `Ctrl +/-` 로 된다.
+        바꾼 값은 설정에 남겨 다음에 켤 때 그대로 뜬다.
+        """
+        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else 1.0)
+        self._apply_style()
+        for 아이 in self.findChildren(QWidget):
+            아이.style().unpolish(아이)
+            아이.style().polish(아이)
+        try:
+            paths.save_config({**paths.load_config(), "글자배율": 새배율})
+        except Exception:
+            pass        # 못 남겨도 이번 판에는 적용된다
+        self.report(f"글자 {round(새배율 * 100)}%", [ROOT])
 
     def escape(self) -> None:
         """Esc. **`[[` 목록이 떠 있으면 그것부터 닫는다.**"""
@@ -1210,7 +1240,7 @@ class MainWindow(QWidget):
         if not self.proposal_cards:
             empty = QLabel("아직 제안 없어. 쓰다 보면 내가 먼저 찾아낼게.")
             empty.setWordWrap(True)
-            empty.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.3)}; font-size:11px; padding:14px 4px;")
+            empty.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.3)}; font-size:{theme.글자(11)}; padding:14px 4px;")
             self.proposal_box.insertWidget(0, empty)
             self._empty_hint = empty
 

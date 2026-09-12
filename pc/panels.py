@@ -575,7 +575,7 @@ class Folded(QWidget):
         self.head.setToolTip(hint)
         self.head.setStyleSheet(
             f"QPushButton{{color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO};"
-            "font-size:10px; letter-spacing:2px; text-align:left; border:none; padding:3px 0;}"
+            f"font-size:{theme.글자(10)}; letter-spacing:2px; text-align:left; border:none; padding:3px 0;}}"
             f"QPushButton:hover{{color:{theme.T.ACCENT.name()};}}")
         self._title = title
         self.head.clicked.connect(lambda: self.set_open(not self.body.isVisible()))
@@ -751,7 +751,7 @@ class Results(QWidget):
             line = QLabel(앞 + self.snippet(body, query, width, title))
             line.setWordWrap(True)
             line.setStyleSheet(
-                f"color:{theme.css(theme.T.DIM, 0.4)}; font-size:10px; padding:0 8px 3px 8px;")
+                f"color:{theme.css(theme.T.DIM, 0.4)}; font-size:{theme.글자(10)}; padding:0 8px 3px 8px;")
             for w in (b, line):
                 self.rows.addWidget(w)
                 self.items.append(w)
@@ -917,7 +917,7 @@ class Gaps(QWidget):
         self.rows.setContentsMargins(2, 0, 2, 0)
         self.rows.setSpacing(2)
         self.empty = QLabel("빈 데 없어. 가리키는 것마다 다 있어.")
-        self.empty.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.35)}; font-size:11px;")
+        self.empty.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.35)}; font-size:{theme.글자(11)};")
         self.rows.addWidget(self.empty)
         self.buttons: list[QPushButton] = []
 
@@ -960,7 +960,7 @@ class ModelPicker(HudPanel):
 
         self.hardware = QLabel()
         self.hardware.setWordWrap(True)
-        self.hardware.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.4)}; font-size:10px;")
+        self.hardware.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.4)}; font-size:{theme.글자(10)};")
 
         box = QVBoxLayout(self)
         box.setContentsMargins(14, 12, 14, 12)
@@ -970,7 +970,7 @@ class ModelPicker(HudPanel):
         # 받기 칸. 없는 모델을 앱 안에서 받는다 — 파일을 손으로 넣게 하면 대부분 안 한다.
         self.get_label = QLabel("받을 모델")
         self.get_label.setWordWrap(True)
-        self.get_label.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.5)}; font-size:10px;")
+        self.get_label.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.5)}; font-size:{theme.글자(10)};")
         self.get_list = QComboBox()
         self.get_list.setObjectName("pick")
         self.get_button = QPushButton("받기")
@@ -995,7 +995,7 @@ class ModelPicker(HudPanel):
             row.setSpacing(6)
             name = QLabel(label)
             name.setFixedWidth(52)
-            name.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.55)}; font-size:11px;")
+            name.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.55)}; font-size:{theme.글자(11)};")
             combo = QComboBox()
             combo.setObjectName("pick")
             combo.activated.connect(lambda _, r=role: self._chose(r))
@@ -1179,7 +1179,7 @@ class RemoteGateCard(HudPanel):
 
         self.title = QLabel()
         self.title.setWordWrap(True)
-        self.title.setStyleSheet(f"color:{theme.T.TEXT.name()}; font-size:12px;")
+        self.title.setStyleSheet(f"color:{theme.T.TEXT.name()}; font-size:{theme.글자(12)};")
 
         self.code = QLineEdit()
         self.code.setPlaceholderText("외부 PC 화면의 네 자리")
@@ -1240,16 +1240,16 @@ class ProposalCard(HudPanel):
 
         title = QLabel(row["title"])
         title.setWordWrap(True)
-        title.setStyleSheet(f"color:{theme.T.TEXT.name()}; font-family:{theme.SANS}; font-size:13px; font-weight:600;")
+        title.setStyleSheet(f"color:{theme.T.TEXT.name()}; font-family:{theme.SANS}; font-size:{theme.글자(13)}; font-weight:600;")
 
         summary = QLabel(row["summary"])
         summary.setWordWrap(True)
-        summary.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.6)}; font-size:11px;")
+        summary.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.6)}; font-size:{theme.글자(11)};")
 
         evidence = len(json.loads(row["based_on"] or "[]"))
         meta = QLabel(f"근거 {evidence}건" if evidence else "근거 없음")
         meta.setStyleSheet(
-            f"color:{theme.css(theme.T.DIM, 0.4)}; font-family:{theme.MONO}; font-size:10px; letter-spacing:1px;"
+            f"color:{theme.css(theme.T.DIM, 0.4)}; font-family:{theme.MONO}; font-size:{theme.글자(10)}; letter-spacing:1px;"
         )
 
         reject = QPushButton("거절")

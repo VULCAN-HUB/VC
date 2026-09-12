@@ -26,6 +26,28 @@ THEME_FILE = paths.data_dir() / "theme.json"  # 고른 테마를 여기 남긴�
 # 글꼴: 한글은 JetBrains Mono·Consolas에 글리프가 없어 대체 폰트로 떨어지며 자간이
 # 흐트러진다. 한글 폰트를 앞에 둬야 계기판처럼 읽히면서도 안 깨진다.
 MONO = '"Malgun Gothic", "Consolas", monospace'
+
+# ★★ **글자 크기를 키울 길이 없었다.** 화면 곳곳에 크기가 픽셀로 **서른다섯 군데**
+# 박혀 있어서, 4K 화면이나 눈이 불편한 사람은 쓸 수가 없다 — 옵시디언은 `Ctrl +/-` 로 된다.
+# 한 자리에서 곱한다. 쓰는 쪽은 `theme.글자(11)` 로 적고, 배율만 바꾸면 다 같이 큰다.
+#   ※ 배율은 화면이 켜질 때 설정에서 읽어 넣는다(`theme.배율바꾸기`).
+_배율 = 1.0
+
+
+def 배율바꾸기(값: float) -> float:
+    """글자 배율을 바꾸고 지금 값을 돌려준다. 0.7~2.5 로 조인다."""
+    global _배율
+    _배율 = max(0.7, min(2.5, round(값, 2)))
+    return _배율
+
+
+def 배율() -> float:
+    return _배율
+
+
+def 글자(px: float) -> str:
+    """`font-size` 에 넣을 글자. 배율을 곱한다."""
+    return f"{max(7, round(px * _배율))}px"
 SANS = '"Malgun Gothic", "Segoe UI", sans-serif'
 
 THEMES: dict[str, dict] = {
@@ -210,7 +232,7 @@ class Divider(QFrame):
 def section_title(text: str) -> QLabel:
     label = QLabel(f"// {text}")
     label.setStyleSheet(
-        f"color:{css(T.ACCENT, 0.6)}; font-family:{MONO}; font-size:11px;"
+        f"color:{css(T.ACCENT, 0.6)}; font-family:{MONO}; font-size:{글자(11)};"
         "font-weight:600; letter-spacing:1px; padding:2px 2px 4px 2px;")
     return label
 
@@ -237,14 +259,14 @@ def section(text: str, hint: str = "", action: QWidget | None = None) -> QWidget
     if hint:
         sub = QLabel(hint)
         sub.setWordWrap(True)
-        sub.setStyleSheet(f"color:{css(T.DIM, 0.32)}; font-size:10px;")
+        sub.setStyleSheet(f"color:{css(T.DIM, 0.32)}; font-size:{글자(10)};")
         lay.addWidget(sub)
     return box
 
 
 def small(color, alpha: float = 1.0, size: int = 10) -> str:
     """계기판 글씨 한 줄. 같은 문자열이 네 군데 흩어져 있어 하나로 모았다."""
-    return f"color:{css(color, alpha)}; font-family:{MONO}; font-size:{size}px; letter-spacing:1px;"
+    return f"color:{css(color, alpha)}; font-family:{MONO}; font-size:{글자(size)}; letter-spacing:1px;"
 
 
 def pop_css() -> str:
@@ -256,7 +278,7 @@ def pop_css() -> str:
     return f"""
         QListView {{ background: {T.PANEL.name()}; color: {T.TEXT.name()};
                      border: 1px solid {css(T.ACCENT, 0.22)};
-                     outline: none; padding: 2px; font-size: 12px;
+                     outline: none; padding: 2px; font-size:{글자(12)};
                      selection-background-color: {css(T.ACCENT, 0.25)};
                      selection-color: {T.TEXT.name()}; }}
         QListView::item {{ padding: 3px 8px; }}
@@ -270,7 +292,7 @@ def stylesheet() -> str:
     """창 전체 스타일. 테마를 바꾸면 이 문자열만 다시 만들어 붙이면 된다."""
     return f"""
         QWidget {{ background: {T.BG.name()}; color: {T.TEXT.name()};
-                   font-family: {SANS}; font-size: 12px; }}
+                   font-family: {SANS}; font-size:{글자(12)}; }}
         QLabel {{ background: transparent; }}
         QFrame#panel {{ background: {css(T.PANEL, 0.96)};
                         border-left: 1px solid {css(T.ACCENT, 0.12)}; }}
@@ -282,11 +304,11 @@ def stylesheet() -> str:
                          border: 1px solid {css(T.ACCENT, 0.22)}; border-radius: 10px; }}
         QLabel#chip {{ color: {T.ACCENT.name()}; background: {css(T.ACCENT, 0.1)};
                        border: 1px solid {css(T.ACCENT, 0.3)}; border-radius: 3px;
-                       padding: 2px 8px; font-family: {MONO}; font-size: 9px;
+                       padding: 2px 8px; font-family: {MONO}; font-size:{글자(9)};
                        font-weight: 600; letter-spacing: 1px; }}
         QPushButton {{ background: transparent; color: {css(T.DIM, 0.6)};
                        border: 1px solid {css(T.DIM, 0.2)}; border-radius: 4px;
-                       padding: 5px 12px; font-family: {MONO}; font-size: 10px;
+                       padding: 5px 12px; font-family: {MONO}; font-size:{글자(10)};
                        letter-spacing: 1px; }}
         QPushButton:hover {{ color: {T.TEXT.name()}; border-color: {css(T.ACCENT, 0.5)}; }}
         QPushButton#primary {{ color: {T.ACCENT.name()};
@@ -305,24 +327,24 @@ def stylesheet() -> str:
                                              background: {css(T.ACCENT, 0.12)}; }}
         QLineEdit#title {{ background: transparent; border: none; padding: 0;
                            color: {T.TEXT.name()}; font-family: {SANS};
-                           font-size: 15px; font-weight: 600; }}
+                           font-size:{글자(15)}; font-weight: 600; }}
         QLineEdit#title:focus {{ background: {css(T.ACCENT, 0.07)};
                                  border-bottom: 1px solid {css(T.ACCENT, 0.5)}; }}
         QTextBrowser {{ background: transparent; border: none;
-                        color: {css(T.TEXT, 0.85)}; font-size: 12px; }}
+                        color: {css(T.TEXT, 0.85)}; font-size:{글자(12)}; }}
         QTextEdit#body {{ background: transparent; border: none;
-                          color: {css(T.DIM, 0.75)}; font-size: 12px; }}
+                          color: {css(T.DIM, 0.75)}; font-size:{글자(12)}; }}
         QTextEdit#body:focus {{ background: {css(T.ACCENT, 0.04)};
                                 border: 1px solid {css(T.ACCENT, 0.18)};
                                 border-radius: 4px; }}
         QLineEdit#ask {{ background: {css(T.ACCENT, 0.04)};
                          border: 1px solid {css(T.ACCENT, 0.2)}; border-radius: 4px;
-                         padding: 6px 10px; color: {T.TEXT.name()}; font-size: 12px; }}
+                         padding: 6px 10px; color: {T.TEXT.name()}; font-size:{글자(12)}; }}
         QLineEdit#ask:focus {{ border-color: {css(T.ACCENT, 0.6)};
                                background: {css(T.ACCENT, 0.08)}; }}
         QComboBox#pick {{ background: {css(T.ACCENT, 0.05)};
                           border: 1px solid {css(T.ACCENT, 0.18)}; border-radius: 3px;
-                          padding: 3px 8px; color: {css(T.DIM, 0.75)}; font-size: 11px; }}
+                          padding: 3px 8px; color: {css(T.DIM, 0.75)}; font-size:{글자(11)}; }}
         QComboBox#pick:hover {{ border-color: {css(T.ACCENT, 0.5)}; }}
         QComboBox#pick QAbstractItemView {{ background: {T.PANEL.name()};
                                             color: {T.TEXT.name()};
