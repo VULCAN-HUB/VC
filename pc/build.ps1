@@ -29,6 +29,10 @@ if (Test-Path $Lock) {
 }
 Set-Content -LiteralPath $Lock -Value (Get-Date).ToString("s") -Encoding utf8
 
+# ★ **굽는 데 드는 시간을 찍는다.** 한 번 고칠 때마다 굽던 버릇을 고치려면(오너 2026-09-13)
+# 굽기가 얼마짜리인지 눈에 보여야 한다. 모아서 한 번 굽는 것이 규칙이다.
+$시계 = [System.Diagnostics.Stopwatch]::StartNew()
+
 Write-Host "== 정션 걸기 $Link -> $Root"
 if (Test-Path $Link) { cmd /c rmdir $Link | Out-Null }
 cmd /c mklink /J $Link "$Root" | Out-Null
@@ -91,7 +95,7 @@ try {
     }
     # $MB 는 푼 폴더 크기다. 여기서 그걸 찍으면 zip 이 579MB 인 줄 알게 된다(실은 300MB).
     $ZipMB = [math]::Round((Get-Item $Zip).Length / 1MB, 1)
-    Write-Host "== 끝. $Zip ($ZipMB MB · 풀면 $MB MB)"
+    Write-Host "== 끝. $Zip ($ZipMB MB · 풀면 $MB MB) · 굽는 데 $([math]::Round($시계.Elapsed.TotalMinutes,1))분"
 }
 finally {
     if (Test-Path $Link) { cmd /c rmdir $Link | Out-Null }
