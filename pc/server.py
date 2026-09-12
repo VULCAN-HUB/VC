@@ -44,6 +44,10 @@ from store import Store
 
 CONFIG_PATH = paths.config_path()
 MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 폰 사진 한 장이 이보다 크면 줄여서 보내야 한다
+# 글 한 편을 통째로 줄 때의 상한. **넉넉하다** — 오너 창고에서 제일 긴 글이 3,241자다.
+# 아껴서 답을 자르면 AI 가 다시 부르므로 되레 손해고, 상한이 없으면 5만 자도 그대로 나간다.
+# `full=1` 로 뚫는다. 자르면 `cut` 으로 말한다.
+MAX_NOTE_CHARS = 20000
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
@@ -214,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
                             "-kind:일 처럼 빼기도 된다(가장 많은 갈래를 빼면 잡담이 준다). "
                             "year:2026 · path:2026/09 도 된다. "
                             "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
-                            "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다. "
+                            "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다 "
+                            "(아주 긴 글은 2만 자에서 자르고 cut 으로 말한다. full=1 로 뚫는다). "
                             "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
                             "갈래를 모르면 좁히지 마라 — 틀리게 좁히면 크게 잃는다. "
@@ -324,6 +329,14 @@ class Handler(BaseHTTPRequestHandler):
             #   ※ 넉넉히 준다. 아껴서 답을 자르면 통째로 다시 부르므로 되레 손해다.
             물음 = (args.get("q") or [""])[0]
             글, 잘랐나 = notes.둘레(note.body, 물음)
+            # ★★ **`q=` 없이 부르면 통째로 나간다 — 아주 긴 글이면 그것만으로 값이 날아간다.**
+            #   흡수를 두드려 보니 **5만 자짜리 한 줄**도 그대로 들어온다(자르지 않는다 —
+            #   원본이 원본이라 그게 맞다). 그 글을 AI 가 통째로 부르면 2만 토큰이다.
+            #   넉넉한 상한을 두고 **잘랐다고 말한다** — AI 는 `q=` 로 좁혀 다시 부르면 된다.
+            #   통째가 꼭 필요하면 `full=1` 로 뚫는다.
+            통째로달라 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
+            if not 통째로달라 and len(글) > MAX_NOTE_CHARS:
+                글, 잘랐나 = 글[:MAX_NOTE_CHARS], True
             답 = {"title": title, "text": 글, "chars": len(글),
                   "headings": [h for _, h in notes.headings(note.body)][:20]}
             if 잘랐나:
@@ -1104,6 +1117,15 @@ def _self_check() -> None:
     assert 둘.get("cut") and 둘.get("full_chars", 0) > 둘["chars"],         f"자른 것을 안 말한다 — AI 가 글 전체를 본 줄 안다: { {k: v for k, v in 둘.items() if k != 'text'} }"
     status, 온통 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("아주 긴 글"))
     assert 온통["chars"] == 둘["full_chars"] and "cut" not in 온통, "q 가 없는데 잘랐다"
+    # ★★ **아주 긴 글은 `q=` 없이 불러도 상한이 있다.** 흡수는 5만 자짜리 한 줄도
+    #   그대로 들인다(원본이 원본이다) — 그 글을 통째로 주면 2만 토큰이 한 번에 나간다.
+    call("POST", "/eb/v1/memory", {"title": "어마어마한 글", "text": "가" * (MAX_NOTE_CHARS + 5000)})
+    status, 큰것 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("어마어마한 글"))
+    assert 큰것["chars"] <= MAX_NOTE_CHARS, f"상한을 안 지킨다: {큰것['chars']}"
+    assert 큰것.get("cut"), "잘라 놓고 말을 안 한다"
+    status, 뚫음2 = call("GET", "/eb/v1/memory/note?full=1&title="
+                        + urllib.parse.quote("어마어마한 글"))
+    assert 뚫음2["chars"] > MAX_NOTE_CHARS, "full=1 로도 통째를 못 받는다"
 
     # ★ **훑을 때는 제목만.** 「무슨 결정들이 있었나」처럼 목록을 보는 일은 흔한데
     #   장마다 요약·날짜·이음선까지 실으면 세 배가 든다(오너 창고 120장: 20,233 → 6,586자).
