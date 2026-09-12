@@ -74,6 +74,42 @@ def _앞머리값(글: str) -> object:
         return json.loads(글)
     except (ValueError, TypeError):
         return 글.strip("\"'")
+def _앞머리풀기(글: str) -> dict:
+    """앞머리 한 덩이를 사전으로. **옵시디언이 쓰는 블록 목록 꼴을 받는다.**
+
+    ★★ 옵시디언은 태그·별칭을 이렇게 적는다:
+
+        tags:
+          - 할일
+          - 프로젝트/VC
+
+    한 줄씩 `k: v` 로만 읽던 때는 이것이 `tags: ""` 가 되어, **다시 쓸 때 사람이 적은
+    태그가 통째로 사라졌다**(재 보고 찾았다). 별칭도 같아서 옵시디언 별칭이 죽었다.
+    """
+    풀림: dict = {}
+    줄들 = 글.splitlines()
+    i = 0
+    while i < len(줄들):
+        줄 = 줄들[i].rstrip()
+        i += 1
+        if not 줄.strip() or 줄.lstrip().startswith("#"):
+            continue
+        if 줄 != 줄.lstrip() or ":" not in 줄:
+            continue                      # 들여쓴 줄은 위 열쇠가 이미 먹었다
+        열쇠, _, 값 = 줄.partition(":")
+        열쇠, 값 = 열쇠.strip(), 값.strip()
+        if 값:
+            풀림[열쇠] = _앞머리값(값)
+            continue
+        # 값이 비었다 — 아래 `- 항목` 줄들이 그 값이다(옵시디언 꼴).
+        모음 = []
+        while i < len(줄들) and 줄들[i].strip().startswith("- "):
+            모음.append(_앞머리값(줄들[i].strip()[2:].strip()))
+            i += 1
+        풀림[열쇠] = 모음 if 모음 else ""
+    return 풀림
+
+
 UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # 첨부로 보는 확장자. **첨부는 항목이 아니다** — `![[사진.png]]`을 노트 링크로 세면
@@ -746,7 +782,22 @@ class Note:
         return parse_links(self.body)
 
     def tags(self) -> list[str]:
-        return parse_tags(self.body)
+        """본문의 `#태그` **와** 앞머리 `tags:` 를 합친다.
+
+        ★★ 옵시디언은 태그를 앞머리에도 적는다(`tags:` 아래 `- 할일`). 그것을 안 세면
+        옵시디언에서 붙인 태그가 이 창고에서는 **없는 것**이 된다 — 같은 볼트를 두 도구가
+        나눠 보는데 한쪽만 안 보이는 꼴이라, 사람은 태그가 사라졌다고 느낀다.
+        """
+        든것 = parse_tags(self.body)
+        앞 = self.extra.get("tags") or self.extra.get("tag")
+        if isinstance(앞, str):
+            앞 = [조각.strip() for 조각 in 앞.replace(",", " ").split() if 조각.strip()]
+        if isinstance(앞, list):
+            for t in 앞:
+                t = str(t).strip().lstrip("#")
+                if t and t not in 든것:
+                    든것.append(t)
+        return 든것
 
     def embeds(self) -> list[tuple[str, str]]:
         return parse_embeds(self.body)
@@ -824,15 +875,7 @@ class Note:
         if not m:
             # 사용자가 손으로 만든 파일. 그대로 받아들인다.
             return cls(title=title, body=raw, created=_now())
-        front: dict[str, object] = {}
-        for line in m.group(1).splitlines():
-            if ":" not in line:
-                continue
-            k, _, v = line.partition(":")
-            try:
-                front[k.strip()] = json.loads(v.strip())
-            except json.JSONDecodeError:
-                front[k.strip()] = v.strip()
+        front = _앞머리풀기(m.group(1))
         decl = front.get("declaration")
         alias = front.get("aliases")
         extra = {k: v for k, v in front.items() if k not in cls.OURS}
@@ -2562,6 +2605,26 @@ def _self_check() -> None:
         assert "보고서" in picked, "반드시 넣으랬는데 잘렸다"
         assert len(picked) == 3
         assert n.working_set(2)[0] == "고정된 것", "고정한 게 먼저 안 온다"
+
+        # ★★ **옵시디언이 쓰는 앞머리 꼴을 받아야 한다.** 태그·별칭을 블록 목록으로 적는데
+        #   한 줄씩 `k: v` 로만 읽던 때는 `tags: ""` 가 되어, **다시 쓸 때 사람이 적은 태그가
+        #   통째로 사라졌다.** 별칭도 죽어 옵시디언 별칭으로는 글이 안 열렸다.
+        #   같은 볼트를 두 도구가 나눠 보는데 한쪽만 안 보이면 사람은 「사라졌다」고 느낀다.
+        옵글 = ("---" + chr(10) + "tags:" + chr(10) + "  - 옵시태그" + chr(10)
+                + "  - 프로젝트/VC" + chr(10) + "aliases:" + chr(10) + "  - 딴이름" + chr(10)
+                + "---" + chr(10) + chr(10) + "내용이다. #직접태그" + chr(10))
+        (n.root / "옵시디언 글.md").write_text(옵글, encoding="utf-8")
+        n.reindex()
+        읽은 = n.read("옵시디언 글")
+        assert 읽은 is not None and 읽은.extra.get("tags") == ["옵시태그", "프로젝트/VC"],             f"블록 목록 앞머리를 못 읽는다: {읽은.extra if 읽은 else None}"
+        assert 읽은.aliases == ["딴이름"], f"옵시디언 별칭을 못 읽는다: {읽은.aliases}"
+        assert n.read("딴이름") is not None, "옵시디언 별칭으로 글이 안 열린다"
+        assert set(읽은.tags()) == {"옵시태그", "프로젝트/VC", "직접태그"}, 읽은.tags()
+        assert "옵시디언 글" in [r["title"] for r in n.search("tag:프로젝트")], "앞머리 태그로 못 찾는다"
+        # 다시 써도 사람이 적은 것이 남아야 한다.
+        n.write(Note(title="옵시디언 글", body=읽은.body + "덧", aliases=읽은.aliases, extra=읽은.extra))
+        글 = (n.root / "옵시디언 글.md").read_text(encoding="utf-8")
+        assert "옵시태그" in 글 and "딴이름" in 글, f"다시 쓰면서 사람이 적은 것을 지웠다: {글[:120]}"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
