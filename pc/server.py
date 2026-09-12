@@ -707,16 +707,34 @@ class EBServer(ThreadingHTTPServer):
                 return
             embed = onnx_embedder(paths.meaning_dir(), max_tokens=EMBED_TOKENS)
             if embed is None:
-                return          # 모델이 없다. 낱말 검색은 그대로 돈다
-            # sqlite 연결은 실마다 하나가 원칙이다 — 화면 쪽도 그렇게 한다.
+                print("[뜻 벡터] 안 돈다 — 모델이 없다: " + str(paths.meaning_dir()))
+                return          # 낱말 검색은 그대로 돈다
+            # ★★ **찾는 쪽에도 임베더를 붙인다.** 처음엔 이 실의 제 연결에만 붙였는데,
+            #   그러면 **벡터는 자라는데 뜻 검색은 영영 0건**이다 — `search` 가 쓰는
+            #   `self.notes` 는 `_embed` 가 None 이라 `semantic()` 이 늘 빈 목록을 준다.
+            #   시험 쪽이 `--no-ui` 에서 그걸 잡았다: 본문에 있는 낱말은 나오는데
+            #   뜻으로 물으면 네 가지가 다 0건이었다. **자란 것과 쓰이는 것은 다른 말이다.**
+            self.notes.use_embedder(embed)
+            # sqlite 연결은 실마다 하나가 원칙이다 — 쓰는 것은 제 연결로 한다.
             내것 = self.notes.__class__(self.notes.root, self.notes.index_path,
                                         index_now=False)
             내것.use_embedder(embed)
+            처음 = True
             while True:
                 try:
                     내것.reindex()
-                    while 내것.embed_some(16):
-                        pass
+                    남음 = 내것.vec_left()
+                    if 처음:
+                        print(f"[뜻 벡터] 항목 {내것.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}"
+                              f" · 새로 만들 {남음}")
+                        처음 = False
+                    if 남음:
+                        while 내것.embed_some(16):
+                            pass
+                        print(f"[뜻 벡터] 다 찼다 — 못 만든 것 {내것.vec_left()}개")
+                        # ★ **찾는 쪽 캐시를 비운다.** 안 비우면 새로 만든 벡터를
+                        #   `semantic()` 이 못 본다 — 캐시는 한 번 읽고 들고 있다.
+                        self.notes._vec_cache = None
                 except Exception as e:  # 못 채워도 서버는 계속 떠 있어야 한다
                     print(f"[뜻 벡터 실패] {e}")
                 time.sleep(every_sec)
@@ -1110,7 +1128,13 @@ def _self_check() -> None:
     for 있어야, 까닭 in (
             ("def start_embedding(", "벡터를 채우는 실이 서버에 없다"),
             ("eb.start_embedding()", "창 있는 판이 벡터 실을 안 띄운다"),
-            ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다")):
+            ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다"),
+            # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 처음엔 이 실의 제 연결에만
+            #   임베더를 붙였다 — 벡터는 자라는데 `search` 가 쓰는 `self.notes` 는
+            #   `_embed` 가 None 이라 **뜻 검색이 영영 0건**이었다(시험 쪽이 --no-ui 에서 잡음).
+            ("self.notes.use_embedder(embed)", "찾는 쪽에 임베더가 안 붙어 뜻 검색이 0건이 된다"),
+            # 새로 만든 벡터를 `semantic()` 이 보려면 찾는 쪽 캐시를 비워야 한다.
+            ("self.notes._vec_cache = None", "찾는 쪽 캐시를 안 비워 새 벡터가 안 보인다")):
         assert not 글 or 글.count(있어야) >= 2, f"{까닭} ({글.count(있어야)}군데)"
 
     print("server self-check 통과")
