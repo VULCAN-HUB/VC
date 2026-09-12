@@ -302,8 +302,21 @@ class Handler(BaseHTTPRequestHandler):
                                             "headings": [h for _, h in notes.headings(note.body)][:20]})
                 return self._send(200, {"title": title, "heading": heading, "text": 토막,
                                         "chars": len(토막)})
-            return self._send(200, {"title": title, "text": note.body, "chars": len(note.body),
-                                    "headings": [h for _, h in notes.headings(note.body)][:20]})
+            # ★★ **`q=` 를 주면 그 둘레만 준다.** 긴 글은 소제목이 없으면 통째로 나가는데,
+            #   오너 창고에서 1000자 넘는 글 199장 중 소제목이 있는 것은 7장뿐이다 —
+            #   `heading=` 으로 고르는 길이 사실상 없다. AI 가 필요한 건 몇 줄인데 1301자를 태운다.
+            #   ※ 넉넉히 준다. 아껴서 답을 자르면 통째로 다시 부르므로 되레 손해다.
+            물음 = (args.get("q") or [""])[0]
+            글, 잘랐나 = notes.둘레(note.body, 물음)
+            답 = {"title": title, "text": 글, "chars": len(글),
+                  "headings": [h for _, h in notes.headings(note.body)][:20]}
+            if 잘랐나:
+                # **자른 것을 말한다.** 안 말하면 AI 가 글 전체를 본 줄 안다.
+                답["cut"] = True
+                답["full_chars"] = len(note.body)
+            if not 답["headings"]:
+                del 답["headings"]
+            return self._send(200, 답)
 
         if url.path == "/eb/v1/graph":
             return self._send(200, {"nodes": self.server.notes.graph()})
@@ -996,6 +1009,20 @@ def _self_check() -> None:
     # ★ **요약은 물음에 걸린 줄을 고른다.** 첫 문장만 주면 AI 가 「이 글이 답하나」를 못 가려
     #   2단을 여러 번 부른다 — 그게 값이다. 글자 수는 그대로인데 고를 수 있게 된다.
     assert "삼천만" in 한장["summary"], f"요약이 물음을 안 본다: {한장['summary']}"
+
+    # ★★ **긴 글은 `q=` 로 둘레만.** 오너 창고에서 1000자 넘는 글 199장 중 소제목이 있는
+    #   것은 7장뿐이라 `heading=` 으로 고르는 길이 사실상 없다 — AI 가 1301자를 통째로 태운다.
+    #   [잰 것] 긴 글 30장: 41,583 → 24,615자(41% 감).
+    긴몸 = ("머리말이 길게 이어진다." + chr(10)) * 60 + "예산은 삼천만 원으로 정했다." + (chr(10) + "꼬리말이 길게 이어진다.") * 60
+    call("POST", "/eb/v1/memory", {"title": "아주 긴 글", "text": 긴몸})
+    status, 둘 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("아주 긴 글")
+                     + "&q=" + urllib.parse.quote("예산을 얼마로 정했나"))
+    assert status == 200, status
+    assert "삼천만" in 둘["text"], f"물음이 걸린 자리를 안 준다: {둘['text'][:60]}"
+    assert 둘["chars"] < len(긴몸), f"둘레만 달랬는데 통째로 준다: {둘['chars']}"
+    assert 둘.get("cut") and 둘.get("full_chars", 0) > 둘["chars"],         f"자른 것을 안 말한다 — AI 가 글 전체를 본 줄 안다: { {k: v for k, v in 둘.items() if k != 'text'} }"
+    status, 온통 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("아주 긴 글"))
+    assert 온통["chars"] == 둘["full_chars"] and "cut" not in 온통, "q 가 없는데 잘랐다"
 
     # ★ **훑을 때는 제목만.** 「무슨 결정들이 있었나」처럼 목록을 보는 일은 흔한데
     #   장마다 요약·날짜·이음선까지 실으면 세 배가 든다(오너 창고 120장: 20,233 → 6,586자).

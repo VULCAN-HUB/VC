@@ -609,6 +609,38 @@ def 요약(body: str, extra: dict | None = None, 길이: int = 120,
     return 첫줄[:길이]
 
 
+def 둘레(body: str, 물음: str, 폭: int = 400) -> tuple[str, bool]:
+    """물음이 걸린 자리 **둘레만** 잘라 온다. `(글, 잘랐나)`.
+
+    ★★ **긴 글은 소제목이 없으면 통째로 나간다.** 오너 창고에서 1000자 넘는 글이
+    199장인데(평균 1301자) 그중 소제목이 있는 것은 **7장뿐**이다 — `heading=` 으로
+    토막을 고르는 길이 사실상 없다. AI 가 필요한 건 몇 줄인데 1301자를 태운다.
+
+    ★ **넉넉히 준다.** 아껴서 답을 자르면 AI 가 통째로 다시 부르므로 되레 손해다.
+      못 찾으면 앞부분을 준다 — 그때도 「잘랐다」고 말한다.
+    """
+    if not 물음 or len(body) <= 폭 * 2:
+        return body, False
+    낮 = body.lower()
+    at = -1
+    for 말 in 물음낱말(물음):
+        at = 낮.find(말.lower())
+        if at >= 0:
+            break
+    if at < 0:
+        return body[:폭 * 2], True
+    start = max(0, at - 폭 // 2)
+    end = min(len(body), at + 폭 * 2)
+    # 줄 가운데서 자르지 않는다 — 읽는 쪽이 문장을 잃는다.
+    if start:
+        줄바꿈 = body.rfind(chr(10), 0, start)
+        start = 줄바꿈 + 1 if 줄바꿈 >= 0 else start
+    if end < len(body):
+        줄바꿈 = body.find(chr(10), end)
+        end = 줄바꿈 if 줄바꿈 >= 0 else end
+    return body[start:end], (start > 0 or end < len(body))
+
+
 def parse_links(body: str) -> list[tuple[str, str]]:
     """본문에서 (대상, 소제목)을 뽑는다. 보이는 글자는 연결과 무관해서 버린다.
 
