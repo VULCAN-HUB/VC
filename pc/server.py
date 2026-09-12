@@ -705,9 +705,22 @@ class EBServer(ThreadingHTTPServer):
             # 뜻 검색이 꺼지는 것이 서버가 죽는 것보다 낫다.
             if not pin_runtime():
                 return
+            # ★★ **구운 판에는 콘솔이 없다.** `--noconsole` 로 구우면 `print` 가 조용히
+            #   사라져, 넣어 둔 알림을 **아무도 못 본다** — 시험 쪽이 v0.1.94 에서
+            #   `--no-ui` stdout 을 파일로 받았는데 `[뜻 벡터]` 줄이 하나도 안 남았다.
+            #   그러니 **기록 파일에도 같이 남긴다.** 거기는 창이 없어도 읽을 수 있다.
+            def 알린다(말: str) -> None:
+                print(말)
+                try:
+                    import report
+
+                    report.trail(말)
+                except Exception:
+                    pass        # 알리다 죽으면 안 된다
+
             embed = onnx_embedder(paths.meaning_dir(), max_tokens=EMBED_TOKENS)
             if embed is None:
-                print("[뜻 벡터] 안 돈다 — 모델이 없다: " + str(paths.meaning_dir()))
+                알린다("[뜻 벡터] 안 돈다 — 모델이 없다: " + str(paths.meaning_dir()))
                 return          # 낱말 검색은 그대로 돈다
             # ★★ **찾는 쪽에도 임베더를 붙인다.** 처음엔 이 실의 제 연결에만 붙였는데,
             #   그러면 **벡터는 자라는데 뜻 검색은 영영 0건**이다 — `search` 가 쓰는
@@ -725,18 +738,18 @@ class EBServer(ThreadingHTTPServer):
                     내것.reindex()
                     남음 = 내것.vec_left()
                     if 처음:
-                        print(f"[뜻 벡터] 항목 {내것.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}"
-                              f" · 새로 만들 {남음}")
+                        알린다(f"[뜻 벡터] 항목 {내것.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}"
+                               f" · 새로 만들 {남음}")
                         처음 = False
                     if 남음:
                         while 내것.embed_some(16):
                             pass
-                        print(f"[뜻 벡터] 다 찼다 — 못 만든 것 {내것.vec_left()}개")
+                        알린다(f"[뜻 벡터] 다 찼다 — 못 만든 것 {내것.vec_left()}개")
                         # ★ **찾는 쪽 캐시를 비운다.** 안 비우면 새로 만든 벡터를
                         #   `semantic()` 이 못 본다 — 캐시는 한 번 읽고 들고 있다.
                         self.notes._vec_cache = None
                 except Exception as e:  # 못 채워도 서버는 계속 떠 있어야 한다
-                    print(f"[뜻 벡터 실패] {e}")
+                    알린다(f"[뜻 벡터 실패] {e}")
                 time.sleep(every_sec)
 
         threading.Thread(target=loop, daemon=True).start()
@@ -1134,7 +1147,9 @@ def _self_check() -> None:
             #   `_embed` 가 None 이라 **뜻 검색이 영영 0건**이었다(시험 쪽이 --no-ui 에서 잡음).
             ("self.notes.use_embedder(embed)", "찾는 쪽에 임베더가 안 붙어 뜻 검색이 0건이 된다"),
             # 새로 만든 벡터를 `semantic()` 이 보려면 찾는 쪽 캐시를 비워야 한다.
-            ("self.notes._vec_cache = None", "찾는 쪽 캐시를 안 비워 새 벡터가 안 보인다")):
+            ("self.notes._vec_cache = None", "찾는 쪽 캐시를 안 비워 새 벡터가 안 보인다"),
+            # 구운 판에는 콘솔이 없다 — print 만으로는 알림이 아무 데도 안 남는다.
+            ("report.trail(말)", "알림이 기록 파일에 안 남아 구운 판에서 못 본다")):
         assert not 글 or 글.count(있어야) >= 2, f"{까닭} ({글.count(있어야)}군데)"
 
     print("server self-check 통과")

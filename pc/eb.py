@@ -899,7 +899,9 @@ def _self_check() -> None:
     #   즉 「판 적합률」·「흐린 선」 검사도 그동안 **아무것도 안 막고 있었다.**
     #   되돌려 보고서야 알았다(오늘 같은 함정에 두 번 걸렸다. server.py 도 그랬다).
     #   개수로 센다 — 진짜 코드 한 번 + 이 검사문 한 번이라 **둘**이 바닥이다.
-    for 있어야 in ('report["판 적합률"]', '그중 흐린 선', 'report["판"] = f"v{paths.VERSION}"'):
+    # ★ 벡터 **수**만 세면 「자란 것」까지만 안다. 쓰이는지까지 한 바퀴 돌려야 한다.
+    for 있어야 in ('report["판 적합률"]', '그중 흐린 선', 'report["판"] = f"v{paths.VERSION}"',
+                  'report["뜻 왕복"] = ', 'def _뜻왕복('):
         assert not 본문 or 본문.count(있어야) >= 2, \
             f"--doctor 에 「{있어야}」가 없다 ({본문.count(있어야)}군데)"
 
@@ -923,6 +925,33 @@ def _self_check() -> None:
     assert _모르는스위치(["--화면상태"]) == []
 
     print("eb self-check 통과")
+
+
+def _뜻왕복(n, onnx_embedder) -> str:
+    """벡터가 **쓰이는지**까지 한 바퀴 돌려 본다. `--doctor` 가 쓴다.
+
+    벡터 수만 세면 「자란 것」까지만 안다. 찾는 쪽에 임베더가 안 붙어 있으면
+    수는 맞는데 뜻 검색이 **0건**이다 — 실제로 그런 판을 내보냈다.
+    """
+    try:
+        있는것 = n.conn.execute(
+            "SELECT n.title, n.body FROM vectors v JOIN notes n ON n.path = v.path "
+            "WHERE trim(n.body) != '' LIMIT 1").fetchone()
+        if 있는것 is None:
+            return "못 잼 — 벡터가 있는 글이 없다"
+        embed = onnx_embedder(paths.meaning_dir())
+        if embed is None:
+            return f"못 잼 — 뜻 모델이 없다: {paths.meaning_dir()}"
+        n.use_embedder(embed)
+        물음 = " ".join((있는것["body"] or "").split())[:60]
+        나온것 = n.semantic(물음, k=3)
+        if not 나온것:
+            return "✘ 한 건도 안 나왔다 — 벡터는 있는데 찾는 길이 안 닿는다"
+        제목, 점수 = 나온것[0]
+        됐나 = "✔" if 제목 == 있는것["title"] else "✘"
+        return f"{됐나} 「{있는것['title']}」 로 물어 1등 「{제목}」 · 가까움 {점수:.3f}"
+    except Exception as e:
+        return f"✘ {type(e).__name__}: {e}"
 
 
 def 말하기(said: str) -> None:
@@ -1794,6 +1823,15 @@ if __name__ == "__main__":
             report["  그중 흐린 선"] = 셈("SELECT count(*) FROM links WHERE 흐림 = 1")
             report["뜻 벡터 수"] = 셈("SELECT count(*) FROM vectors")
             report["아직 못 만든 벡터"] = n.vec_left()
+            # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 벡터 수가 맞는데도 뜻 검색이
+            #   0건일 수 있다 — 찾는 쪽 `Notes` 에 임베더가 안 붙어 있으면 그렇다.
+            #   v0.1.93 의 `--no-ui` 가 정확히 그랬고, 위 두 줄은 그때도 멀쩡했다.
+            #   **한 바퀴 돌려 본다**: 벡터가 있는 글 하나를 골라 그 본문 앞부분으로
+            #   `semantic()` 만 불러(낱말 검색은 안 탄다) 제 글이 1등으로 돌아오나.
+            #   시험 쪽이 낸 설계를 그대로 받았다 — 「혼합 검색이면 임베더가 빠져도
+            #   낱말 일치가 결함을 가린다」. 그래서 뜻 길만 곧장 부른다.
+            #   ※ 이 검사는 **배선·캐시·벡터 읽기**만 본다. 뜻 품질은 `--찾기점수` 몫이다.
+            report["뜻 왕복"] = _뜻왕복(n, onnx_embedder)
             report["본문이 빈 항목"] = n.blank_count()
             # **어느 것이 비었다고 세는지 이름을 보여 준다.** 숫자만으로는
             # 「카운터가 틀렸나, 본문이 정말 DB 에 없나」를 못 가른다 —
