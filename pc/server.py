@@ -842,7 +842,9 @@ class EBServer(ThreadingHTTPServer):
                 except Exception:
                     pass        # 알리다 죽으면 안 된다
 
-            embed = onnx_embedder(paths.meaning_dir(), max_tokens=EMBED_TOKENS)
+            # 사람이 화면 「뜻 검색」 칸에서 고른 것이 있으면 그것을 쓴다.
+            고른것 = (self.cfg.get("models") or {}).get("meaning", "")
+            embed = onnx_embedder(paths.meaning_dir(고른것), max_tokens=EMBED_TOKENS)
             if embed is None:
                 알린다("[뜻 벡터] 안 돈다 — 모델이 없다: " + str(paths.meaning_dir()))
                 return          # 낱말 검색은 그대로 돈다
@@ -1234,7 +1236,11 @@ def _self_check() -> None:
     status, out = call("GET", "/eb/v1/models")
     assert status == 200 and set(out) == {"installed", "using", "auto", "hardware"}, out
     assert out["hardware"]["tier"] in ("high", "mid", "low", "cpu")
-    assert set(out["using"]) == {"chat", "vision", "stt", "voice"}
+    # ★★ **뜻 모델도 고르는 자리에 있어야 한다.** 예전에는 없어서 화면에서 바꿀 길이
+    #   통째로 없었다(열린 문제 15) — 받아 두고도 못 되돌리고, 받으면 좋다는 것도 몰랐다.
+    #   [잰 것 2026-09-13] 큰 것(e5-base)이면 오너 창고에서 찾은 물음이 10 → 12 다.
+    assert set(out["using"]) == {"chat", "vision", "stt", "voice", "meaning"}, out["using"]
+    assert "meaning" in out["installed"], f"뜻 모델을 목록에 안 준다: {list(out['installed'])}"
     # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
     assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
     assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"

@@ -931,7 +931,8 @@ class ModelPicker(HudPanel):
     있으면 그게 이긴다. 새 모델을 `models/`에 넣으면 목록에 뜬다 — 코드는 안 바뀐다.
     """
 
-    ROLE_LABEL = {"chat": "글자", "vision": "사진", "stt": "받아쓰기", "voice": "목소리"}
+    ROLE_LABEL = {"chat": "글자", "vision": "사진", "stt": "받아쓰기", "voice": "목소리",
+                  "meaning": "뜻 검색"}
 
     def __init__(self, link: "ServerLink", say: Callable[[str], None]) -> None:
         super().__init__(corner=8)

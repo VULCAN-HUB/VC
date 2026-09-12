@@ -136,14 +136,21 @@ def gguf_dir() -> Path:
 MEANING_ORDER = ("e5-base", "")
 
 
-def meaning_dir() -> Path:
-    """뜻 검색 모델이 있는 자리. 받은 큰 것이 있으면 그것, 없으면 딸려 온 것.
+def meaning_dir(고른것: str = "") -> Path:
+    """뜻 검색 모델이 있는 자리. **사람이 고른 것이 먼저**, 없으면 받은 큰 것, 그다음 딸려 온 것.
 
     딸려 온 것을 덮어쓰지 않고 **곁에 둔다** — 받은 것이 시원찮으면 폴더 하나만
     지우면 되돌아간다.
+
+    ★★ `고른것` 은 화면 「뜻 검색」 칸에서 고른 이름이다. 예전에는 그 칸이 아예 없어
+    **받아 두고도 되돌릴 길이 없었다**(열린 문제 15). 「딸려 온 것」 을 고르면 뿌리를 쓴다.
     """
     root = models_dir()
-    for name in MEANING_ORDER:
+    차례 = list(MEANING_ORDER)
+    if 고른것:
+        # 「딸려 온 것 (e5-small)」 처럼 꾸민 이름이면 뿌리를 가리킨다.
+        차례.insert(0, "" if 고른것.startswith("딸려 온 것") else 고른것)
+    for name in 차례:
         here = root / name if name else root
         if (here / "model.onnx").is_file() and (here / "tokenizer.json").is_file():
             return here
@@ -375,6 +382,15 @@ def _self_check() -> None:
             assert meaning_dir() == Path(tmp), "낱말표가 없으면 아직 못 쓴다"
             (big / "tokenizer.json").write_bytes(b"x")
             assert meaning_dir() == big, "받은 것이 있으면 그게 먼저다"
+            # ★★ **사람이 고른 것이 먼저다.** 예전에는 고르는 칸이 아예 없어
+            #   받아 두고도 되돌릴 길이 없었다(열린 문제 15).
+            #   딸려 온 것도 있어야 「그쪽으로 되돌리기」를 잴 수 있다.
+            (Path(tmp) / "model.onnx").write_bytes(b"x")
+            (Path(tmp) / "tokenizer.json").write_bytes(b"x")
+            assert meaning_dir() == big, "받은 것이 있으면 여전히 그게 먼저다"
+            assert meaning_dir("딸려 온 것 (e5-small)") == Path(tmp),                 "「딸려 온 것」 을 골랐는데 큰 것을 쓴다"
+            assert meaning_dir("e5-base") == big, "고른 것을 안 쓴다"
+            assert meaning_dir("없는것") == big, "없는 것을 고르면 있는 것으로 내려가야 한다"
             assert notes_dir() == Path(tmp) / "data" / "notes"
             assert index_path() == Path(tmp) / "notes_index.db"
             assert config_path().name == "eb_config.json"

@@ -26,7 +26,10 @@ from typing import Any
 
 import engine
 
-ROLES = ("chat", "vision", "stt", "voice")
+# ★★ **뜻 모델도 고르는 자리에 넣는다.** 예전에는 여기 없어서 **화면에서 바꿀 길이
+# 통째로 없었다**(열린 문제 15). 받아 두고도 못 되돌리고, 받으면 좋다는 것도 몰랐다.
+# [잰 것 2026-09-13] 큰 것(e5-base)을 받으면 오너 창고에서 찾은 물음이 10 → 12 다.
+ROLES = ("chat", "vision", "stt", "voice", "meaning")
 
 # 받아쓰기는 파일이 아니라 이름으로 받는다(faster-whisper가 알아서 받아 온다).
 # 큰 것부터 적는다 — 사양이 되면 위에서부터 고른다.
@@ -49,7 +52,17 @@ def installed(model_dir: str | Path = "../models") -> dict[str, list[str]]:
 
     piper = root / "piper"
     voices = sorted(p.stem for p in piper.glob("*.onnx")) if piper.is_dir() else []
-    return {"chat": chat, "vision": vision, "stt": list(STT_CHOICES), "voice": voices}
+    # 뜻 모델은 `model.onnx` + `tokenizer.json` 한 쌍이다. 딸려 온 것은 뿌리에,
+    # 받은 큰 것은 이름 폴더(`e5-base`)에 들어간다 — `paths.MEANING_ORDER` 와 같은 규칙이다.
+    뜻 = []
+    if root.is_dir():
+        if (root / "model.onnx").is_file() and (root / "tokenizer.json").is_file():
+            뜻.append("딸려 온 것 (e5-small)")
+        for 곳 in sorted(p for p in root.iterdir() if p.is_dir()):
+            if (곳 / "model.onnx").is_file() and (곳 / "tokenizer.json").is_file():
+                뜻.append(곳.name)
+    return {"chat": chat, "vision": vision, "stt": list(STT_CHOICES),
+            "voice": voices, "meaning": 뜻}
 
 
 def resolve(cfg: dict[str, Any], model_dir: str | Path = "../models") -> dict[str, Any]:
