@@ -974,8 +974,14 @@ def _self_check() -> None:
     assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "새로 씀",
                                           "mode": "replace", "force": True})[0] == 201
 
+    # 바로 위에서 「카페 단골」을 통째로 덮어 링크가 사라졌다. 이을 것을 하나 만들고 잰다.
+    call("POST", "/eb/v1/memory", {"title": "이음 시험", "text": "[[카페 단골]] 을 가리킨다"})
     status, graph = call("GET", "/eb/v1/graph")
-    assert status == 200 and "카페 단골" in graph["nodes"]
+    # ★ **이은 마디만 온다.** 빈 마디를 같이 보내면 오너 창고(2794장)에서 98,425자가
+    #   나가는데 그중 쓸모 있는 것이 하나도 없었다 — AI 가 38,000토큰을 태우고 꽝이다.
+    assert status == 200, status
+    assert all(graph["nodes"].values()), f"이음선 없는 마디가 실려 온다: {graph['nodes']}"
+    assert "이음 시험" in graph["nodes"], f"이은 마디가 빠졌다: {graph['nodes']}"
 
     assert call("POST", "/eb/v1/proposals/p1/decision", {"decision": "그만"})[0] == 400
     assert call("POST", "/eb/v1/proposals/nope/decision", {"decision": "approve"})[0] == 404

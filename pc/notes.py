@@ -2190,9 +2190,22 @@ class Notes:
         return {t: [n for n in self.neighbors(t) if n in inside] for t in inside}
 
     def graph(self) -> dict[str, list[str]]:
-        """빈 페이지에서 VC 하나로 시작해 자라는 그 그래프."""
-        return {r["title"]: self.neighbors(r["title"]) for r in
-                self.conn.execute("SELECT title FROM notes ORDER BY title")}
+        """빈 페이지에서 VC 하나로 시작해 자라는 그 그래프. **이은 것만** 준다.
+
+        ★★ **이음선이 없는 마디는 정보가 0인데 값은 든다.** 예전에는 모든 항목을
+        `제목: []` 꼴로 실어 보냈다 — 오너 창고(2794장)에서 재 보니 **98,425자**가
+        나가는데 그중 이음선이 있는 마디가 **하나도 없었다.** AI 가 그걸 받아 읽으면
+        38,000토큰을 태우고 아무것도 못 얻는다(오너 지시 2026-09-12: 크레딧이 곧 성능이다).
+        빈 것을 빼니 **13자**가 됐다.
+
+        제목 목록이 필요하면 그건 그래프가 할 일이 아니다 — 찾기로 묻는다.
+        """
+        나온 = {}
+        for r in self.conn.execute("SELECT title FROM notes ORDER BY title"):
+            이웃 = self.neighbors(r["title"])
+            if 이웃:
+                나온[r["title"]] = 이웃
+        return 나온
 
 
 def _self_check() -> None:
@@ -2261,7 +2274,12 @@ def _self_check() -> None:
         n.conn.execute("DELETE FROM links")
         n.conn.commit()
         assert n.reindex() == 4
-        assert len(n.graph()) == 4
+        # ★ 그래프는 **이은 것만** 준다. 이음선 없는 마디는 정보가 0인데 값은 든다 —
+        #   오너 창고 2794장에서 98,425자가 나가고 그중 이은 마디가 하나도 없었다.
+        이은것 = n.graph()
+        assert all(이은것.values()), f"이음선 없는 마디가 실려 온다: {이은것}"
+        assert "VC" in 이은것 and "손으로 쓴 것" in 이은것["VC"], f"이은 것이 빠졌다: {이은것}"
+        assert len(이은것) < 4, f"빈 마디까지 센다 ({len(이은것)}개)"
 
         # 지우면 태그·별칭 색인에서도 같이 사라진다. 하나만 남아도 유령이 잡힌다.
         n.write(Note(title="지울것", body="#유령태그", aliases=["유령별칭"]))
