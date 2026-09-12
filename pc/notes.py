@@ -23,6 +23,7 @@ import paths
 import json
 import os
 import random
+import hashlib
 import re
 import shutil
 import stat
@@ -697,9 +698,19 @@ def _now() -> str:
 
 
 def safe_title(title: str) -> str:
-    """제목을 파일명으로 쓴다. 옵시디언에서 [[제목]]으로 이어지려면 이름이 곧 식별자다."""
+    """제목을 파일명으로 쓴다. 옵시디언에서 [[제목]]으로 이어지려면 이름이 곧 식별자다.
+
+    ★★ **자를 때 앞부분이 같으면 한 글이 다른 글을 조용히 덮는다.** 재 봤다:
+    `'길'*300 + 'A'` 와 `'길'*300 + 'B'` 를 쓰면 둘 다 같은 파일이 되어 **먼저 것이 사라진다**
+    (A 를 읽으면 B 의 몸이 나왔다). 아무 말도 안 나오는 종류라 더 나쁘다.
+    그래서 **자를 때만** 제목 지문 여섯 자를 꼬리로 붙인다 — 안 자르는 제목은 그대로다
+    (기존 파일 이름이 바뀌면 옵시디언 링크가 끊긴다).
+    """
     cleaned = UNSAFE.sub("-", title).strip().strip(".")
-    return cleaned[:80] or "무제"
+    if len(cleaned) > 80:
+        지문 = hashlib.sha256(title.encode("utf-8")).hexdigest()[:6]
+        return cleaned[:73].rstrip() + "~" + 지문
+    return cleaned or "무제"
 
 
 @dataclass
@@ -2409,6 +2420,16 @@ def _self_check() -> None:
         assert "정산 끝" in cut and "잔금" in cut, cut
         assert "지난달" not in cut, "다른 토막까지 끌고 왔다"
         assert section(n.read("보고서").body, "없는 소제목") == ""
+
+        # ★★ **긴 제목을 자를 때 앞부분이 같으면 한 글이 다른 글을 조용히 덮었다.**
+        #   아무 말도 안 나오고 먼저 쓴 것이 사라진다 — 창고가 할 수 있는 가장 나쁜 일이다.
+        긴가 = "길" * 300 + "가"
+        긴나 = "길" * 300 + "나"
+        n.write(Note(title=긴가, body="첫째 글"))
+        n.write(Note(title=긴나, body="둘째 글"))
+        assert n.read(긴가).body.startswith("첫째"), "긴 제목이 서로를 덮는다"
+        assert n.read(긴나).body.startswith("둘째"), "긴 제목이 서로를 덮는다"
+        assert safe_title("짧은 제목") == "짧은 제목", "안 자르는 제목까지 이름을 바꿨다 — 링크가 끊긴다"
 
         # ★ **블록 참조** — 소제목이 없는 긴 글에서 한 자리를 가리키는 유일한 길이다.
         #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 7장뿐이라 값이 크다.

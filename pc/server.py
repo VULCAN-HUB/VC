@@ -47,6 +47,11 @@ MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 폰 사진 한 장이 이보다 크면 줄
 # 글 한 편을 통째로 줄 때의 상한. **넉넉하다** — 오너 창고에서 제일 긴 글이 3,241자다.
 # 아껴서 답을 자르면 AI 가 다시 부르므로 되레 손해고, 상한이 없으면 5만 자도 그대로 나간다.
 # `full=1` 로 뚫는다. 자르면 `cut` 으로 말한다.
+# 한 번에 돌려주는 장 수의 위. `k=99999`·`k=-1` 로 창고가 통째로 나가던 것을 막는다.
+# 제목만 주는 `brief=1` 은 한 장이 싸므로(60장에 4,080자) 훨씬 높게 둔다 — 목록 훑기가 그 길이다.
+MAX_HITS = 50
+MAX_HITS_BRIEF = 200
+
 MAX_NOTE_CHARS = 20000
 
 
@@ -251,13 +256,22 @@ class Handler(BaseHTTPRequestHandler):
             #   오너 창고(2794장)·얼린 물음 20개로 재 보니 **6~8등에 정답이 하나도 없었다**
             #   — 다섯으로 줄여도 맞힌 물음 수가 그대로(6/20)이고 글자만 802자로 준다(37% ↓).
             #   더 줄이면 손해다: 셋이면 4/20 으로 떨어진다. 더 필요하면 `k=` 로 올려 다시 묻는다.
-            k = int((args.get("k") or ["5"])[0])
+            # ★★ **k 를 조인다.** 험한 물음을 던져 보니 세 군데가 새고 있었다:
+            #   `k=99999` 는 474,124자를 한 방에 내보냈고(크레딧이 그대로 탄다),
+            #   `k=-1` 은 SQL `LIMIT -1` 이라 **창고를 통째로**(182,114자) 줬고,
+            #   `k=abc` 는 `int()` 가 터져 **서버가 답도 없이 연결을 끊었다.**
+            #   위는 쉰으로 조인다 — 그보다 많이 필요하면 `brief=1` 로 훑고 고른 것만 펼친다.
+            try:
+                k = int((args.get("k") or ["5"])[0])
+            except ValueError:
+                k = 5           # 숫자가 아니면 기본값. 터뜨리는 것보다 낫다
+            간추려 = (args.get("brief") or ["0"])[0] not in ("0", "", "false")
+            k = max(1, min(k, MAX_HITS_BRIEF if 간추려 else MAX_HITS))
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
             # ★★ **훑을 때는 제목만 있으면 된다.** 「무슨 결정들이 있었나」처럼 목록을 보는
             #   일은 흔한데, 지금은 장마다 요약·날짜·이음선까지 실어 보낸다.
             #   [잰 것, 오너 창고] `kind:결정` 120장 — 지금 20,233자 · 제목만 6,586자(3배).
             #   AI 는 목록을 보고 **고른 것만** 다시 묻는다. 그때 요약이 필요하면 그때 준다.
-            간추려 = (args.get("brief") or ["0"])[0] not in ("0", "", "false")
             rows = self.server.notes.search(q, k)
             out = []
             for r in rows:
@@ -515,8 +529,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(202)
 
         if url.path == "/eb/v1/memory":
-            title = body.get("title", "").strip()
-            text = body.get("text", "").strip()
+            # ★★ **글자가 아닌 것이 오면 `.strip()` 이 터져 서버가 답도 없이 끊었다.**
+            #   `{"title": 12345}` · `{"text": ["가","나"]}` 로 실제로 그랬다 — 부르는 쪽은
+            #   무엇이 잘못됐는지 모른 채 끊긴 연결만 본다. **틀렸다고 말해 주는 것**이 값이다.
+            title, text = body.get("title", ""), body.get("text", "")
+            if not isinstance(title, str) or not isinstance(text, str):
+                return self._send(400, {"error": "title and text must be text",
+                                        "got": {"title": type(title).__name__,
+                                                "text": type(text).__name__}})
+            title, text = title.strip(), text.strip()
             if not title or not text:
                 return self._send(400, {"error": "title and text required"})
             # 기본은 **덧붙이기**다. 덮어쓰기를 기본으로 하면 어제 적은 것이 오늘
@@ -1207,6 +1228,33 @@ def _self_check() -> None:
     status, 블없 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("블록 기록")
                        + "&heading=" + urllib.parse.quote("^없는칸"))
     assert status == 404 and 블없.get("blocks") == ["답칸"], 블없
+    # ★★ **k 는 조여야 한다.** 험한 물음을 던져 보니 셋이 샜다(실제로 잰 것):
+    #   `k=99999` 474,124자 · `k=-1` 182,114자(SQL LIMIT -1 은 무제한) ·
+    #   `k=abc` 는 int() 가 터져 **서버가 답도 없이 연결을 끊었다.**
+    #   창고가 통째로 나가는 것은 이 물건이 막으려던 바로 그것이다.
+    #   ※ **작은 창고는 이 검사를 우연히 통과시킨다** — 걸릴 글이 쉰 장보다 적으면
+    #     안 조여도 쉰 장이 안 나온다. 그래서 여기서 예순 장을 만들어 두고 잰다.
+    for _i in range(60):
+        assert call("POST", "/eb/v1/memory",
+                    {"title": f"조임 시험 {_i}", "text": "조이는지 보려고 만든 글이다."})[0] == 201
+    status, 많이 = call("GET", "/eb/v1/memory/search?k=99999&q=" + urllib.parse.quote("조이는지"))
+    assert status == 200 and len(많이["results"]) <= 50, f"k 를 안 조인다: {len(많이['results'])}장"
+    status, 음수 = call("GET", "/eb/v1/memory/search?k=-1&q=" + urllib.parse.quote("조이는지"))
+    assert status == 200 and len(음수["results"]) <= 50, f"음수 k 가 창고를 통째로 준다: {len(음수['results'])}장"
+    status, 글자 = call("GET", "/eb/v1/memory/search?k=abc&q=" + urllib.parse.quote("조이는지"))
+    assert status == 200, f"숫자 아닌 k 에 서버가 터진다: {status}"
+    # 제목만 주는 훑기는 한 장이 싸다 — 여기는 높게 둬야 목록 훑기가 산다
+    status, 훑 = call("GET", "/eb/v1/memory/search?brief=1&k=60&q=")
+    assert status == 200, 훑
+
+    # ★ **글자가 아닌 것이 와도 답은 해야 한다.** `{"title": 12345}` 에 `.strip()` 이 터져
+    #   서버가 답도 없이 연결을 끊었다 — 부르는 쪽은 무엇이 틀렸는지 알 길이 없다.
+    for 나쁜몸 in ({"title": 12345, "text": "숫자 제목"},
+                 {"title": "리스트 몸", "text": ["가", "나"]},
+                 {"title": None, "text": "없는 제목"}):
+        상태, 답 = call("POST", "/eb/v1/memory", 나쁜몸)
+        assert 상태 == 400, f"글자 아닌 것에 400 을 안 준다: {상태} {답}"
+
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
     assert status == 200 and 통째["results"][0]["body"], "full=1 이 안 먹는다"
