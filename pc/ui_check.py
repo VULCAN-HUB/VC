@@ -1300,6 +1300,19 @@ def run() -> None:
 
     app.quit()
 
+    # ★ **값 바로 뒤에 조사를 박지 않는다.** 받침을 안 보고 붙인 「연결 메모을 밖에서도 고쳤어」·
+    #   「"링크 왕복"는 … 하나야」가 실사용에서 걸렸다(시험 쪽 14). 조사는 `orders.josa/tail` 이 고른다.
+    #   구운 판에는 소스가 없다 — 그때는 건너뛴다(없어서 못 재는 것과 재서 틀린 것은 다른 말이다).
+    from pathlib import Path as _P
+
+    try:
+        본문 = _P(__file__).with_name("ui.py").read_text(encoding="utf-8")
+    except OSError:
+        본문 = ""
+        print("  (구운 판이라 조사 검사는 건너뛴다)")
+    for 박힌 in ("}은 ", "}는 ", "}을 ", "}를 ", "}이 ", "}가 "):
+        assert not 본문 or 박힌 not in 본문, f"값 뒤에 조사를 박았다 — 받침을 안 본다: 「{박힌}」"
+
     print("ui self-check 통과")
 
 

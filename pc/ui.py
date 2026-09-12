@@ -293,6 +293,9 @@ class MainWindow(QWidget):
 
         # 검색·지시가 한 칸이다. 음성 지시도 결국 같은 문(ask)으로 들어온다.
         self.ask_box = QLineEdit()
+        # 이름이 없으면 접근성 트리에 검색칸도 제목칸도 「편집」으로만 보인다 — 자동 시험이
+        # 초점이 어디인지 못 가린다(시험 쪽 14).
+        self.ask_box.setAccessibleName("검색칸")
         # 돋보기는 그림이 아니라 단추다 — 붙여 놓고 안 이으면 눌러도 아무 일이 없다.
         find_act = self.ask_box.addAction(
             theme.glyph_icon("search", theme.rgba(theme.T.DIM, 110)), QLineEdit.LeadingPosition)
@@ -419,6 +422,7 @@ class MainWindow(QWidget):
         self.detail_kind.currentIndexChanged.connect(lambda _: self.save_note())
 
         self.detail_title = QLineEdit()
+        self.detail_title.setAccessibleName("제목칸")
         self.detail_title.setPlaceholderText("항목을 눌러봐")
         self.detail_title.setObjectName("title")
         self.detail_title.setReadOnly(True)
@@ -1287,7 +1291,9 @@ class MainWindow(QWidget):
         elif len(hits) > 1:
             said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
         else:
-            said = f"{self._감싸기(text)}는 {hits[0]} 하나야. 한 번 더 치면 열어줄게."
+            # 조사는 받침을 본다 — 따옴표·`tag:` 가 붙어도 **끝말**로 고른다(시험 쪽 14)
+            said = (f"{self._감싸기(text)}{orders.tail(text.strip(chr(34) + chr(39)), '은/는')} "
+                    f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
 
@@ -1672,7 +1678,7 @@ class MainWindow(QWidget):
         if self._save_timer.isActive() or self.detail_stack.currentIndex() == 1:
             # **고치는 중이면 화면을 안 건드린다.** 갈아 끼우면 읽기로 튕겨 나가
             # 사용자는 왜 편집이 끝났는지 모른다 — 낯선 PC 에서 그렇게 보였다.
-            self.report(f"{self.editing}을 밖에서도 고쳤어. 네가 치던 게 우선이야. "
+            self.report(f"{orders.josa(self.editing, '을/를')} 밖에서도 고쳤어. 네가 치던 게 우선이야. "
                         "밖에서 온 것은 「지난 판」에 남겨 둘게.", [ROOT])
             return
         self._fill_detail(fresh, self.editing_at)
@@ -1770,7 +1776,8 @@ class MainWindow(QWidget):
             try:
                 self.notes.keep_history(Path(self.editing_at),
                                         read_text(Path(self.editing_at)), always=True)
-                self.report(f"{note.title}을 밖에서도 고쳤길래 그쪽은 「지난 판」에 남겼어.",
+                self.report(f"{orders.josa(note.title, '을/를')} 밖에서도 고쳤길래 "
+                            f"그쪽은 「지난 판」에 남겼어.",
                             [note.title])
             except (OSError, ValueError):
                 pass
@@ -2126,7 +2133,7 @@ class MainWindow(QWidget):
             return
         if not self.notes.rename(self.editing, new):
             self.detail_title.setText(self.editing)   # 이미 있는 이름이면 되돌린다
-            self.report(f"'{new}'는 이미 있어. 다른 이름으로 해줘.", [ROOT])
+            self.report(f"'{new}'{orders.tail(new, '은/는')} 이미 있어. 다른 이름으로 해줘.", [ROOT])
             return
         self.editing = new
         # **연 파일도 같이 옮겨졌다.** 옛 자리를 계속 들고 있으면 그 뒤로 저장이
@@ -2388,7 +2395,9 @@ class MainWindow(QWidget):
         self.refresh()
 
         if applied and applied.examples:
-            self.report(f"'{applied.examples[-1]}'는 {applied.name}. 이제 안 물어볼게.",
+            self.report(f"'{applied.examples[-1]}'"
+                        f"{orders.tail(applied.examples[-1], '은/는')} {applied.name}. "
+                        f"이제 안 물어볼게.",
                         [applied.name, ROOT])
         elif applied:
             self.report(f"{applied.name}, 다음부터 그렇게 할게.", [applied.name, ROOT])
