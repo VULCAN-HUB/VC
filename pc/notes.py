@@ -1384,7 +1384,19 @@ class Notes:
         year, _, month = stamp.partition("-")
         folder = self.root / year / month if year.isdigit() else self.root
         folder.mkdir(parents=True, exist_ok=True)
-        return folder / f"{safe_title(title)}.md"
+        이름 = safe_title(title)
+        자리 = folder / f"{이름}.md"
+        # ★★ **대소문자만 다른 제목이 서로를 조용히 덮었다.** 윈도우 파일 이름은
+        #   대소문자를 안 가려서 `Alpha` 와 `alpha` 가 같은 파일이 된다 — 재 보니
+        #   먼저 쓴 것이 사라졌다(둘 다 읽으면 나중 몸이 나왔다). 아무 말도 안 나온다.
+        #   **이미 있는 파일의 제목이 나와 다르면** 지문 꼬리를 붙여 갈라 놓는다.
+        #   ※ `자리.stem` 을 보면 안 된다 — 그건 **내가 적은 글자**지 파일의 진짜 이름이
+        #     아니다. 폴더에서 대소문자를 무시하고 맞는 **실제 이름**을 찾아 견준다.
+        있는것 = next((f for f in folder.glob("*.md")
+                     if f.name.lower() == 자리.name.lower()), None)
+        if 있는것 is not None and 있는것.name != 자리.name:
+            자리 = folder / f"{이름}~{hashlib.sha256(title.encode()).hexdigest()[:6]}.md"
+        return 자리
 
     def write(self, note: Note, at: str | Path = "") -> Path:
         """항목을 쓴다. **이미 있으면 신원(식별자·만든 날짜)을 물려받는다.**
@@ -1471,7 +1483,17 @@ class Notes:
     def read(self, title: str) -> Note | None:
         path = self.path_of(title)
         if not path.exists():
-            return None
+            # ★★ **별칭으로도 열려야 한다.** 옵시디언은 `aliases` 로 글이 열리는데
+            #   우리는 **링크만** 별칭으로 닿고(`neighbors` 는 됐다) 직접 열기는 404 였다.
+            #   AI 꺼내기 2단이 바로 이 길을 쓰므로, 별칭이 적힌 글은 영영 못 펼쳤다.
+            #   제목이 먼저고 그다음이 별칭이다 — 제목과 남의 별칭이 겹치면 제목이 이긴다.
+            줄 = self.conn.execute(
+                "SELECT title FROM aliases WHERE lower(alias) = lower(?)", (title,)).fetchone()
+            if 줄 is None:
+                return None
+            path = self.path_of(줄["title"])
+            if not path.exists():
+                return None
         try:
             return Note.loads(path.stem, read_text(path))
         except Vanished:
@@ -2394,6 +2416,11 @@ def _self_check() -> None:
         assert n.resolve("없는이름") is None
         assert n.neighbors("아침") == ["회사"], n.neighbors("아침")
         assert n.neighbors("회사") == ["아침"], "별칭으로 온 역링크를 놓친다"
+        # ★ **열기도 별칭으로 돼야 한다.** 링크만 닿고 `read` 는 404 였다 —
+        #   AI 꺼내기 2단이 그 길을 쓰므로 별칭 붙은 글은 영영 못 펼쳤다(옵시디언은 열린다).
+        assert (n.read("회사") or Note(title="", body="")).title == "회사"
+        열린것 = n.read("직장")
+        assert 열린것 is not None and 열린것.title == "회사", "별칭으로 글을 못 연다"
 
         # 누가 나를 가리키나 — 그 문장까지 같이 온다.
         backs = n.backlinks("회사")
@@ -2430,6 +2457,12 @@ def _self_check() -> None:
         assert n.read(긴가).body.startswith("첫째"), "긴 제목이 서로를 덮는다"
         assert n.read(긴나).body.startswith("둘째"), "긴 제목이 서로를 덮는다"
         assert safe_title("짧은 제목") == "짧은 제목", "안 자르는 제목까지 이름을 바꿨다 — 링크가 끊긴다"
+        # ★★ **대소문자만 다른 제목도 서로를 덮었다.** 윈도우 파일 이름은 대소문자를
+        #   안 가린다 — 둘 다 읽으면 나중 몸이 나왔다. 아무 말도 안 나온다.
+        n.write(Note(title="Alpha", body="큰 글"))
+        n.write(Note(title="alpha", body="작은 글"))
+        assert n.read("Alpha").body.startswith("큰"), "대소문자만 다른 제목이 서로를 덮는다"
+        assert n.read("alpha").body.startswith("작은"), "대소문자만 다른 제목이 서로를 덮는다"
 
         # ★ **블록 참조** — 소제목이 없는 긴 글에서 한 자리를 가리키는 유일한 길이다.
         #   오너 창고는 1000자 넘는 글 199장 중 소제목이 있는 것이 7장뿐이라 값이 크다.
