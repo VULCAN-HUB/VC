@@ -478,6 +478,16 @@ class Handler(BaseHTTPRequestHandler):
                     aliases=old.aliases if old else [],
                 )
                 path = self.server.notes.write(note)
+            # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
+            #   못 찾아 **다시 검색한다** — 그게 800자다. 뒤에서 도는 실은 30초마다라 그
+            #   사이가 빈다. `vec_pending` 은 **최근 것부터** 주므로(mtime DESC) 방금 쓴
+            #   글이 맨 앞이다. 한 장 만드는 값은 10ms 쯤이라 쓰기 길에 얹어도 된다.
+            #   ※ 임베더가 아직 없으면(모델 없음·아직 안 올림) 아무 일도 안 한다.
+            try:
+                self.server.notes.embed_some(1)
+                self.server.notes._vec_cache = None
+            except Exception:
+                pass        # 벡터를 못 만들어도 저장은 끝났다
             return self._send(201, {"title": title, "path": str(path), "mode": mode})
 
         if url.path == "/eb/v1/analyze":
@@ -903,6 +913,21 @@ def _self_check() -> None:
     assert call("GET", "/eb/v1/hello")[0] == 200
 
     status, hello = call("GET", "/eb/v1/hello")
+    # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
+    #   못 찾아 다시 검색한다 — 그게 800자다. 뒤에서 도는 실은 30초마다라 그 사이가 빈다.
+    #   (이 자체점검 서버는 임베더가 없어 뜻 검색이 안 돈다 — **벡터 표에 줄이 생겼는지**로 잰다.)
+    class 가짜임베더:
+        def __call__(self, 글들, 앞=""):
+            return [[0.1] * 8 for _ in 글들]
+    쓰던것 = getattr(server.notes, "_embed", None)
+    server.notes.use_embedder(가짜임베더())
+    call("POST", "/eb/v1/memory", {"title": "방금 쓴 글", "text": "이 글은 바로 벡터가 생겨야 한다."})
+    있나 = server.notes.conn.execute(
+        "SELECT count(*) FROM vectors v JOIN notes n ON n.path = v.path "
+        "WHERE n.title = ?", ("방금 쓴 글",)).fetchone()[0]
+    assert 있나 == 1, "쓴 직후 벡터가 안 생긴다 — AI 가 제가 저장한 것을 뜻으로 못 찾는다"
+    server.notes.use_embedder(쓰던것) if 쓰던것 else setattr(server.notes, "_embed", None)
+
     # ★ **창고 판이 인사에 실려야 한다.** 없으면 AI 는 이 창고에 무엇이 들었는지 모른 채
     #   헛검색을 여러 번 한다 — 한 번이 800자다. 좁히는 문법도 같이 적는다.
     판 = hello.get("store") or {}
