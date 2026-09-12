@@ -195,6 +195,16 @@ class Handler(BaseHTTPRequestHandler):
         return 답
 
     def do_GET(self) -> None:
+        # ★ 읽는 쪽도 마찬가지다 — 파일이 읽는 사이 사라지거나(밖에서 지움) 깨져 있으면
+        #   예외가 그대로 새 나가 **답도 없이 연결이 끊긴다.** 끊긴 연결은 아무 말도 안 한다.
+        try:
+            return self._get()
+        except notes.Vanished as 사라짐:
+            return self._send(410, {"error": "읽는 사이에 없어졌다", "where": str(사라짐)})
+        except OSError as 못읽음:
+            return self._send(500, {"error": "못 읽었다", "why": type(못읽음).__name__})
+
+    def _get(self) -> None:
         url = urlparse(self.path)
 
         # 인증 앞에 오는 둘. 여기서 QR을 받아 폰에 보여주는 게 원격의 시작이다.
