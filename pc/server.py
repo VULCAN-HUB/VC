@@ -209,7 +209,9 @@ class Handler(BaseHTTPRequestHandler):
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다. "
                             "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
-                            "갈래를 모르면 좁히지 마라 — 틀리게 좁히면 크게 잃는다."),
+                            "갈래를 모르면 좁히지 마라 — 틀리게 좁히면 크게 잃는다. "
+                            "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다. "
+                            "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다."),
                 }
             except Exception:
                 pass        # 판을 못 만들어도 인사는 해야 한다
@@ -489,10 +491,21 @@ class Handler(BaseHTTPRequestHandler):
 
             # **사람이 고쳐 놓은 것을 관찰이 덮으면 안 된다.** 틀린 걸 바로잡았는데
             # 다음 기록이 되돌려 놓으면 사람은 이 물건을 못 믿는다(결정 22와 같은 결).
-            if (mode == "replace" and old is not None
-                    and old.edited_by == "사람" and not body.get("force")):
-                return self._send(409, {"error": "사람이 고친 항목이다. force가 필요하다",
-                                        "title": title, "edited_by": old.edited_by})
+            #
+            # ★★ **`edited_by` 만 보면 못 막는다.** 그 표시는 **화면에서 고칠 때만** 붙는다 —
+            #   옵시디언·메모장으로 고친 것에는 안 붙는데, 이 물건은 **옵시디언 대용**이라
+            #   밖에서 고치는 것이 주된 길이다. 실제로 재 보니 밖에서 보탠 줄을 AI 가
+            #   `force` 없이 통째로 지웠다(201 이 떨어졌다).
+            #   밖에서 고친 것을 뒤늦게 알아내는 길(파일 시각 견주기)은 30초마다 도는
+            #   색인이 그 신호를 지워 **때를 놓친다.**
+            #   → **덮어쓰기는 늘 `force` 를 받는다.** 되돌리기 어려운 일은 명시적으로 한다.
+            #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
+            if mode == "replace" and old is not None and not body.get("force"):
+                return self._send(409, {
+                    "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
+                    "title": title, "chars": len(old.body),
+                    "edited_by": old.edited_by or "(모름 — 밖에서 고쳤을 수 있다)",
+                    "hint": "덧붙이려면 mode 를 빼라(기본 append). 정말 덮으려면 force: true"})
 
             if mode == "append" and old is not None:
                 path = self.server.notes.append(title, text, body.get("kind", old.kind))
@@ -1102,6 +1115,19 @@ def _self_check() -> None:
                    {"title": "카페 단골",
                     "text": "관찰: 아메리카노", "mode": "replace"})
     assert blocked[0] == 409, blocked
+    # ★★ **밖에서(옵시디언·메모장) 고친 것도 지켜야 한다.** `edited_by` 는 화면에서
+    #   고칠 때만 붙는데 이 물건은 옵시디언 대용이라 밖에서 고치는 것이 주된 길이다.
+    #   예전에는 그 손질을 AI 가 force 없이 통째로 지웠다 — 201 이 떨어졌다.
+    call("POST", "/eb/v1/memory", {"title": "밖에서 고친 글", "text": "AI 가 처음 쓴 것."})
+    밖파일 = note_store.path_of("밖에서 고친 글")
+    밖파일.write_text(밖파일.read_text(encoding="utf-8").rstrip()
+                    + chr(10) + "사람이 손으로 보탠 줄." + chr(10), encoding="utf-8")
+    note_store.reindex()
+    막힘 = call("POST", "/eb/v1/memory", {"title": "밖에서 고친 글",
+                                        "text": "통째로 갈아치운다.", "mode": "replace"})
+    assert 막힘[0] == 409, f"밖에서 고친 것을 그냥 덮는다: {막힘}"
+    assert "사람이 손으로" in note_store.read("밖에서 고친 글").body, "사람 손질이 지워졌다"
+    assert "force" in json.dumps(막힘[1], ensure_ascii=False), f"뚫는 법을 안 알려 준다: {막힘[1]}"
     assert note_store.read("카페 단골").body.startswith("정정"), "사람 손질이 덮였다"
     # 정말 덮어야 할 때는 force로 뚫는다 — 다만 눌러서 뚫는 길이 있어야 한다.
     assert call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "새로 씀",
