@@ -212,6 +212,7 @@ class Handler(BaseHTTPRequestHandler):
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
                             "-kind:일 처럼 빼기도 된다(가장 많은 갈래를 빼면 잡담이 준다). "
+                            "year:2026 · path:2026/09 도 된다. "
                             "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다. "
                             "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
@@ -1011,7 +1012,7 @@ def _self_check() -> None:
     # ★ **빼는 길도 알려 준다.** 오너 창고는 대화 조각(`kind: 일`)이 2373/2794 장이라
     #   그것만 빼도 찾은 물음이 12 → 13 이었다(글자는 거의 같다). 되는데 안 알려 주면
     #   없는 것과 같다 — 오늘만 몇 번째다.
-    for 길 in ("brief=1", "q=", "k=", "-kind:"):
+    for 길 in ("brief=1", "q=", "k=", "-kind:", "year:", "path:"):
         assert 길 in 판["how"], f"안내에 「{길}」 이 없다 — 만든 길을 AI 가 모른다"
     # ★★ **큰 뜻 모델이 없으면 그 사실을 AI 에게 말해야 한다.** 받으면 같은 창고에서
     #   찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개). AI 가 이걸 봐야
