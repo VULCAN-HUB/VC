@@ -253,6 +253,30 @@ def _self_check() -> None:
                               steps=[{"module": "navigate", "params": {"to": "회사"}}]))
         assert s.version == 1 and s.previous is None
 
+        # ★★ **스킬은 코드가 아니라 데이터다 — 나쁜 선언문이 와도 안 깨져야 한다.**
+        #   밖에서 손으로 고칠 수 있는 자리라(옵시디언에서 연다) 뭐든 들어온다.
+        #   재 보니 여섯 가지가 다 조용히 걸러지고 멀쩡한 것만 읽힌다. 그걸 못 박는다.
+        험한것 = {
+            "앞머리가 깨진 스킬": '---' + chr(10) + 'kind: "skill"' + chr(10)
+                              + 'steps: [안 닫힘' + chr(10) + '---' + chr(10) + '몸',
+            "steps 가 글자": '---' + chr(10) + 'kind: "skill"' + chr(10)
+                          + 'steps: "이건 목록이 아니다"' + chr(10) + '---' + chr(10) + '몸',
+            "steps 가 숫자": '---' + chr(10) + 'kind: "skill"' + chr(10)
+                          + 'steps: 42' + chr(10) + '---' + chr(10) + '몸',
+            "아주 깊은 스킬": '---' + chr(10) + 'kind: "skill"' + chr(10)
+                          + 'steps: ' + "[" * 200 + "]" * 200 + chr(10) + '---' + chr(10) + '몸',
+            "이상한 모듈": '---' + chr(10) + 'kind: "skill"' + chr(10)
+                        + 'steps: [{"module": "../../etc/passwd"}]' + chr(10) + '---' + chr(10) + '몸',
+        }
+        for 이름, 글 in 험한것.items():
+            (notes.root / f"{이름}.md").write_text(글, encoding="utf-8")
+        notes.reindex()
+        읽힌것 = skills.all()
+        assert [x.name for x in 읽힌것] == ["출근 준비"],             f"나쁜 선언문이 스킬로 읽힌다: {[x.name for x in 읽힌것]}"
+        for 이름 in 험한것:
+            (notes.root / f"{이름}.md").unlink()
+        notes.reindex()
+
         s2 = skills.save(Skill(name="출근 준비", triggers=["출근 준비", "나갈 준비"],
                                steps=[{"module": "navigate", "params": {"to": "회사"}}]))
         assert s2.version == 2 and s2.previous["triggers"] == ["출근 준비"]
