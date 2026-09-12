@@ -206,7 +206,8 @@ class Handler(BaseHTTPRequestHandler):
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
                             "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
-                            "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다."),
+                            "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다. "
+                            "목록만 훑을 때는 brief=1 (제목만, 3배 싸다)."),
                 }
             except Exception:
                 pass        # 판을 못 만들어도 인사는 해야 한다
@@ -226,6 +227,11 @@ class Handler(BaseHTTPRequestHandler):
             #   더 줄이면 손해다: 셋이면 4/20 으로 떨어진다. 더 필요하면 `k=` 로 올려 다시 묻는다.
             k = int((args.get("k") or ["5"])[0])
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
+            # ★★ **훑을 때는 제목만 있으면 된다.** 「무슨 결정들이 있었나」처럼 목록을 보는
+            #   일은 흔한데, 지금은 장마다 요약·날짜·이음선까지 실어 보낸다.
+            #   [잰 것, 오너 창고] `kind:결정` 120장 — 지금 20,233자 · 제목만 6,586자(3배).
+            #   AI 는 목록을 보고 **고른 것만** 다시 묻는다. 그때 요약이 필요하면 그때 준다.
+            간추려 = (args.get("brief") or ["0"])[0] not in ("0", "", "false")
             rows = self.server.notes.search(q, k)
             out = []
             for r in rows:
@@ -237,6 +243,12 @@ class Handler(BaseHTTPRequestHandler):
                 #   JSON 에서 빠진 칸은 「없다」로 읽힌다. 없는 것을 굳이 적어 보낼 이유가 없다.
                 #   ※ **오너 지시(2026-09-12): 크레딧을 줄이는 것이 성능이다.**
                 #     AI 가 한 번 꺼낼 때 나가는 글자가 곧 값이다.
+                if 간추려:
+                    작은장 = {"title": r["title"], "chars": len(몸)}
+                    if r["kind"] and r["kind"] != "note":
+                        작은장["kind"] = r["kind"]
+                    out.append(작은장)
+                    continue
                 한장 = {
                     "title": r["title"],
                     # 물음을 넘겨 **그 물음에 걸린 줄**을 요약으로 받는다. 글자 수는 같은데
@@ -984,6 +996,15 @@ def _self_check() -> None:
     # ★ **요약은 물음에 걸린 줄을 고른다.** 첫 문장만 주면 AI 가 「이 글이 답하나」를 못 가려
     #   2단을 여러 번 부른다 — 그게 값이다. 글자 수는 그대로인데 고를 수 있게 된다.
     assert "삼천만" in 한장["summary"], f"요약이 물음을 안 본다: {한장['summary']}"
+
+    # ★ **훑을 때는 제목만.** 「무슨 결정들이 있었나」처럼 목록을 보는 일은 흔한데
+    #   장마다 요약·날짜·이음선까지 실으면 세 배가 든다(오너 창고 120장: 20,233 → 6,586자).
+    status, 간 = call("GET", "/eb/v1/memory/search?brief=1&q=" + urllib.parse.quote("예산"))
+    assert status == 200 and 간["results"], 간
+    첫 = 간["results"][0]
+    assert set(첫) <= {"title", "chars", "kind"}, f"brief 인데 딴 것도 실어 보낸다: {첫}"
+    assert "summary" not in 첫, "brief 인데 요약을 보낸다"
+
 
     # ★★ **꺼내기는 두 단이다.** 1단은 몸을 안 준다 — 생기다 말면 여덟 장에
     # 46,000자가 다시 나간다(재 본 값: 평균 5,814자 · 최대 184,467자).
