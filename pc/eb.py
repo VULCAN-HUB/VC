@@ -18,6 +18,7 @@ import io
 import os
 import pathlib
 import re
+import subprocess
 import sys
 
 import paths
@@ -193,6 +194,7 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--links", "--이음선", "--그물시험", "--bench", "--net-test", "--log-test",
     "--사본치우기", "--판올리기", "--휴지통", "--시험표", "--화면상태",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
+    "--모두검사", "--check-all",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
 값받는스위치 = {"--빼고", "--without"}
@@ -272,7 +274,8 @@ def main(argv: list[str] | None = None) -> int:
                    "  --휴지통 [찾을말]      버린 조각을 모아 둔 자리를 뒤진다",
                    "  --시험표 [폴더] [--쓴다]  기계로 잴 것을 한 번에 재서 표 한 장으로 적는다",
                    "  --화면상태           진짜 창을 띄워 띠 문구·최소 크기를 적고 닫는다",
-                   "  --check             자체점검"):
+                   "  --check             자체점검 (이 파일만)",
+                   "  --모두검사            pc/ 의 모든 자체점검을 한 번에 (--check-all)"):
             print(줄)
         return 0
     if 모름 := _모르는스위치(argv):
@@ -925,6 +928,13 @@ def _self_check() -> None:
         f"시험표의 --doctor 줄이 판을 안 적는다 ({본문.count(있어야)}군데)"
     assert _모르는스위치(["--시험표", "C:\\어디", "--쓴다"]) == []
     assert _모르는스위치(["--화면상태"]) == []
+    assert _모르는스위치(["--모두검사"]) == [] and _모르는스위치(["--check-all"]) == []
+    # ★★ **자체점검이 있는데 안 도는 모듈이 있으면 안 된다.** 스물아홉 개인데 한 번에
+    #   도는 길이 없어서 `panels` 와 `paths` 를 한동안 **안 돌리고 있었다**(딴 것이
+    #   안 불러서 도는 줄 알았다). `--모두검사` 가 `pc/*.py` 를 훑으므로 새 모듈이
+    #   생기면 저절로 든다 — 여기서는 **그 길이 살아 있는지**만 지킨다.
+    if 본문2:
+        assert "def _모두검사(" in 본문2 and "모두검사" in 본문2.split("def 도움말")[0],             "모든 자체점검을 한 번에 도는 길이 없다 — 사람이 외우게 된다"
 
     print("eb self-check 통과")
 
@@ -954,6 +964,42 @@ def _뜻왕복(n, onnx_embedder) -> str:
         return f"{됐나} 「{있는것['title']}」 로 물어 1등 「{제목}」 · 가까움 {점수:.3f}"
     except Exception as e:
         return f"✘ {type(e).__name__}: {e}"
+
+
+def _모두검사() -> int:
+    """`pc/` 의 **모든** 자체점검을 한 번에 돈다. 하나라도 터지면 0이 아니다.
+
+    ★★ **사람이 외울 일이 아니다.** 자체점검이 있는 모듈이 스물여섯인데 한 번에 도는
+    길이 없어서, 고칠 때마다 「무엇무엇을 돌려야 하나」를 기억해야 했다 —
+    실제로 `panels` 와 `paths` 를 한동안 **안 돌리고 있었다**(딴 것이 안 불러서
+    도는 줄 알았다). 새 모듈이 생기면 여기에도 저절로 든다.
+
+    ※ 소스가 없으면(구운 판) 아무것도 안 하고 0을 준다.
+    """
+    자리 = Path(__file__).resolve().parent
+    모듈들 = sorted(p.stem for p in 자리.glob("*.py")
+                   if "_self_check" in p.read_text(encoding="utf-8", errors="replace"))
+    if not 모듈들:
+        말하기("소스가 없다 — 모두검사를 건너뛴다")
+        return 0
+    터진것, 잰것 = [], []
+    for 이름 in 모듈들:
+        t0 = time.perf_counter()
+        난것 = subprocess.run([sys.executable, str(자리 / f"{이름}.py"), "--check"],
+                             capture_output=True, text=True, errors="replace",
+                             cwd=str(자리), timeout=600)
+        초 = time.perf_counter() - t0
+        잰것.append((이름, 난것.returncode, 초))
+        if 난것.returncode != 0:
+            끝 = [줄 for 줄 in (난것.stdout + 난것.stderr).splitlines() if 줄.strip()]
+            터진것.append((이름, 끝[-1][:120] if 끝 else "(말이 없다)"))
+    for 이름, 코드, 초 in 잰것:
+        말하기(f"  {'✔' if 코드 == 0 else '✘'} {이름:18s} {초:5.1f}초")
+    말하기(f"{len(잰것)}개 중 {len(잰것) - len(터진것)}개 통과 · "
+           f"{sum(초 for _, _, 초 in 잰것):.0f}초")
+    for 이름, 말 in 터진것:
+        말하기(f"  ✘ {이름}: {말}")
+    return 1 if 터진것 else 0
 
 
 def 말하기(said: str) -> None:
@@ -1033,7 +1079,7 @@ if __name__ == "__main__":
 
         from notes import Notes
 
-        t0 = clock.perf_counter()
+        t0 = time.perf_counter()
         n = Notes(paths.notes_dir(), str(paths.index_path()), index_now=False)
         n.conn.execute("DELETE FROM vectors")
         n.conn.execute("UPDATE notes SET vec_mtime = 0")
@@ -1426,7 +1472,7 @@ if __name__ == "__main__":
 
         줄 = ["물음 | 정답 | 등수 | 1등", "-" * 72]
         등수들 = []
-        t0 = clock.perf_counter()
+        t0 = time.perf_counter()
         for 한줄 in 물음표.read_text(encoding="utf-8").splitlines():
             한줄 = 한줄.strip()
             if not 한줄 or 한줄.startswith("#") or "|" not in 한줄:
@@ -1513,7 +1559,7 @@ if __name__ == "__main__":
                    f"  빈칸이 든 경로면 따옴표로 감싸라.")
             os._exit(1)
 
-        t0 = clock.perf_counter()
+        t0 = time.perf_counter()
         # ★★ **이미 든 글은 다시 안 들인다.** 이걸 안 넘기면 같은 폴더를 두 번
         # 흡수할 때 통째로 다시 쌓인다 — 오너 기록 388장(12.2%)이 그렇게 생겼다.
         # `--사본치우기` 는 그 증상을 치우는 것이고, 원인은 여기다.
@@ -1730,7 +1776,7 @@ if __name__ == "__main__":
         잰다 = []
         for _ in range(5):
             for q in 말:
-                t0 = clock.perf_counter()
+                t0 = time.perf_counter()
                 n.search(q)
                 잰다.append((clock.perf_counter() - t0) * 1000)
         빈것 = n.blank_count()
@@ -1876,6 +1922,8 @@ if __name__ == "__main__":
     # 아니라 남기고 사는 것이 옳고, 그 몫은 `report.catch_slot_deaths()` 가 맡는다.
     sys.excepthook = sys.__excepthook__
 
+    if "--모두검사" in sys.argv or "--check-all" in sys.argv:
+        raise SystemExit(_모두검사())
     if "--check" in sys.argv:
         _self_check()
     else:
