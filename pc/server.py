@@ -207,7 +207,9 @@ class Handler(BaseHTTPRequestHandler):
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
                             "\"따옴표\" 는 그 구절 그대로다. k= 로 개수(기본 5). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다. "
-                            "목록만 훑을 때는 brief=1 (제목만, 3배 싸다)."),
+                            "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
+                            "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
+                            "갈래를 모르면 좁히지 마라 — 틀리게 좁히면 크게 잃는다."),
                 }
             except Exception:
                 pass        # 판을 못 만들어도 인사는 해야 한다
@@ -959,6 +961,13 @@ def _self_check() -> None:
     assert 판.get("notes") is not None, f"창고 판이 없다: {hello}"
     assert "kinds" in 판 and "how" in 판, f"갈래나 쓰는 법이 빠졌다: {판}"
     assert "kind:" in 판["how"] and "k=" in 판["how"], f"좁히는 법을 안 알려 준다: {판['how']}"
+    # ★★ **안내가 실제 길과 어긋나면 AI 를 잘못 이끈다.** 새 길을 내고 `how` 를 안 고치면
+    #   그 길은 없는 것과 같고(아무도 안 부른다), 없앤 길을 적어 두면 AI 가 헛걸음한다.
+    #   그래서 **적힌 길은 다 실제로 돌아야 한다** — 여기서 한 번씩 불러 본다.
+    for 길 in ("brief=1", "q=", "k="):
+        assert 길 in 판["how"], f"안내에 「{길}」 이 없다 — 만든 길을 AI 가 모른다"
+    st_b, _ = call("GET", "/eb/v1/memory/search?brief=1&q=" + urllib.parse.quote("VC"))
+    assert st_b == 200, f"안내가 brief=1 을 말하는데 안 돈다: {st_b}"
     assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
     # 지금 쓰기로 정해진 모델들이 나온다(사양 자동 또는 사용자 선택).
     assert isinstance(hello["models"], list)
