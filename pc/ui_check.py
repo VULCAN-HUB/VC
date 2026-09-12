@@ -964,6 +964,19 @@ def run() -> None:
         assert not win.results.isHidden(), "찾았는데 목록 칸이 접혀 있다"
         assert any("아이스" in w.text() for w in win.results.items if isinstance(w, QLabel)),             "걸린 자리가 안 보인다"
 
+        # ★★ **찾은 것을 눌러 열 수 있어야 한다.** 사람이 제일 많이 하는 일인데
+        #   목록이 떴는지만 보고 **누르는 것은 안 재고 있었다.** 카드가 들고 다니는 값이
+        #   바뀔 때(갈래를 더하는 등) 조용히 끊길 수 있는 자리다.
+        단추 = [w for w in win.results.items if isinstance(w, QPushButton)]
+        assert 단추, "찾았는데 누를 단추가 없다"
+        win.editing = None
+        단추[0].click()
+        win.settle()
+        assert win.editing == "카페 단골", f"찾은 것을 눌렀는데 안 열린다: {win.editing}"
+        # 갈래도 같이 보인다 — 여러 갈래가 섞여 오므로 고를 때 그것이 필요하다.
+        줄들 = " ".join(w.text() for w in win.results.items if isinstance(w, QLabel))
+        assert "·" in 줄들, f"갈래가 안 보인다: {줄들!r}"
+
         # 본문의 [[링크]]를 Ctrl로 누르면 그리로 간다.
         win.show_note("8월 계획")
         body = win.detail_body.toPlainText()
