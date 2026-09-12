@@ -74,6 +74,14 @@ def _앞머리값(글: str) -> object:
         return json.loads(글)
     except (ValueError, TypeError):
         return 글.strip("\"'")
+class 원문그대로(str):
+    """앞머리에서 **우리가 못 읽는 덩이**. 값을 모르지만 글자를 그대로 되돌려 쓴다.
+
+    중첩 사전(`obsidian:` 아래 들여쓴 줄들)·여러 줄 글(`note: >`)이 여기 온다.
+    `str` 을 물려받아 아무 데서나 글자로 다뤄지되, 다시 쓸 때 JSON 으로 감싸지 않는다.
+    """
+
+
 def _앞머리풀기(글: str) -> dict:
     """앞머리 한 덩이를 사전으로. **옵시디언이 쓰는 블록 목록 꼴을 받는다.**
 
@@ -98,15 +106,41 @@ def _앞머리풀기(글: str) -> dict:
             continue                      # 들여쓴 줄은 위 열쇠가 이미 먹었다
         열쇠, _, 값 = 줄.partition(":")
         열쇠, 값 = 열쇠.strip(), 값.strip()
-        if 값:
-            풀림[열쇠] = _앞머리값(값)
+        if 값 in (">", "|", ">-", "|-", ">+", "|+"):
+            # ★ 여러 줄 글(`note: >` 아래 들여쓴 줄들). 값을 못 읽지만 **글자 그대로 안고 간다** —
+            #   전에는 `note: ">"` 가 되어 아래 줄들이 통째로 사라졌다.
+            묶음 = [줄]
+            while i < len(줄들) and (not 줄들[i].strip() or 줄들[i][:1] in (" ", "	")):
+                묶음.append(줄들[i])
+                i += 1
+            풀림[열쇠] = 원문그대로(chr(10).join(묶음[1:]))
+            풀림[열쇠 + "~표시"] = 값        # 다시 쓸 때 `>` 를 되살린다
             continue
-        # 값이 비었다 — 아래 `- 항목` 줄들이 그 값이다(옵시디언 꼴).
+        if 값:
+            # `tags: [할일, 회의]` — 한 줄 대괄호 목록. 그냥 글자로 두면 태그가
+            # `[할일` · `회의]` 로 잘려 대괄호가 이름에 섞인다(재 보고 찾았다).
+            if 값.startswith("[") and 값.endswith("]"):
+                안 = 값[1:-1].strip()
+                풀림[열쇠] = [_앞머리값(조각.strip()) for 조각 in 안.split(",") if 조각.strip()]
+            else:
+                풀림[열쇠] = _앞머리값(값)
+            continue
+        # 값이 비었다 — 아래 줄들이 그 값이다.
         모음 = []
         while i < len(줄들) and 줄들[i].strip().startswith("- "):
             모음.append(_앞머리값(줄들[i].strip()[2:].strip()))
             i += 1
-        풀림[열쇠] = 모음 if 모음 else ""
+        if 모음:
+            풀림[열쇠] = 모음
+            continue
+        # ★★ **우리가 못 읽는 꼴(중첩 사전·여러 줄 글)** 은 **글자 그대로 안고 간다.**
+        #   전에는 `obsidian: ""` 로 뭉개져, 다시 쓰는 순간 사람이 적은 것이 사라졌다.
+        #   읽지는 못해도 **없애지는 않는다** — 원본이 원본이라는 규칙이 여기도 같다.
+        묶음 = []
+        while i < len(줄들) and (not 줄들[i].strip() or 줄들[i][:1] in (" ", "	")):
+            묶음.append(줄들[i])
+            i += 1
+        풀림[열쇠] = 원문그대로(chr(10).join(묶음)) if 묶음 else ""
     return 풀림
 
 
@@ -866,7 +900,14 @@ class Note:
         if self.declaration is not None:
             # 한 줄 JSON이라 옵시디언에서 열어 그대로 고칠 수 있다.
             front["declaration"] = self.declaration
-        lines = [f"{k}: {json.dumps(v, ensure_ascii=False)}" for k, v in front.items()]
+        # ★ 못 읽은 덩이는 **글자 그대로** 되돌려 쓴다. JSON 으로 감싸면 사람이 적은
+        #   중첩 사전·여러 줄 글이 한 줄짜리 따옴표 글자로 뭉개진다.
+        표시 = {k[:-3]: v for k, v in front.items() if k.endswith("~표시")}
+        front = {k: v for k, v in front.items() if not k.endswith("~표시")}
+        lines = [f"{k}: {표시[k]}" + chr(10) + v if isinstance(v, 원문그대로) and k in 표시
+                 else f"{k}:" + chr(10) + v if isinstance(v, 원문그대로)
+                 else f"{k}: {json.dumps(v, ensure_ascii=False)}"
+                 for k, v in front.items()]
         return "---\n" + "\n".join(lines) + "\n---\n" + self.body.rstrip() + "\n"
 
     @classmethod
@@ -2625,6 +2666,23 @@ def _self_check() -> None:
         n.write(Note(title="옵시디언 글", body=읽은.body + "덧", aliases=읽은.aliases, extra=읽은.extra))
         글 = (n.root / "옵시디언 글.md").read_text(encoding="utf-8")
         assert "옵시태그" in 글 and "딴이름" in 글, f"다시 쓰면서 사람이 적은 것을 지웠다: {글[:120]}"
+
+        # ★★ **우리가 못 읽는 앞머리 꼴도 지우지는 않는다.** 옵시디언·플러그인이 쓰는
+        #   중첩 사전(`obsidian:` 아래 들여쓴 줄)·여러 줄 글(`note: >`)·한 줄 대괄호 목록이
+        #   있는데, 전에는 앞 둘이 `""` 로 뭉개져 **다시 쓰는 순간 사라졌다.**
+        #   원본이 원본이라는 규칙은 우리가 못 읽는 자리에도 같다.
+        깊은앞 = ("---" + chr(10) + "obsidian:" + chr(10) + "  plugin: dataview" + chr(10)
+                 + "note: >" + chr(10) + "  여러 줄로" + chr(10) + "  이어 적는다" + chr(10)
+                 + "tags: [묶음태그, 둘째]" + chr(10) + "---" + chr(10) + chr(10) + "몸" + chr(10))
+        (n.root / "깊은 앞머리.md").write_text(깊은앞, encoding="utf-8")
+        n.reindex()
+        깊 = n.read("깊은 앞머리")
+        assert 깊.tags() == ["묶음태그", "둘째"], f"한 줄 대괄호 목록에서 대괄호가 샌다: {깊.tags()}"
+        n.write(Note(title="깊은 앞머리", body=깊.body + "덧", extra=깊.extra))
+        다시 = (n.root / "깊은 앞머리.md").read_text(encoding="utf-8")
+        assert "plugin: dataview" in 다시, f"중첩 사전이 사라졌다: {다시[:150]}"
+        assert "이어 적는다" in 다시, f"여러 줄 글이 사라졌다: {다시[:150]}"
+        assert "note: >" in 다시, f"여러 줄 표시(>)가 사라졌다: {다시[:150]}"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
