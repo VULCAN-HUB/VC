@@ -415,10 +415,17 @@ def 요약(body: str, extra: dict | None = None, 길이: int = 120,
     물음의 말이 든 줄을 대신 주면 **글자 수는 그대로인데** 고를 수 있게 된다.
     못 찾으면 예전처럼 첫 문장으로 내려간다 — 나빠지는 자리가 없다.
     """
+    # ★ **자른 것은 잘랐다고 말한다.** 120자에서 그냥 끊으면 「베낄 것이」·「GGUF 파일을」
+    #   처럼 문장 가운데서 멎는데, 읽는 쪽은 그게 끝인지 잘린 것인지 모른다 —
+    #   AI 는 그 한 글자를 확인하려고 2단(900~1500자)을 부른다. 점 하나가 그것을 막는다.
+    def 자르기(글: str) -> str:
+        글 = 글.strip()
+        return 글 if len(글) <= 길이 else 글[:길이] + "…"
+
     for 열쇠 in ("요약", "summary", "description", "설명"):
         값 = (extra or {}).get(열쇠)
         if isinstance(값, str) and 값.strip():
-            return 값.strip()[:길이]
+            return 자르기(값)
     줄들, 첫줄 = [], ""
     담 = False
     for 줄 in body.splitlines():
@@ -441,8 +448,8 @@ def 요약(body: str, extra: dict | None = None, 길이: int = 120,
                     for i, 줄 in enumerate(줄들)]
             맞은, _, 고른 = max(점수)
             if 맞은:
-                return 고른[:길이]
-    return 첫줄[:길이]
+                return 자르기(고른)
+    return 자르기(첫줄)
 
 
 def 둘레(body: str, 물음: str, 폭: int = 400) -> tuple[str, bool]:
@@ -2674,6 +2681,12 @@ def _self_check() -> None:
     assert "예산" in 물음낱말("이번 회의에서 예산을 얼마로 정했나"), 물음낱말("예산을")
     assert 요약("첫 줄은 인사다." + chr(10) * 2 + "예산은 삼천만 원으로 정했다.",
               물음="이번 회의에서 예산을 얼마로 정했나").startswith("예산은"),         "요약이 물음에 걸린 줄을 못 고른다 — 조사 때문에 어긋난다"
+    # ★ **자른 요약은 자른 티가 나야 한다.** 그 표시가 없으면 읽는 쪽이 「이게 끝인가」를
+    #   확인하려고 2단을 부른다 — 점 하나 아끼고 900자를 태우는 셈이다.
+    긴줄 = "가" * 300
+    잰것 = 요약(긴줄)
+    assert 잰것.endswith("…") and len(잰것) == 121, f"자르고도 말을 안 한다: {len(잰것)}"
+    assert not 요약("짧은 한 줄이다.").endswith("…"), "안 잘랐는데 잘랐다고 한다"
     assert meaning_card("이름만", "") == "이름만"
     assert meaning_card("빈몸", "   ") == "빈몸"
 
