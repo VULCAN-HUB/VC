@@ -15,6 +15,20 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Link = "C:\vcbuild"
 
+# ★★ **두 굽기가 겹치면 둘 다 깨진다.** 같은 정션·같은 dist 를 쓰기 때문이다 —
+# 먼저 것이 묶는 중에 뒤엣것이 정션을 지우고 다시 걸어, 둘 다 "파일을 못 찾는다" 로 끝났다.
+# 실제로 그렇게 두 판을 날렸다. 자물쇠 파일 하나로 막는다.
+$Lock = Join-Path $env:TEMP "vc-build.lock"
+if (Test-Path $Lock) {
+    $언제 = (Get-Item $Lock).LastWriteTime
+    if (((Get-Date) - $언제).TotalMinutes -lt 30) {
+        throw "이미 굽는 중이다 ($($언제.ToString('HH:mm:ss')) 에 시작). 끝나고 다시 해라. " +
+              "정말 아니면 이 파일을 지워라: $Lock"
+    }
+    Remove-Item $Lock -Force          # 30분 넘은 것은 죽은 자물쇠로 본다
+}
+Set-Content -LiteralPath $Lock -Value (Get-Date).ToString("s") -Encoding utf8
+
 Write-Host "== 정션 걸기 $Link -> $Root"
 if (Test-Path $Link) { cmd /c rmdir $Link | Out-Null }
 cmd /c mklink /J $Link "$Root" | Out-Null
@@ -81,5 +95,7 @@ try {
 }
 finally {
     if (Test-Path $Link) { cmd /c rmdir $Link | Out-Null }
+    # 자물쇠는 **깨져도 푼다** — 안 풀면 다음 굽기가 30분 동안 막힌다.
+    if (Test-Path $Lock) { Remove-Item $Lock -Force -ErrorAction SilentlyContinue }
     Write-Host "== 정션 치움"
 }
