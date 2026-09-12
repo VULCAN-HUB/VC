@@ -260,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                             #   헛검색(800자)을 막아 주므로 남기되, 잰 값은 짧게만 적는다.
                             "★ 안 나오면 위 kinds 중 하나로 좁혀 다시 물어라(kind:결정) — 가장 많은 갈래가 "
                             "밀어내던 것이라 목록 밖에 있던 글이 1~4등으로 올라온다. "
-                            "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다. "
+                            "쓰기는 memory 에 POST, 같은 제목이면 덧붙는다(답의 link_to 중 맞는 것을 [[제목]]으로 이어라). "
                             "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
                             "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다)."
                             + ("" if 큰모델있나 else
@@ -636,6 +636,19 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass        # 벡터를 못 만들어도 저장은 끝났다
             답 = {"title": title, "path": str(path), "mode": mode}
+            # ★★ **그물이 안 자란다.** 오너 창고는 2820장 중 2700장(95%)이 아무 데도 안
+            #   이어져 있고 `/eb/v1/graph` 가 13자다 — AI 가 글을 부을 뿐 잇지 않기 때문이다.
+            #   이어지지 않은 글은 뜻 검색 말고는 닿을 길이 없다.
+            #   그래서 **쓴 자리에서 이을 만한 것을 알려 준다.** 강제하지 않는다. 제목 몇 개라
+            #   값이 거의 안 들고(60자쯤), AI 는 그중 맞는 것만 `[[제목]]` 으로 넣으면 된다.
+            try:
+                가까운 = [t for t, _ in self.server.notes.semantic(text[:600], k=4)
+                        if t != title][:3]
+                if 가까운:
+                    답["link_to"] = 가까운
+                    답["hint"] = "맞는 것이 있으면 본문에 [[제목]] 으로 이어라 — 안 이은 글은 나중에 못 찾는다"
+            except Exception:
+                pass        # 이을 곳을 못 찾아도 저장은 끝났다
             # ★★ **force 로 덮었으면 되돌릴 자리를 알려 준다.** 지난 판은 남지만
             #   AI 가 그것을 볼 길이 없었다(화면에서만 된다) — 안전망이 반쪽이었다.
             #   덮은 그 자리에서 「되돌리려면 여기」를 주면 AI 가 스스로 고칠 수 있다.
@@ -1379,6 +1392,18 @@ def _self_check() -> None:
         assert 못씀.get("hint"), 못씀
     finally:
         _os.chmod(막힌파일, _stat.S_IWRITE)
+
+    # ★★ **쓴 자리에서 이을 곳을 알려 준다.** 오너 창고는 2820장 중 2700장(95%)이 아무 데도
+    #   안 이어져 있다 — AI 가 글을 붓기만 하고 잇지 않기 때문이다. 이어지지 않은 글은
+    #   뜻 검색 말고는 닿을 길이 없다. 강제하지 않고 **알려만 준다**(제목 세 개, 60자쯤).
+    #   ※ 뜻 모델이 없으면 조용히 아무것도 안 붙는다. 그때는 이 검사도 건너뛴다.
+    assert call("POST", "/eb/v1/memory", {"title": "이을 곳 하나", "text": "등대가 배를 이끈다"})[0] == 201
+    상태, 쓴것 = call("POST", "/eb/v1/memory",
+                    {"title": "이을 곳 둘", "text": "등대는 밤에 배를 이끄는 표지다"})
+    assert 상태 == 201, 쓴것
+    if note_store.semantic("등대", k=1):
+        assert 쓴것.get("link_to"), f"이을 곳을 안 알려 준다: {쓴것}"
+        assert "이을 곳 둘" not in 쓴것["link_to"], "제 글을 이으라고 한다"
 
     # 붙여 쓰던 쪽은 안 깨진다 — `full=1` 이면 예전처럼 몸이 온다
     status, 통째 = call("GET", "/eb/v1/memory/search?full=1&q=" + urllib.parse.quote("둘째"))
