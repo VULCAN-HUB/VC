@@ -2103,7 +2103,19 @@ class Notes:
                     was.replace(now)
             except OSError:
                 pass          # 못 옮겨도 이름 바꾸기 자체는 살린다
-        mark = f"[[{old}]]"
+        # ★★ **`[[옛것]]` 만 고치면 반만 고치는 것이다.** 링크에는 네 꼴이 있다:
+        #   `[[옛것]]` · `[[옛것#소제목]]` · `[[옛것|보일 글]]` · `![[옛것]]`(끼워넣기).
+        #   글자로만 바꿀 때는 첫 꼴만 걸려 **나머지가 허공을 가리켰다**(재 보고 찾았다).
+        #   같은 정규식(`LINK_RE`)으로 바꾼다 — 찾는 쪽과 고치는 쪽이 갈리면 또 새 나간다.
+        def 바꿔(m: "re.Match") -> str:
+            이름, 소제목, 보일 = m.group(1), m.group(2), m.group(3)
+            if 이름.strip() != old:
+                return m.group(0)
+            끼움 = "!" if m.group(0).startswith("!") else ""
+            안 = new + (f"#{소제목}" if 소제목 else "") + (f"|{보일}" if 보일 else "")
+            return f"{끼움}[[{안}]]"
+
+        고치개 = re.compile(r"!?" + LINK_RE.pattern)
         for path in self.notes_files():   # 하위 폴더까지
             # 훑는 동안 남이 지울 수 있다. 한 파일 때문에 **나머지 링크가 안 고쳐지면**
             # 그래프가 반쯤 끊긴 채로 남는다 — 그게 더 나쁘다.
@@ -2111,9 +2123,12 @@ class Notes:
                 text = read_text(path)
             except (Vanished, OSError):
                 continue
-            if mark in text:
+            if f"[[{old}" not in text:
+                continue
+            새글 = 고치개.sub(바꿔, text)
+            if 새글 != text:
                 try:
-                    _atomic_write(path, text.replace(mark, f"[[{new}]]"))
+                    _atomic_write(path, 새글)
                 except (Vanished, OSError, WriteBlocked):
                     continue
         self.reindex()
@@ -2546,6 +2561,17 @@ def _self_check() -> None:
         assert not n.rename("없는것", "아무거나"), "없는 항목을 옮겼다"
         n.write(Note(title="이미있음", body="", kind="note"))
         assert not n.rename("불칸", "이미있음"), "덮어썼다"
+        # ★★ **링크에는 네 꼴이 있다.** 글자로만 `[[옛것]]` 을 바꾸면 나머지 셋이
+        #   허공을 가리킨다 — 그래프가 반쯤 끊긴 채로 남고 끊긴 줄도 모른다.
+        n.write(Note(title="옮길 것", body="몸"))
+        n.write(Note(title="가리키는 데",
+                     body="[[옮길 것]] · [[옮길 것|보일 글]] · ![[옮길 것#머리]] · [[옮길 것#칸]] · [[딴 것]]"))
+        assert n.rename("옮길 것", "옮긴 것")
+        바뀐 = n.read("가리키는 데").body
+        assert "옮길 것" not in 바뀐, f"옛 이름이 남았다: {바뀐}"
+        for 꼴 in ("[[옮긴 것]]", "[[옮긴 것|보일 글]]", "![[옮긴 것#머리]]", "[[옮긴 것#칸]]"):
+            assert 꼴 in 바뀐, f"{꼴} 꼴을 안 고쳤다: {바뀐}"
+        assert "[[딴 것]]" in 바뀐, "남의 링크까지 건드렸다"
 
     # --- 링크 체계: 태그·별칭·제목링크·미해결 ---
     with tempfile.TemporaryDirectory() as tmp:
