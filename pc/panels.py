@@ -728,7 +728,8 @@ class Results(QWidget):
         for hit in hits[:self.limit]:
             # 파일 자리까지 온 것은 **그 파일**을 연다. 제목만 보고 다시 찾으면
             # 같은 이름이 둘일 때 엉뚱한 쪽이 열린다.
-            title, body, where = (hit + ("",))[:3] if len(hit) < 3 else hit
+            title, body, where = (tuple(hit) + ("", ""))[:3]
+            갈래 = (tuple(hit) + ("", "", "", ""))[3]
             b = QPushButton(title)
             b.setObjectName("quiet")
             b.setCursor(Qt.PointingHandCursor)
@@ -738,7 +739,13 @@ class Results(QWidget):
                 b.clicked.connect(lambda _, w=where: self.picked_at.emit(str(w)))
             else:
                 b.clicked.connect(lambda _, t=title: self.picked.emit(t))
-            line = QLabel(self.snippet(body, query, width, title))
+            # ★★ **갈래를 보여 준다.** 찾기가 갈래를 돌아가며 뽑으므로(한 갈래가 목록을
+            #   다 차지하던 것을 고쳤다) 결과에 결정·규칙·잡담이 섞여 온다. 그런데 사람은
+            #   어느 것이 어느 갈래인지 **볼 길이 없었다** — AI 는 1단에서 `kind` 를 받는데.
+            #   고를 때 제일 필요한 것이 이것이다. 기본값(`note`)은 안 적는다 — 다 그러면
+            #   줄만 길어진다.
+            앞 = f"{갈래} · " if 갈래 and 갈래 != "note" else ""
+            line = QLabel(앞 + self.snippet(body, query, width, title))
             line.setWordWrap(True)
             line.setStyleSheet(
                 f"color:{theme.css(theme.T.DIM, 0.4)}; font-size:10px; padding:0 8px 3px 8px;")
@@ -1482,6 +1489,15 @@ def _self_check() -> None:
     res.picked.connect(got.append)
     res.items[0].click()
     assert got == ["납품 일정"]
+    # ★ **갈래를 보여 준다.** 결과에 여러 갈래가 섞여 오는데 사람은 볼 길이 없었다.
+    res.show_hits([("결정 27", "엔진을 직접 만들기로 했다", "", "결정"),
+                   ("잡담", "그냥 해 본 말", "", "일")], "엔진")
+    글자 = " ".join(w.text() for w in res.items if hasattr(w, "text"))
+    assert "결정 ·" in 글자, f"갈래를 안 보여 준다: {글자!r}"
+    res.show_hits([("보통 글", "기본 갈래는 안 적는다", "", "note")], "기본")
+    글자 = " ".join(w.text() for w in res.items if hasattr(w, "text"))
+    assert "note ·" not in 글자, f"기본 갈래까지 적어 줄만 길어진다: {글자!r}"
+
     res.show_hits([], "")
     assert res.rows.count() == 0, "다시 그렸는데 옛 결과가 남았다"
 

@@ -1260,7 +1260,8 @@ class MainWindow(QWidget):
             return
         rows = self.notes.search(text)
         hits = [r["title"] for r in rows]
-        self.show_results([(r["title"], r["body"], r["path"]) for r in rows], text)
+        # 갈래도 같이 넘긴다 — 결과에 여러 갈래가 섞여 오므로 고를 때 그것이 필요하다.
+        self.show_results([(r["title"], r["body"], r["path"], r["kind"]) for r in rows], text)
 
         # 되묻는다는 건 시킬 말이 아니라는 뜻이다. 찾을 것이 있으면 찾아준다 —
         # "카페"라고 쳤는데 "어느 쪽이야?"가 나오면 검색칸이 아니게 된다.
