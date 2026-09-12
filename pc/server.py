@@ -1241,6 +1241,14 @@ def _self_check() -> None:
     #   [잰 것 2026-09-13] 큰 것(e5-base)이면 오너 창고에서 찾은 물음이 10 → 12 다.
     assert set(out["using"]) == {"chat", "vision", "stt", "voice", "meaning"}, out["using"]
     assert "meaning" in out["installed"], f"뜻 모델을 목록에 안 준다: {list(out['installed'])}"
+    # ★★ **화면이 적는 것과 실제로 쓰는 것이 같아야 한다.** 자동 추천은 목록 첫 번째를
+    #   쓰는데, 그 차례가 `paths.MEANING_ORDER` 와 어긋나 있었다 — 화면은 「딸려 온 것」
+    #   이라 적는데 실제로는 큰 것을 쓰고 있었다. **조용히 어긋나는 자리다.**
+    if out["installed"]["meaning"]:
+        자동 = out["auto"]["meaning"]
+        실제 = paths.meaning_dir()
+        같나 = (실제 == paths.models_dir()) if 자동.startswith("딸려 온 것") else (실제.name == 자동)
+        assert 같나, f"화면은 「{자동}」 이라는데 실제로는 「{실제}」 를 쓴다"
     # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
     assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
     assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"

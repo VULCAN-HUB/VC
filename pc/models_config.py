@@ -54,13 +54,17 @@ def installed(model_dir: str | Path = "../models") -> dict[str, list[str]]:
     voices = sorted(p.stem for p in piper.glob("*.onnx")) if piper.is_dir() else []
     # 뜻 모델은 `model.onnx` + `tokenizer.json` 한 쌍이다. 딸려 온 것은 뿌리에,
     # 받은 큰 것은 이름 폴더(`e5-base`)에 들어간다 — `paths.MEANING_ORDER` 와 같은 규칙이다.
+    # ★★ **차례가 곧 자동 추천이다**(`auto` 는 목록 첫 번째를 쓴다). 그래서 이 차례가
+    #   `paths.MEANING_ORDER`(실제로 고르는 차례)와 **같아야 한다** — 안 그러면 화면이
+    #   「지금 쓰는 것: 딸려 온 것」이라고 적는데 실제로는 큰 것을 쓴다. 실제로 그랬다.
+    #   받은 큰 것이 먼저, 딸려 온 것이 나중이다.
     뜻 = []
     if root.is_dir():
-        if (root / "model.onnx").is_file() and (root / "tokenizer.json").is_file():
-            뜻.append("딸려 온 것 (e5-small)")
         for 곳 in sorted(p for p in root.iterdir() if p.is_dir()):
             if (곳 / "model.onnx").is_file() and (곳 / "tokenizer.json").is_file():
                 뜻.append(곳.name)
+        if (root / "model.onnx").is_file() and (root / "tokenizer.json").is_file():
+            뜻.append("딸려 온 것 (e5-small)")
     return {"chat": chat, "vision": vision, "stt": list(STT_CHOICES),
             "voice": voices, "meaning": 뜻}
 
