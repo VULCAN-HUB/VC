@@ -1313,6 +1313,12 @@ def run() -> None:
     for 박힌 in ("}은 ", "}는 ", "}을 ", "}를 ", "}이 ", "}가 "):
         assert not 본문 or 박힌 not in 본문, f"값 뒤에 조사를 박았다 — 받침을 안 본다: 「{박힌}」"
 
+    # ★ **아는 길을 안 알려 주면 없는 것과 같다.** 좁히는 문법이 화면 어디에도 없으면
+    #   쓰는 사람이 발견할 길이 없다 — AI 한테는 인사로 알려 주면서 사람한테는 안 알려 줬다.
+    안내 = win.ask_box.placeholderText() + " " + win.ask_box.toolTip()
+    for 있어야 in ("kind:", "tag:"):
+        assert 있어야 in 안내, f"검색칸이 좁히는 법을 안 알려 준다: {안내!r}"
+
     print("ui self-check 통과")
 
 

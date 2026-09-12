@@ -296,11 +296,18 @@ class MainWindow(QWidget):
         # 이름이 없으면 접근성 트리에 검색칸도 제목칸도 「편집」으로만 보인다 — 자동 시험이
         # 초점이 어디인지 못 가린다(시험 쪽 14).
         self.ask_box.setAccessibleName("검색칸")
+        # ★★ **아는 길을 안 알려 주면 없는 것과 같다.** 좁히는 문법(`kind:` · `tag:` ·
+        #   따옴표)이 있는데 화면 어디에도 안 적혀 있어, 쓰는 사람이 발견할 길이 없었다.
+        #   AI 한테는 인사(`hello`)로 알려 주면서 사람한테는 안 알려 준 셈이다.
+        #   [잰 것, AI 쪽] 갈래로 좁히면 한 번에 802 → 617자, 찾은 물음 6/20 → 13/20.
+        #   빈 칸에만 보이므로 치기 시작하면 사라진다 — 자리를 안 먹는다.
+        self.ask_box.setPlaceholderText("찾거나 시키기    kind:결정   tag:이름   \"그대로\"")
         # 돋보기는 그림이 아니라 단추다 — 붙여 놓고 안 이으면 눌러도 아무 일이 없다.
         find_act = self.ask_box.addAction(
             theme.glyph_icon("search", theme.rgba(theme.T.DIM, 110)), QLineEdit.LeadingPosition)
         find_act.triggered.connect(lambda: self.ask(self.ask_box.text()))
-        self.ask_box.setToolTip("한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다")
+        self.ask_box.setToolTip("한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다" + chr(10)
+                                + "좁히기 — kind:결정 · tag:이름 · \"따옴표는 그 구절 그대로\"")
         self.ask_box.setObjectName("ask")
         self.ask_box.setFixedWidth(240)
         self.ask_box.returnPressed.connect(lambda: self.ask(self.ask_box.text()))
