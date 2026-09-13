@@ -731,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, {"error": "그 제목은 이미 있다", "title": new_t})
             if not self.server.notes.rename(old_t, new_t):
                 return self._send(404, {"error": "no such note", "title": old_t})
-            return self._send(200, {"title": new_t, "was": old_t,
+            return self._send(200, {"title": notes.제목맞춤(new_t), "was": old_t,
                                     "note": "가리키던 [[링크]]도 같이 고쳤다"})
 
         if url.path == "/eb/v1/analyze":

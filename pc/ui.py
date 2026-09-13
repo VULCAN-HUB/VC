@@ -2246,13 +2246,18 @@ class MainWindow(QWidget):
 
     def rename_note(self) -> None:
         """제목을 바꾸면 **가리키던 링크도 같이 옮긴다**(notes.rename)."""
-        new = self.detail_title.text().strip()
+        # ★ 친 제목을 **저장될 꼴**로 먼저 맞춘다(맥 한글·`? :` 같은 글자는 전각). 안 맞추면
+        #   화면이 들고 있는 이름과 파일의 이름이 달라져 그물·뒤로가기가 옛 글자를 찾는다.
+        new = notes_module.제목맞춤(self.detail_title.text().strip())
         if self.editing is None or not new or new == self.editing:
             return
+        self.detail_title.setText(new)
         if not self.notes.rename(self.editing, new):
             self.detail_title.setText(self.editing)   # 이미 있는 이름이면 되돌린다
             self.report(f"'{new}'{orders.tail(new, '은/는')} 이미 있어. 다른 이름으로 해줘.", [ROOT])
             return
+        # ★ **뒤로가기 줄에 옛 이름이 남으면** 뒤로 갔을 때 없는 글을 찾는다. 같이 옮긴다.
+        self._trail = [new if t == self.editing else t for t in self._trail]
         self.editing = new
         # **연 파일도 같이 옮겨졌다.** 옛 자리를 계속 들고 있으면 그 뒤로 저장이
         # 조용히 실패한다 — `read_at()` 이 없는 파일에 None 을 주고 그대로 돌아선다.
