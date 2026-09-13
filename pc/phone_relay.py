@@ -38,6 +38,9 @@ RELAY_PORT = 8770
 FORWARD_HEADERS = ("Authorization", "Content-Type")
 
 
+# 서버(`server.py`)와 같은 한도. 중계가 앞문이라 여기서 먼저 막는다.
+MAX_BODY = 8 * 1024 * 1024
+
 class PhoneRelay:
     """폰 쪽 중계. 서버PC 주소와 폰의 페어링 토큰을 들고 있다."""
 
@@ -96,7 +99,16 @@ class PhoneRelay:
 
             def _proxy(self, method: str) -> None:
                 url = urlparse(self.path)
-                length = int(self.headers.get("Content-Length") or 0)
+                # ★★ **중계는 토큰 없이 같은 망 누구에게나 열려 있다.** 본문 길이를 믿고 그대로 읽으면
+                #   `Content-Length: 4000000000` 한 줄로 폰 메모리를 다 먹는다 — 서버 쪽은 8MB 로 막는데
+                #   앞문인 중계는 안 막고 있었다. 같은 한도로 막고, 숫자가 아니면 400.
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    return self._reply(400, b'{"error": "bad Content-Length"}')
+                if length < 0 or length > MAX_BODY:
+                    self.close_connection = True
+                    return self._reply(413, b'{"error": "body too large"}')
                 body = self.rfile.read(length) if length else None
 
                 headers = {k: v for k, v in self.headers.items() if k in FORWARD_HEADERS}
@@ -112,6 +124,13 @@ class PhoneRelay:
                 status, data, ctype = relay._call(method, path, body, headers)
                 self.send_response(status)
                 self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def _reply(self, status: int, data: bytes) -> None:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -182,6 +201,21 @@ def _self_check() -> None:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
+
+    # ★★ **중계는 토큰 없이 같은 망에 열려 있다** — 본문 길이를 믿고 읽으면 한 줄로 폰 메모리를 먹는다.
+    import socket as _so
+
+    줄끝 = chr(13) + chr(10)          # 역빗금 글자는 도구를 거치며 깨지므로 글자 번호로 짓는다
+
+    def 날것(머리줄들: list[str]) -> bytes:
+        with _so.create_connection(("127.0.0.1", port), timeout=5) as c:
+            c.sendall((줄끝.join(머리줄들) + 줄끝 + 줄끝).encode("ascii"))
+            return c.recv(200)
+
+    큰것 = 날것(["POST /eb/v1/ask HTTP/1.1", "Host: x", "Content-Length: 4000000000"])
+    assert b" 413 " in 큰것, f"아주 큰 본문 길이를 안 막는다: {큰것[:40]!r}"
+    이상 = 날것(["POST /eb/v1/ask HTTP/1.1", "Host: x", "Content-Length: abc"])
+    assert b" 400 " in 이상, f"숫자 아닌 본문 길이에 400 을 안 준다: {이상[:40]!r}"
 
     # 외부 PC가 폰에 접속한다 — QR이 아니라 네 자리가 뜬다.
     status, html = ext("GET", "/")
