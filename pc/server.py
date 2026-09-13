@@ -840,6 +840,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.notes.read(new_t) is not None:
                 return self._send(409, {"error": "그 제목은 이미 있다", "title": new_t})
             if not self.server.notes.rename(old_t, new_t):
+                # ★ 이름 바꾸기는 새 이름 잠금을 기다린다 — 그 사이 새 제목이 생겨 물러났으면 404 가 아니라 409 다.
+                #   「없는 글」이라 답하면 AI 는 멀쩡히 있는 옛 글을 다시 찾아 헤맨다.
+                if self.server.notes.read(new_t) is not None:
+                    return self._send(409, {"error": "그 제목은 이미 있다", "title": new_t})
                 return self._send(404, {"error": "no such note", "title": old_t})
             return self._send(200, {"title": notes.제목맞춤(new_t), "was": old_t,
                                     "note": "가리키던 [[링크]]도 같이 고쳤다"})
@@ -1678,6 +1682,18 @@ def _self_check() -> None:
     _실.join()
     assert _경주 and _경주[0][0] == 409, f"읽은 뒤 생긴 글을 force 없이 덮었다: {_경주}"
     assert "사람이 먼저" in note_store.read("경주 시험").body
+    # ★ 이름 바꾸기가 기다리는 사이 새 제목이 생기면 409 — 「없는 글」(404)로 답하면 AI 가 헤맨다.
+    note_store.write(notes.Note(title="옮길 원격 글", body="몸"))
+    _이름답: list = []
+    with note_store._글잠금("생길 제목"):
+        _실 = threading.Thread(target=lambda: _이름답.append(call(
+            "POST", "/eb/v1/memory/rename", {"title": "옮길 원격 글", "to": "생길 제목"})))
+        _실.start()
+        time.sleep(0.5)
+        note_store.write(notes.Note(title="생길 제목", body="먼저 생김"))
+    _실.join()
+    assert _이름답 and _이름답[0][0] == 409, f"기다리다 물러난 이름 바꾸기를 404 로 답한다: {_이름답}"
+    assert note_store.read("옮길 원격 글") is not None
 
     # ★ **글자가 아닌 값에는 400 과 까닭을 준다**(전엔 500 — 문은 안 열렸지만 왜 안 되는지 몰랐다).
     for 길, 몸 in (("/eb/v1/ask", {"text": 123}),
@@ -1976,6 +1992,10 @@ def _self_check() -> None:
     # 몇 GB를 남의 디스크에 받게 하면 안 된다.
     assert raw("POST", "/eb/v1/models/download", {"key": "qwen3-8b"}, remote_token)[0] == 401
     assert raw("POST", "/eb/v1/models", {"role": "chat", "name": ""}, remote_token)[0] == 401
+    # ★ 원격 문은 `/eb/v1/skills` 를 앞머리로 열어 두므로 `skills/propose` 까지 닿는다 — 거기서 막아야 한다.
+    assert raw("POST", "/eb/v1/skills/propose",
+               {"name": "원격 스킬", "steps": [{"module": "navigate"}]}, remote_token)[0] == 403, \
+        "원격 PC 가 스킬 제안을 넣는다"
     # 원격 토큰으로 자기 자신을 승인시킬 수 없다.
     s2 = server.gate.open("9.9.9.9")
     assert raw("POST", "/eb/v1/remote/approve",
