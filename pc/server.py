@@ -246,7 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # 벡터를 못 만들어도 저장은 끝났다. 다만 **방금 쓴 글이 뜻으로 안 찾히는 것**이라 남긴다.
             _알림(f"[뜻 벡터] 방금 쓴 글을 못 만들었다 — {type(e).__name__}: {e}")
-        답 = {"title": title, "path": str(path), "mode": mode}
+        # ★ 절대 경로는 안 싣는다 — 집 폴더(사용자 이름)가 들어 있고, AI 는 제목으로 부르므로 쓸 데가 없다(쓸 때마다 글자만 탄다).
+        답 = {"title": title, "mode": mode}
         # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
         #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
         if (저장제목 := notes.제목맞춤(title)) != title:
@@ -1721,7 +1722,10 @@ def _self_check() -> None:
     assert 상태 == 404 and 없는길.get("paths"), f"있는 길을 안 알려 준다: {없는길}"
 
     # ★★ **`force: "false"` 로는 못 덮는다.** `bool("false")` 가 참이라 덮어쓰기 막이가 뚫렸다.
-    assert call("POST", "/eb/v1/memory", {"title": "뚫기 시험", "text": "처음"})[0] == 201
+    _쓴답 = call("POST", "/eb/v1/memory", {"title": "뚫기 시험", "text": "처음"})
+    assert _쓴답[0] == 201
+    # 쓰기 답에 절대 경로(집 폴더·사용자 이름)가 실리면 안 된다
+    assert "path" not in _쓴답[1] and str(Path.home()) not in json.dumps(_쓴답[1], ensure_ascii=False), _쓴답[1]
     for 가짜참 in ("false", "0", 1, "yes"):
         상태, _ = call("POST", "/eb/v1/memory",
                      {"title": "뚫기 시험", "text": "덮기", "mode": "replace", "force": 가짜참})
