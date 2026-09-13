@@ -376,6 +376,18 @@ class Handler(BaseHTTPRequestHandler):
             elif 상태 == "없음":
                 답["meaning"] = "none"
                 답["hint"] = "뜻 모델이 없어 낱말로만 찾는다 — 말을 바꿔 물으면 안 걸릴 수 있다"
+            elif 상태 == "됨" and getattr(self.server.notes, "_embed", None) is not None:
+                # ★ **모델은 올랐는데 벡터가 많이 비어 있으면**(색인을 새로 만든 뒤·처음 부은 뒤 몇 분)
+                #   뜻으로는 덜 찾힌다 — 그것도 말한다. 재 봤다: 깨진 색인을 다시 만든 뒤 25초에
+                #   2794장 중 240장만 벡터가 있었다. 1할 넘게 비었을 때만 싣는다.
+                try:
+                    남음 = self.server.notes.vec_left()
+                    전체 = self.server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
+                    if 전체 and 남음 > max(50, 전체 // 10):
+                        답["meaning"] = "partial"
+                        답["hint"] = f"뜻 벡터를 채우는 중이다({남음}/{전체}장 남음) — 뜻으로는 덜 찾힌다. 조금 뒤 다시"
+                except Exception:
+                    pass
             return self._send(200, 답)
 
         if url.path == "/eb/v1/memory/note":
@@ -1499,6 +1511,20 @@ def _self_check() -> None:
     server.뜻상태 = "됨"
     _, 됨 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아무 뜻"))
     assert "meaning" not in 됨, "다 올랐는데 아직이라고 한다"
+    # ★ 모델은 올랐는데 벡터가 많이 비었으면 「덜 찾힌다」고 말한다(색인을 새로 만든 뒤 몇 분).
+    _진짜남음 = note_store.vec_left
+    _진짜임베더 = getattr(note_store, "_embed", None)
+    note_store.vec_left = lambda: 10_000
+    _진짜뜻 = note_store.semantic
+    note_store._embed = object()          # 모델이 붙어 있다고 치고
+    note_store.semantic = lambda *a, **k: []   # 그 가짜 모델을 부르지 않게
+    try:
+        _, 덜 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아무 뜻"))
+        assert 덜.get("meaning") == "partial", f"벡터가 비었는데 말하지 않는다: {덜}"
+    finally:
+        note_store.vec_left = _진짜남음
+        note_store._embed = _진짜임베더
+        note_store.semantic = _진짜뜻
 
     # ★ 2단이 **이름만 적고 안 이은 글**을 알려 준다.
     assert call("POST", "/eb/v1/memory", {"title": "언급 대상 글", "text": "몸"})[0] == 201
