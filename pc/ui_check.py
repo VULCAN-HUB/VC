@@ -993,6 +993,9 @@ def run() -> None:
         win.settle()
         assert win.editing == "보고서"
         assert win.detail_body.textCursor().position() == long_body.index("## 8월 정산"),             win.detail_body.textCursor().position()
+        # ★ **읽기 화면(기본)도 그 자리로 가야 한다.** 편집기만 옮겨 읽기 화면은 늘 맨 위였다.
+        if win.detail_stack.currentIndex() != 1:
+            assert "8월 정산" in win.detail_view.textCursor().block().text(),                 f"읽기 화면이 소제목으로 안 간다: {win.detail_view.textCursor().block().text()!r}"
         notes.delete("보고서")
 
         # 나가는 링크와 들어오는 링크는 따로 보인다.
