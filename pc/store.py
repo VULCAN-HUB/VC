@@ -58,6 +58,31 @@ class Store:
         # 기본 자리를 여기서 정한다. 부르는 쪽마다 정하게 두면 **한 곳을 놓쳤을 때
         # 설치 폴더에 파일이 샌다** — 실제로 서버 쪽 한 줄을 놓쳐서 그랬다.
         path = path or paths.store_path()
+        # ★★ **기록 db 가 깨져도 켜져야 한다.** 전원이 나가 깨지면 `DatabaseError` 로 프로그램이
+        #   안 켜졌다(재 봤다). 지우지 않고 `.깨짐-<시각>` 으로 옆에 치우고 새로 연다 — 잠김 같은
+        #   일시 오류(OperationalError)는 깨짐이 아니다.
+        try:
+            self._열기(path)
+        except sqlite3.OperationalError:
+            raise
+        except sqlite3.DatabaseError as 깨짐:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            if str(path) != ":memory:":
+                때 = time.strftime("%Y%m%d-%H%M%S")
+                for 곁 in ("", "-wal", "-shm"):
+                    자리 = Path(str(path) + 곁)
+                    if 자리.exists():
+                        try:
+                            자리.replace(Path(f"{path}.깨짐-{때}{곁}"))
+                        except OSError:
+                            pass
+            print(f"[기록] 깨져서 옆에 치우고 새로 연다: {Path(str(path)).name} ({type(깨짐).__name__})")
+            self._열기(path)
+
+    def _열기(self, path) -> None:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         # 학습 로그도 서버와 화면이 같이 쓴다 — WAL이라야 서로 안 막는다.
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -182,6 +207,18 @@ def _self_check() -> None:
 
     assert [r["seq"] for r in s.recent(2)] == [2, 1], "최근 활동이 새것부터 안 나온다"
 
+    # ★★ 깨진 기록 db 에서도 켜져야 한다(전원이 나가면 안 켜졌다).
+    import tempfile as _tf3
+    with _tf3.TemporaryDirectory() as _곳:
+        _자리 = Path(_곳) / "eb.db"
+        _s = Store(str(_자리)); _s.conn.close()
+        _자리.write_bytes(b"garbage!" * 20 + _자리.read_bytes()[160:])
+        for _곁 in ("-wal", "-shm"):
+            Path(str(_자리) + _곁).unlink(missing_ok=True)
+        _s2 = Store(str(_자리))
+        assert _s2.recent(1) == [], "깨진 기록 db 를 새로 열지 못했다"
+        assert list(Path(_곳).glob("eb.db.깨짐-*")), "깨진 기록 db 를 옆에 안 치웠다"
+        _s2.conn.close()
     print("store self-check 통과")
 
 
