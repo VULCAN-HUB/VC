@@ -185,6 +185,16 @@ POST /eb/v1/me/learn   { "category": "VC와 나", "question": "나의 주요 업
 `hello` 의 `store.connections` 는 오너가 설정에서 연결한 바깥 계정 **이름**(`github` · `notion`)이다. 토큰은 운영체제
 보관소에만 있고 이 문으로는 절대 안 나간다.
 
+```
+GET /eb/v1/connect/github?path=/user/repos
+GET /eb/v1/connect/github?path=/repos/주인/저장소/issues&state=open
+```
+
+연결한 계정에서 **읽기만** 한다. 허용한 길만 부른다 — GitHub: `/user` · `/user/repos` · `/repos/주인/저장소`(+ `issues`·`pulls`·
+`commits`·`readme`·`branches`·`contents/…`·`issues/번호`) · `/search/(repositories|issues|code)`. Notion 은 `pages/…` · `blocks/…/children` ·
+`databases/…`. 그 밖의 길은 `400`, 연결 안 됐으면 `404`, 원격 PC 는 `403`. 답이 2만 자를 넘으면 앞부분만 `text` 로 주고
+`cut: true` · `full_chars` 로 말한다. 토큰은 답·오류 어디에도 안 실린다.
+
 같은 글에 동시에 쓰면 서버가 **글마다 줄을 세운다** — 덧붙이기끼리 줄이 안 사라지고, `replace` 의
 409 막이도 쓰기 직전의 글을 보고 판정한다. 이름 바꾸기가 기다리는 사이 새 제목이 먼저 생기면 409 다.
 

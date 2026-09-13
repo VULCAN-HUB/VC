@@ -433,7 +433,8 @@ class Handler(BaseHTTPRequestHandler):
                             "쓰기는 memory 에 POST(덧붙기가 기본). link_to 는 뜻이 가까운 글(잇기는 선택). "
                             "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
                             "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다). "
-                            "대화에서 오너에 대해 알게 되면 me/learn 에 POST(category·question·answer·source) — 오너 답은 안 덮는다."
+                            "대화에서 오너에 대해 알게 되면 me/learn 에 POST(category·question·answer·source) — 오너 답은 안 덮는다. "
+                            "connections 가 있으면 connect/이름?path=/user/repos 처럼 읽기만 된다."
                             + ("" if 큰모델있나 else
                                " ※ 더 잘 찾으려면 큰 뜻 모델 e5-base 를 받으라고 "
                                "사람에게 알려라(화면 「받을 모델」 칸, 296MB). "
@@ -625,6 +626,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path == "/eb/v1/graph":
             return self._send(200, {"nodes": self.server.notes.graph()})
+
+        if url.path.startswith("/eb/v1/connect/"):
+            # ★ 오너가 연결한 바깥 계정에서 **읽기만**(connectors.py 의 허용 길만). 토큰은 보관소에서 꺼내 머리에만 쓴다.
+            #   원격 PC 는 못 부른다 — 오너 계정 자료다.
+            if self.session is not None:
+                return self._send(403, {"error": "원격에서는 연결한 계정을 못 읽는다"})
+            import connectors
+
+            이름 = url.path[len("/eb/v1/connect/"):]
+            인자 = {k: v[0] for k, v in parse_qs(url.query).items()}
+            길 = 인자.pop("path", "")
+            try:
+                return self._send(200, connectors.fetch(이름, 길, 인자 or None))
+            except connectors.ConnectError as e:
+                return self._send(e.code if 400 <= e.code < 600 else 502, {"error": str(e)})
 
         if url.path == "/eb/v1/proposals":
             return self._send(
@@ -2025,6 +2041,19 @@ def _self_check() -> None:
     assert call("POST", "/eb/v1/me/learn", {"category": "없는갈래", "question": "q", "answer": "a"})[1]["category"] == "기타"
     note_store.delete(_설정.PROFILE_TITLE)
 
+    # ★ 연결한 계정 읽기 — 허용 길만, 연결 안 됐으면 404, 모르는 연결 404(바깥으로는 안 나간다)
+    import keystore as _보관
+
+    _옛보관 = (_보관.available, _보관.get)
+    _보관.available, _보관.get = (lambda: True), (lambda 이름: None)
+    try:
+        상태, 답 = call("GET", "/eb/v1/connect/github?path=" + urllib.parse.quote("/user"))
+        assert 상태 == 404 and "연결 안 됐다" in 답["error"], (상태, 답)
+        assert call("GET", "/eb/v1/connect/github?path=" + urllib.parse.quote("/orgs/x/members"))[0] == 400
+        assert call("GET", "/eb/v1/connect/" + urllib.parse.quote("없는곳") + "?path=/user")[0] == 404
+    finally:
+        _보관.available, _보관.get = _옛보관
+
     # ★★ 바깥 AI 로 켜면 그 제공자의 모델 이름을 쓴다(깐 gguf 이름이 클라우드로 나가면 안 된다)
     with tempfile.TemporaryDirectory() as _바깥곳:
         _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"}},
@@ -2158,6 +2187,8 @@ def _self_check() -> None:
     assert raw("POST", "/eb/v1/skills/propose",
                {"name": "원격 스킬", "steps": [{"module": "navigate"}]}, remote_token)[0] == 403, \
         "원격 PC 가 스킬 제안을 넣는다"
+    assert raw("GET", "/eb/v1/connect/github?path=/user", token=remote_token)[0] in (401, 403), \
+        "원격 PC 가 오너가 연결한 계정을 읽는다"
     # 원격 토큰으로 자기 자신을 승인시킬 수 없다.
     s2 = server.gate.open("9.9.9.9")
     assert raw("POST", "/eb/v1/remote/approve",
