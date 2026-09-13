@@ -656,7 +656,9 @@ class Handler(BaseHTTPRequestHandler):
             #     반드시 남는다.** 다만 그건 「덮은 뒤에 되살릴 수 있다」이지 「안 덮는다」가 아니다.
             #   → **덮어쓰기는 늘 `force` 를 받는다.** 되돌리기 어려운 일은 명시적으로 한다.
             #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
-            if mode == "replace" and old is not None and not body.get("force"):
+            # ★★ **`force` 는 진짜 참(`true`)일 때만 뚫는다.** `bool()` 로 읽으니 글자 `"false"`·`"0"` 도
+            #   참이 되어 **사람이 고친 글을 덮었다** — 덮어쓰기 막이가 글자 한 줄에 무너졌다.
+            if mode == "replace" and old is not None and body.get("force") is not True:
                 return self._send(409, {
                     "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
                     "title": title, "chars": len(old.body),
@@ -670,7 +672,7 @@ class Handler(BaseHTTPRequestHandler):
                     title=title,
                     body=text,
                     kind=body.get("kind", old.kind if old else "note"),
-                    pinned=bool(body.get("pinned")) or bool(old and old.pinned),
+                    pinned=body.get("pinned") is True or bool(old and old.pinned),   # "false" 는 거짓
                     aliases=old.aliases if old else [],
                 )
                 path = self.server.notes.write(note)
@@ -1500,6 +1502,15 @@ def _self_check() -> None:
     assert 상태 == 404 and "POST" in (길틀림.get("hint") or ""), f"메서드가 틀렸다고 안 말한다: {길틀림}"
     상태, 없는길 = call("GET", "/eb/v1/memory/all")
     assert 상태 == 404 and 없는길.get("paths"), f"있는 길을 안 알려 준다: {없는길}"
+
+    # ★★ **`force: "false"` 로는 못 덮는다.** `bool("false")` 가 참이라 덮어쓰기 막이가 뚫렸다.
+    assert call("POST", "/eb/v1/memory", {"title": "뚫기 시험", "text": "처음"})[0] == 201
+    for 가짜참 in ("false", "0", 1, "yes"):
+        상태, _ = call("POST", "/eb/v1/memory",
+                     {"title": "뚫기 시험", "text": "덮기", "mode": "replace", "force": 가짜참})
+        assert 상태 == 409, f"force={가짜참!r} 로 덮어쓰기 막이가 뚫렸다: {상태}"
+    assert call("POST", "/eb/v1/memory", {"title": "고정 시험", "text": "몸", "pinned": "false"})[0] == 201
+    assert not note_store.read("고정 시험").pinned, '"false" 글자로 고정됐다'
 
     # ★ 갈래가 글자가 아니면 400 — 조용히 "None" 같은 갈래로 저장되면 좁히기에 영영 안 걸린다.
     for 나쁜갈래 in (["가", "나"], None, 123):
