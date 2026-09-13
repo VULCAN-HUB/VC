@@ -1,0 +1,9 @@
+항목 2794 · 못 만든 벡터 0
+물음                               1단   뜻200   낱말수  정답
+Traceback (most recent call last):
+  File "D:\프로젝트\비공개\1_EB\시험기록\실험-놓친것보기.py", line 57, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "D:\프로젝트\비공개\1_EB\시험기록\실험-놓친것보기.py", line 51, in main
+    print(f"{물음[:30]:30} {일단 or '밖':>4} {뜻 or '밖':>6} {낱말수:>5}  {정답들[0][:34]}")
+UnicodeEncodeError: 'cp949' codec can't encode character '\u2014' in position 60: illegal multibyte sequence
