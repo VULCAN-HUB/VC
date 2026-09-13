@@ -1620,6 +1620,7 @@ class Notes:
 
     def twins(self, title: str) -> list[Path]:
         """같은 제목을 가진 파일들. 하나뿐이면 빈 목록 — 굳이 알릴 것이 없다."""
+        title = 제목맞춤(title)
         rows = self.conn.execute(
             "SELECT path FROM notes WHERE title = ? ORDER BY path", (title,)).fetchall()
         return [Path(r["path"]) for r in rows] if len(rows) > 1 else []
@@ -2086,6 +2087,7 @@ class Notes:
         딱 맞는 것이 맨 위, 다음이 앞자리가 맞는 것, 그 다음이 자주 연 것이다.
         `eb`를 다 쳤는데 `eb-stage0-decisions`가 먼저 뜨면 한 번 더 손이 간다.
         """
+        part = 제목맞춤(part)   # 「질문?」 으로 쳐도 「질문？ 답」 이 걸리게
         like = f"%{part}%"
         head = f"{part}%"
         rows = self.conn.execute(
@@ -2847,6 +2849,9 @@ def _self_check() -> None:
         assert "이은 글" not in 언, "이미 이은 글까지 언급으로 센다"
         assert "언급 받는 글" not in 언, "제 글을 언급으로 센다"
         assert "다시 봤다" in 언["말만 한 글"], "어느 줄인지 안 준다"
+
+        # ★ 제목 조각에 `?`·`:` 를 쳐도 제안이 나와야 한다 — AI 가 틀린 제목을 고칠 길(did_you_mean)이다.
+        assert "질문？ 답" in n.titles_like("질문?"), f"`?` 든 조각으로 제목을 못 찾는다: {n.titles_like('질문?')}"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
