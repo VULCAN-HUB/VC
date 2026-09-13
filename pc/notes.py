@@ -808,14 +808,29 @@ def 훑어내림(뿌리, 끝: tuple[str, ...] | None = None, 폴더도: bool = F
             return True
         return _stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
 
-    for 위, 폴더들, 파일들 in os.walk(뿌리, followlinks=False, onerror=lambda e: None):
+    # ★★ **윈도우는 260자 넘는 경로를 조용히 못 연다**(긴 경로 설정이 꺼진 PC 가 흔하다). 깊은 폴더의
+    #   글이 훑기에서 **말없이 빠졌다**(재 봤다: 325자 경로의 글이 색인 0). 윈도우에서는 `\?\` 접두로
+    #   내려가고, 내줄 때는 **짧은 경로는 접두를 떼서** 준다 — 색인 열쇠가 예전과 같아야 「사라짐+새로 생김」이
+    #   안 난다. 긴 경로만 접두가 붙은 채로 나가고, 그 꼴은 매번 같다(길이로 정해진다).
+    B = chr(92)
+    긴앞 = B + B + "?" + B
+    뿌리글 = os.path.abspath(str(뿌리))
+    if os.name == "nt" and not 뿌리글.startswith(긴앞) and not 뿌리글.startswith(B + B):
+        뿌리글 = 긴앞 + 뿌리글
+
+    def 내줄꼴(자리: str) -> Path:
+        if 자리.startswith(긴앞) and len(자리) - len(긴앞) < 250:
+            return Path(자리[len(긴앞):])
+        return Path(자리)
+
+    for 위, 폴더들, 파일들 in os.walk(뿌리글, followlinks=False, onerror=lambda e: None):
         폴더들[:] = [d for d in 폴더들 if not d.startswith(".") and not 연결인가(os.path.join(위, d))]
         if 폴더도:
             for d in 폴더들:
-                yield Path(위) / d
+                yield 내줄꼴(os.path.join(위, d))
         for 이름 in 파일들:
             if 끝 is None or 이름.lower().endswith(끝):
-                yield Path(위) / 이름
+                yield 내줄꼴(os.path.join(위, 이름))
 
 
 def 제목맞춤(title: str) -> str:
@@ -2911,6 +2926,32 @@ def _self_check() -> None:
                     "SELECT count(*) FROM notes WHERE title = '고리 뒤 글'").fetchone()[0] == 1,                     "연결 폴더를 따라가 같은 글을 여러 번 셌다"
             finally:
                 고리.rmdir()          # 정션만 지운다(가리키는 곳은 그대로)
+
+        # ★★ **260자 넘는 경로의 글도 세어야 한다.** 윈도우 긴 경로가 꺼진 PC 에서 조용히 빠졌다.
+        import os as _os                    # 이 함수 뒤쪽에 `import os` 가 있어 `os` 가 지역 이름이다
+
+        if _os.name == "nt":
+            _B = chr(92)
+            _앞 = _B + _B + "?" + _B
+            _깊 = str(n.root)
+            for _i in range(12):
+                _깊 = _깊 + _B + ("긴폴더이름" * 4 + str(_i))
+                try:
+                    _os.mkdir(_앞 + _깊)
+                except FileExistsError:
+                    pass
+            with open(_앞 + _깊 + _B + "아주 깊은 글.md", "w", encoding="utf-8") as _f:
+                _f.write("아주 깊은 곳의 몸")
+            try:
+                n.reindex()
+                assert n.read("아주 깊은 글") is not None, "260자 넘는 경로의 글이 색인에서 빠진다"
+                assert "아주 깊은 글" in [r["title"] for r in n.search("깊은 곳의")], "긴 경로의 글이 안 찾힌다"
+            finally:
+                # 임시 폴더 정리(`rmtree`)도 260자를 못 넘는다 — 접두를 붙여 우리가 먼저 지운다.
+                import shutil as _sh
+
+                _sh.rmtree(_앞 + str(n.root) + _B + "긴폴더이름" * 4 + "0", ignore_errors=True)
+                n.reindex()
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
