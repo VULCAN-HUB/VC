@@ -826,7 +826,9 @@ def _self_check() -> None:
             _글 = pathlib.Path(__file__).with_name(_파일).read_text(encoding="utf-8")
         except OSError:
             continue
-        assert (chr(123) + "cfg[" + chr(39) + "pair_token" + chr(39) + "]" + chr(125)) not in _글, f"{_파일} 이 토큰 값을 콘솔에 찍는다"
+        # 요청 헤더(`Bearer …`)에 쓰는 것은 정당하다 — **찍는 꼴**(「토큰」 뒤 쌍점과 값)만 센다.
+        # ※ 세는 글자를 이 주석에 그대로 적었더니 검사가 제 몸을 세어 제자리에서도 터졌다.
+        assert ("토큰: " + chr(123) + "cfg[") not in _글, f"{_파일} 이 토큰 값을 콘솔에 찍는다"
 
     # ★ 창고의 마지막 쓸모는 AI 가 꺼내 쓰는 것인데, 포트와 열쇠 자리가 어디에도 안 적혀
     #   있어 사람에게 물어야 했다. `--doctor` 가 그 한 줄을 적는지 본다.
