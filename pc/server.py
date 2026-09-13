@@ -366,7 +366,16 @@ class Handler(BaseHTTPRequestHandler):
                 if 통째로:
                     한장["body"] = 몸
                 out.append(한장)
-            return self._send(200, {"results": out})
+            답 = {"results": out}
+            # 뜻 검색이 아직 못 도는 때만 말한다(다 올랐으면 한 글자도 안 싣는다).
+            상태 = getattr(self.server, "뜻상태", "")
+            if 상태 == "올리는 중":
+                답["meaning"] = "loading"
+                답["hint"] = "뜻 모델을 올리는 중이라 낱말로만 찾았다. 몇 초 뒤 다시 물어라"
+            elif 상태 == "없음":
+                답["meaning"] = "none"
+                답["hint"] = "뜻 모델이 없어 낱말로만 찾는다 — 말을 바꿔 물으면 안 걸릴 수 있다"
+            return self._send(200, 답)
 
         if url.path == "/eb/v1/memory/note":
             # 꺼내기 2단. 소제목을 주면 **그 토막만**, 안 주면 글 한 편을 그대로 준다.
@@ -1011,6 +1020,10 @@ class EBServer(ThreadingHTTPServer):
         `Indexer` 와 **같은 차례**를 밟는다 — 안 그러면 화면이 만든 벡터와 여기서
         만든 벡터가 갈린다. `use_embedder` 가 폭을 재서 크기가 달라졌으면 옛것을 버린다.
         """
+        # ★★ **뜻 모델이 오르는 동안(켠 뒤 3~5초) 찾으면 조용히 0장이었다.** AI 는 그것을
+        #   「없다」로 읽는다 — 재 보니 2.1초에 0장, 5.2초에 5장. 상태를 들고 있다가 1단이 말한다.
+        self.뜻상태 = "올리는 중"
+
         def loop() -> None:
             from brain import onnx_embedder, pin_runtime
 
@@ -1019,6 +1032,7 @@ class EBServer(ThreadingHTTPServer):
             # Qt 가 딸고 온 2019년 런타임 위에서 onnxruntime 을 올리면 통째로 죽는다.
             # 뜻 검색이 꺼지는 것이 서버가 죽는 것보다 낫다.
             if not pin_runtime():
+                self.뜻상태 = "없음"
                 return
             # ★★ **구운 판에는 콘솔이 없다.** `--noconsole` 로 구우면 `print` 가 조용히
             #   사라져, 넣어 둔 알림을 **아무도 못 본다** — 시험 쪽이 v0.1.94 에서
@@ -1038,6 +1052,7 @@ class EBServer(ThreadingHTTPServer):
             embed = onnx_embedder(paths.meaning_dir(고른것), max_tokens=EMBED_TOKENS)
             if embed is None:
                 알린다("[뜻 벡터] 안 돈다 — 모델이 없다: " + str(paths.meaning_dir()))
+                self.뜻상태 = "없음"
                 return          # 낱말 검색은 그대로 돈다
             # ★★ **찾는 쪽에도 임베더를 붙인다.** 처음엔 이 실의 제 연결에만 붙였는데,
             #   그러면 **벡터는 자라는데 뜻 검색은 영영 0건**이다 — `search` 가 쓰는
@@ -1045,6 +1060,7 @@ class EBServer(ThreadingHTTPServer):
             #   시험 쪽이 `--no-ui` 에서 그걸 잡았다: 본문에 있는 낱말은 나오는데
             #   뜻으로 물으면 네 가지가 다 0건이었다. **자란 것과 쓰이는 것은 다른 말이다.**
             self.notes.use_embedder(embed)
+            self.뜻상태 = "됨"
             # sqlite 연결은 실마다 하나가 원칙이다 — 쓰는 것은 제 연결로 한다.
             내것 = self.notes.__class__(self.notes.root, self.notes.index_path,
                                         index_now=False)
@@ -1456,6 +1472,14 @@ def _self_check() -> None:
         assert 상태 == 500 and 고장.get("why") == "RuntimeError", f"뜻밖의 예외에 답을 안 한다: {상태} {고장}"
     finally:
         note_store.언급 = _진짜언급
+
+    # ★★ **뜻 모델이 오르는 동안** 찾으면 조용히 0장이었다 — 그 사실을 1단이 말해야 한다.
+    server.뜻상태 = "올리는 중"
+    _, 올림 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아무 뜻"))
+    assert 올림.get("meaning") == "loading", f"뜻 모델을 올리는 중이라고 안 말한다: {올림}"
+    server.뜻상태 = "됨"
+    _, 됨 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("아무 뜻"))
+    assert "meaning" not in 됨, "다 올랐는데 아직이라고 한다"
 
     # ★ 2단이 **이름만 적고 안 이은 글**을 알려 준다.
     assert call("POST", "/eb/v1/memory", {"title": "언급 대상 글", "text": "몸"})[0] == 201
