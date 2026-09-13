@@ -259,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
                             "year:2026 · path:2026/09 · title:회의록(=file:, 제목만 본다) 도 된다. "
                             "\"따옴표\" 는 그 구절 그대로다. A OR B(또는) 는 하나라도 든 것. k= 로 개수(기본 5, 위 50). "
                             "몸은 안 온다 — memory/note?title=..&heading=.. 로 고른 것만 펼친다 "
-                            "(heading=^이름 은 블록 한 덩이) "
+                            "(heading=^이름 은 블록 한 덩이. 같은 제목이 여럿이면 카드의 folder 를 folder= 로) "
                             "(2만 자에서 자르고 cut 으로 말한다. full=1 로 뚫는다). "
                             "목록만 훑을 때는 brief=1 (제목만, 3배 싸다). "
                             "긴 글은 note 에 q= 를 주면 걸린 자리 둘레만 온다(자르면 cut=true). "
@@ -349,6 +349,15 @@ class Handler(BaseHTTPRequestHandler):
                     한장["headings"] = 머리
                 if 이웃 := self.server.notes.neighbors(r["title"]):
                     한장["links"] = 이웃
+                # ★ **같은 제목이 다른 폴더에 또 있으면 폴더를 붙인다.** 옵시디언은 `가/회의.md` 와
+                #   `나/회의.md` 를 둘 다 둔다. 카드가 제목만 같으면 AI 는 어느 쪽인지 **못 고르고**
+                #   둘 다 펼친다(값 두 배). 겹칠 때만 싣는다 — 대부분의 카드는 그대로다.
+                if self.server.notes.twins(r["title"]):
+                    try:
+                        한장["folder"] = str(Path(r["path"]).parent.relative_to(
+                            self.server.notes.root)).replace(chr(92), "/")
+                    except ValueError:
+                        pass
                 if 통째로:
                     한장["body"] = 몸
                 out.append(한장)
@@ -363,6 +372,15 @@ class Handler(BaseHTTPRequestHandler):
             if not title:
                 return self._send(400, {"error": "title required"})
             note = self.server.notes.read(title)
+            # 같은 제목이 여럿이면 `folder=` 로 고른다(1단 카드의 `folder` 를 그대로 넘기면 된다).
+            if 폴더 := (args.get("folder") or [""])[0].strip().strip("/"):
+                note = None
+                for 자리 in self.server.notes.twins(title) or []:
+                    try:
+                        if str(자리.parent.relative_to(self.server.notes.root)).replace(chr(92), "/") == 폴더:
+                            note = self.server.notes.read_at(자리)
+                    except ValueError:
+                        continue
             if note is None:
                 # ★★ **없다고만 하면 AI 는 처음부터 다시 찾는다 — 그게 800자다.**
                 #   제목을 조금 틀리게 적는 것은 AI 가 흔히 하는 실수인데(앞을 잘라 보내거나
@@ -1404,6 +1422,19 @@ def _self_check() -> None:
         (note_store.root.parent / "vc-이름바꾸다만것.txt").unlink(missing_ok=True)
     _, 멀쩡인사 = call("GET", "/eb/v1/hello")
     assert "broken_rename" not in (멀쩡인사.get("store") or {}), "멀쩡한데 끊겼다고 한다"
+
+    # ★ **같은 제목이 두 폴더에** 있으면 1단 카드가 폴더를 싣고, 2단은 `folder=` 로 고른다.
+    (note_store.root / "쌍둥이가").mkdir(parents=True, exist_ok=True)
+    (note_store.root / "쌍둥이나").mkdir(parents=True, exist_ok=True)
+    (note_store.root / "쌍둥이가" / "쌍둥이 회의.md").write_text("가 쪽 쌍둥이 몸", encoding="utf-8")
+    (note_store.root / "쌍둥이나" / "쌍둥이 회의.md").write_text("나 쪽 쌍둥이 몸", encoding="utf-8")
+    note_store.reindex()
+    _, 쌍 = call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("쌍둥이"))
+    폴더들 = sorted(c.get("folder", "") for c in 쌍["results"] if c["title"] == "쌍둥이 회의")
+    assert 폴더들 == ["쌍둥이가", "쌍둥이나"], f"같은 제목 카드에 폴더가 없다: {쌍['results']}"
+    _, 골라 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("쌍둥이 회의")
+                 + "&folder=" + urllib.parse.quote("쌍둥이가"))
+    assert 골라.get("text", "").startswith("가 쪽"), f"folder= 로 못 고른다: {골라}"
 
     # ★★ **틀렸을 때 무엇이 틀렸는지 말해 준다.** 안 그러면 AI 가 짐작으로 다시 두드린다.
     상태, 다른이름 = call("GET", "/eb/v1/memory/search?query=" + urllib.parse.quote("조이는지"))
