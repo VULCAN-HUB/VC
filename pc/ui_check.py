@@ -486,6 +486,20 @@ def run() -> None:
         assert "물러날 줄" not in fresh.read("회의록").body, "덧붙인 걸 안 물렀다"
         assert "그 사이 AI" in fresh.read("회의록").body, "무르면서 그 사이 남이 덧붙인 줄까지 지웠다"
 
+        # ★ 말로 시킨 쓰기가 막히면 까닭을 말하고, 죽음 기록에는 안 넣는다.
+        말2, 죽음 = [], []
+        _옛말, first.report = first.report, lambda t, who=None: 말2.append(t)
+        _옛덧, first.notes.append = first.notes.append, lambda *a, **k: (_ for _ in ()).throw(
+            notes_module.WriteBlocked("잠김"))
+        _옛죽음, ui.report.log_crash = ui.report.log_crash, lambda e: 죽음.append(e)
+        try:
+            first.ask("회의록에 막힐 줄 적어줘")
+            first.settle()
+        finally:
+            first.report, first.notes.append, ui.report.log_crash = _옛말, _옛덧, _옛죽음
+        assert any("못 썼어" in t for t in 말2), f"쓰기가 막혔는데 까닭을 안 말한다: {말2}"
+        assert not 죽음, "쓰기 막힘을 죽음 기록에 넣었다"
+
         first.ask("무르고")            # 두 번 무르면 무를 게 없다
         first.settle()
 
