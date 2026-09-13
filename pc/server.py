@@ -272,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
                             #   헛검색(800자)을 막아 주므로 남기되, 잰 값은 짧게만 적는다.
                             "★ 안 나오면 위 kinds 중 하나로 좁혀 다시 물어라(kind:결정) — 가장 많은 갈래가 밀어내서 "
                             "목록 밖에 있던 글이 1~4등으로 올라온다. "
-                            "쓰기는 memory 에 POST(덧붙기가 기본). 답의 link_to 는 뜻이 가까운 글이다 — 이어짐을 적고 싶을 때만 [[제목]]. "
+                            "쓰기는 memory 에 POST(덧붙기가 기본). link_to 는 뜻이 가까운 글(잇기는 선택). "
                             "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
                             "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다)."
                             + ("" if 큰모델있나 else
