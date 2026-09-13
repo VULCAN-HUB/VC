@@ -1830,6 +1830,11 @@ class Notes:
             return None      # 읽는 사이 남이 지웠다
 
     def delete(self, title: str) -> bool:
+        # 지난 판을 남기고 지우는 사이에 덧붙인 줄은 이력에도 없이 사라진다 — 한 잠금 안에서.
+        with self._글잠금(title):
+            return self._delete(title)
+
+    def _delete(self, title: str) -> bool:
         path = self.path_of(title)
         if not path.exists():
             return False
@@ -3200,6 +3205,18 @@ def _self_check() -> None:
         assert _결과 == [False], f"그 사이 생긴 새 이름으로 바꿨다: {_결과}"
         assert n.read("겹칠 새 이름").body.strip() == "먼저 생긴 몸", "먼저 생긴 글을 덮었다"
         assert n.read("옮길 글") is not None, "물러났는데 옛 글이 사라졌다"
+
+        # 지우기도 「남기고 → 지우기」라 글 잠금을 기다려야 한다.
+        n.write(Note(title="지울 글", body="몸"))
+        with n._글잠금("지울 글"):
+            _실 = _th7.Thread(target=n.delete, args=("지울 글",), daemon=True); _실.start()
+            _t8.sleep(0.4)
+            assert _실.is_alive(), "delete 가 글 잠금을 안 기다린다"
+            n.append("지울 글", "지우기 직전에 붙인 줄")
+        _실.join(10)
+        assert n.read("지울 글") is None
+        assert any("지우기 직전에 붙인 줄" in read_text(p) for _, p in n.history("지울 글")), \
+            "지우기 직전에 붙인 줄이 이력에도 없다"
 
         # 오늘 일지 만들기·지난 판 되돌리기도 읽고-쓰기라 글 잠금을 기다려야 한다.
         n.keep_history(n.path_of("가리키는 글"), read_text(n.path_of("가리키는 글")), always=True)
