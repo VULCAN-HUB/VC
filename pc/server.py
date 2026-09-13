@@ -167,6 +167,24 @@ class Handler(BaseHTTPRequestHandler):
             return claimed
         return self.client_address[0]
 
+    def _비우고끊기(self) -> None:
+        """거절한 뒤 **받은 본문 앞머리를 잠깐(0.5초) 비우고** 끊는다.
+
+        ★ 안 읽은 바이트가 남은 채 닫으면 윈도우가 RST 를 보내 **상대가 413 을 못 읽고 「연결 끊김」만 본다**
+        (재 봤다: 60번 중 4번). 4GB 를 다 읽는 게 아니다 — 0.5초만 보고 끊는다.
+        """
+        import socket
+
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.settimeout(0.5)
+            끝 = time.monotonic() + 0.5
+            while time.monotonic() < 끝 and self.connection.recv(65536):
+                pass
+        except OSError:
+            pass
+
     def _send(self, code: int, payload: Any = None) -> None:
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
@@ -592,7 +610,8 @@ class Handler(BaseHTTPRequestHandler):
         except self.TooBig:
             # 크다고 읽어 비우지 않는다 — 그게 바로 상대가 노리는 것이다. 연결을 끊는다.
             self.close_connection = True
-            return self._send(413, {"error": "본문이 너무 크다"})
+            self._send(413, {"error": "본문이 너무 크다"})
+            return self._비우고끊기()
         except json.JSONDecodeError:
             body = None
 
@@ -1237,16 +1256,23 @@ def _self_check() -> None:
     # 같은 공유기의 누구든 이걸 보낼 수 있다.
     import http.client
 
-    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    conn.putrequest("POST", "/eb/v1/memory")
-    conn.putheader("Authorization", "Bearer test-token")
-    conn.putheader("Content-Length", str(4 * 1024 * 1024 * 1024))
-    conn.endheaders()
-    conn.send(b'{"text":"x"}')
-    began = time.time()
-    assert conn.getresponse().status == 413
-    assert time.time() - began < 2.0, "413을 늦게 주면 막은 게 아니다"
-    conn.close()
+    # ★ 여러 번 던진다 — 비우지 않고 끊으면 가끔(60번 중 4번) 413 대신 「연결 끊김」이 났다.
+    for _번 in range(40):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.putrequest("POST", "/eb/v1/memory")
+        conn.putheader("Authorization", "Bearer test-token")
+        conn.putheader("Content-Length", str(4 * 1024 * 1024 * 1024))
+        conn.endheaders()
+        conn.send(b'{"text":"x"}')
+        time.sleep(0.02)
+        began = time.time()
+        try:
+            _받음 = conn.getresponse().status
+        except OSError as e:
+            _받음 = type(e).__name__
+        assert _받음 == 413, f"413 대신 {_받음} ({_번 + 1}번째)"
+        assert time.time() - began < 2.0, "413을 늦게 주면 막은 게 아니다"
+        conn.close()
     # 막고 나서도 멀쩡해야 한다
     assert call("GET", "/eb/v1/hello")[0] == 200
 
@@ -1654,14 +1680,18 @@ def _self_check() -> None:
     # ★★ 두 AI 가 **없던 글에 동시에** 덧붙여도 줄이 안 사라진다.
     import threading as _th8
 
+    #   ※ 틈은 **첫 줄**에만 있다(둘째부터는 글이 있어 잠긴 길로 간다) — 새 글 여럿에 한꺼번에 첫 줄을 던진다.
+    _문 = _th8.Barrier(3)
+
     def _보내기(표):
-        for _i in range(15):
-            call("POST", "/eb/v1/memory", {"title": "동시에 새로 쌓는 글", "text": f"{표}줄{_i}"})
+        for _i in range(12):
+            _문.wait()
+            call("POST", "/eb/v1/memory", {"title": f"동시에 새로 쌓는 글 {_i}", "text": f"{표}줄"})
     _실들 = [_th8.Thread(target=_보내기, args=(x,)) for x in "가나다"]
     [t.start() for t in _실들]; [t.join() for t in _실들]
-    _몸 = note_store.read("동시에 새로 쌓는 글").body
-    _남 = sum(1 for x in "가나다" for _i in range(15) if f"{x}줄{_i}" in _몸)
-    assert _남 == 45, f"동시에 새로 쌓은 줄이 사라진다: 45 중 {_남}"
+    _남 = sum(1 for _i in range(12) for x in "가나다"
+             if f"{x}줄" in note_store.read(f"동시에 새로 쌓는 글 {_i}").body)
+    assert _남 == 36, f"새 글에 동시에 쌓은 첫 줄이 사라진다: 36 중 {_남}"
     assert call("POST", "/eb/v1/memory", {"title": "처음부터 고정", "text": "가", "pinned": True})[0] == 201
     assert note_store.read("처음부터 고정").pinned, "새 글 pinned 가 안 먹는다"
 

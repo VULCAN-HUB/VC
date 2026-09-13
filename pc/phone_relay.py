@@ -108,7 +108,17 @@ class PhoneRelay:
                     return self._reply(400, b'{"error": "bad Content-Length"}')
                 if length < 0 or length > MAX_BODY:
                     self.close_connection = True
-                    return self._reply(413, b'{"error": "body too large"}')
+                    self._reply(413, b'{"error": "body too large"}')
+                    # ★ 안 읽은 본문을 남긴 채 닫으면 RST 로 413 이 안 닿는다 — 0.5초만 비우고 끊는다.
+                    try:
+                        self.wfile.flush()
+                        self.connection.shutdown(socket.SHUT_WR)
+                        self.connection.settimeout(0.5)
+                        while self.connection.recv(65536):
+                            pass
+                    except OSError:
+                        pass
+                    return
                 body = self.rfile.read(length) if length else None
 
                 headers = {k: v for k, v in self.headers.items() if k in FORWARD_HEADERS}
