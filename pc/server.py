@@ -740,6 +740,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/remote/close":
             # 외부 PC는 자기 세션만 끊을 수 있다. 폰은 어느 것이든 끊는다.
             sid = body.get("session", "")
+            if not isinstance(sid, str):
+                return self._send(400, {"error": "session 은 글자여야 한다"})
             if self.session is not None and self.session.id != sid:
                 return self._send(403, {"error": "남의 연결이다"})
             return self._send(200, {"ok": self.server.gate.close(sid, "끊음")})
@@ -1002,6 +1004,8 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
             return self._send(400, {"error": "messages must be a list of objects"})
         # 요청이 모델을 지정하지 않으면 지금 쓰기로 정해진 글자 모델을 쓴다(결정 42).
+        if not isinstance(body.get("model") or "", str):
+            return self._send(400, {"error": "model 은 글자여야 한다"})
         model = body.get("model") or self.server.picked["using"]["chat"]
         try:
             text = self.server.backend.chat(messages, model)
@@ -1713,6 +1717,10 @@ def _self_check() -> None:
                  ("/eb/v1/remote/approve", {"code": 1234}),
                  ("/eb/v1/remote/approve", {"session": ["가"], "nonce": "x"}),
                  ("/eb/v1/remote/deny", {"session": 5}),
+                 ("/eb/v1/remote/close", {"session": ["가"]}),
+                 ("/eb/v1/models/download", {"key": ["qwen"]}),
+                 ("/eb/v1/models", {"role": 1, "name": ""}),
+                 ("/v1/chat/completions", {"messages": [{"role": "user", "content": "안녕"}], "model": 5}),
                  ("/eb/v1/proposals/nope/decision", {"decision": 1})):
         상태, _ = call("POST", 길, 몸)
         assert 상태 == 400, f"{길} {몸} → {상태} (400 이어야 한다)"
