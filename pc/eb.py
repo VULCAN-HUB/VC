@@ -1740,17 +1740,26 @@ if __name__ == "__main__":
             for c, 판 in 골라낸:
                 # **어디서 왔는지를 항목에 박아 둔다.** AI가 쓴 것이라 사람이
                 # 「이거 진짜야?」를 물을 때 원본으로 갈 길이 없으면 못 믿는다.
-                제목 = gate.겹치지않게(판.제목, Path(c.출처).stem, 있던제목)
-                있던제목.add(제목)
-                note = Note(title=제목, body=판.몸, kind=판.갈래,
-                            extra={"출처": f"{뿌리 / c.출처}", "줄": c.줄,
-                                   "들인이유": 판.왜,
-                                   "지은이": "문지기" if not 판.못알아들음 else "그대로"})
-                try:
-                    n.write(note)
-                    쓴것 += 1
-                except Exception as e:      # 한 항목 때문에 7천 개가 안 멈춘다
-                    줄.append(f"  못 쓴 것: {제목} — {type(e).__name__}: {e}")
+                # ★ 제목 목록은 흡수 **시작 때** 뜬 것이다. 켜 둔 VC 에 AI 가 그 사이 같은 제목을 쓰면
+                #   조용히 덮는다 — 쓰기 직전에 잠그고 다시 보고, 생겼으면 다른 제목으로 간다.
+                for _ in range(5):
+                    제목 = gate.겹치지않게(판.제목, Path(c.출처).stem, 있던제목)
+                    있던제목.add(제목)
+                    with n._글잠금(제목):
+                        if n.read(제목) is not None:
+                            continue
+                        note = Note(title=제목, body=판.몸, kind=판.갈래,
+                                    extra={"출처": f"{뿌리 / c.출처}", "줄": c.줄,
+                                           "들인이유": 판.왜,
+                                           "지은이": "문지기" if not 판.못알아들음 else "그대로"})
+                        try:
+                            n.write(note)
+                            쓴것 += 1
+                        except Exception as e:      # 한 항목 때문에 7천 개가 안 멈춘다
+                            줄.append(f"  못 쓴 것: {제목} — {type(e).__name__}: {e}")
+                    break
+                else:
+                    줄.append(f"  못 쓴 것: {판.제목} — 겹치는 제목이 계속 생겼다")
             # **센 것과 실제로 는 것이 같은지 확인한다.** 첫 시험에서 31개를 썼다고
             # 적어 놓고 파일은 29개였다 — 세는 쪽만 보면 잃은 것을 영영 모른다.
             판수 = n.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
