@@ -1094,7 +1094,6 @@ class EBServer(ThreadingHTTPServer):
         self.notes = note_store
         self.skills = SkillStore(note_store)
         self.hub = Hub()
-        self._분석잠금 = threading.Lock()
         self.backend = backends.build(cfg["backend"])
         # 자체 엔진이면 가진 모델을 설정보다 우선한다 — 모델 이름을 손으로 적게 하면
         # 파일명을 그대로 옮겨야 해서 오타 한 번에 "모델이 없다"가 뜬다.
@@ -1141,17 +1140,15 @@ class EBServer(ThreadingHTTPServer):
 
     def analyze(self) -> tuple[int, list[str]]:
         """이력을 훑어 새 제안만 큐에 넣는다. 반환은 (찾은 수, 새로 만든 제목들)."""
-        # ★ 「같은 제안 있나」 보고 넣기라, 창·폰·주기 분석이 겹치면 **같은 제안이 두 번 쌓인다**. 줄 세운다.
-        with self._분석잠금:
-            found = skills.analyze(self.store.conn)
-            fresh = []
-            for p in found:
-                if self.store.same_proposal_pending(p["type"], p["title"]):
-                    continue  # 같은 제안을 매번 다시 띄우지 않는다
-                self.store.add_proposal(p)
-                self.hub.publish(p)
-                fresh.append(p["title"])
-            return len(found), fresh
+        found = skills.analyze(self.store.conn)
+        fresh = []
+        for p in found:
+            # 같은 제안을 매번 다시 띄우지 않는다. 「있나 보고 넣기」는 한 문장이라 화면 「점검」과 겹쳐도 하나다.
+            if not self.store.add_proposal_if_new(p):
+                continue
+            self.hub.publish(p)
+            fresh.append(p["title"])
+        return len(found), fresh
 
     def start_housekeeping(self, every_sec: int = 60) -> None:
         """놀고 있는 모델을 내리고 죽은 원격 세션을 치운다.
@@ -1924,13 +1921,6 @@ def _self_check() -> None:
     assert status == 200 and len(made["created"]) == 1, made
     # 두 번 돌려도 같은 제안이 또 쌓이지 않는다.
     assert call("POST", "/eb/v1/analyze", {})[1]["created"] == []
-    # ★ 분석끼리 줄 선다 — 「있나 보고 넣기」가 겹치면 같은 제안이 두 번 쌓인다. 겹침은 우연이라 기다리는지 본다.
-    with server._분석잠금:
-        _분석 = threading.Thread(target=server.analyze, daemon=True)
-        _분석.start()
-        time.sleep(0.3)
-        assert _분석.is_alive(), "분석이 분석 잠금을 안 기다린다"
-    _분석.join(10)
 
     pending = store.pending_proposals()
     assert len(pending) == 1

@@ -156,6 +156,25 @@ class Store:
             (type_, title),
         ).fetchone() is not None
 
+    def add_proposal_if_new(self, p: Any) -> bool:
+        """같은 제안(갈래·제목)이 대기 중이 아닐 때만 넣는다. 넣었으면 참.
+
+        ★ 「있나 보고 넣기」를 두 번에 나눠 하면 화면 「점검」과 서버의 주기 분석이 **따로 연 연결**로
+        겹쳐 같은 제안이 두 번 쌓인다(한 프로그램 안에서 저장소를 둘 연다). SQL 한 문장이라 겹쳐도 하나만 들어간다.
+        """
+        row = asdict(p) if not isinstance(p, dict) else dict(p)
+        row["based_on"] = json.dumps(row.get("based_on") or [], ensure_ascii=False)
+        row["declaration"] = json.dumps(row.get("declaration") or {}, ensure_ascii=False)
+        row["ts"] = time.time()
+        cur = self.conn.execute(
+            "INSERT INTO proposals (proposal_id, ts, type, title, summary, based_on, declaration) "
+            "SELECT :proposal_id, :ts, :type, :title, :summary, :based_on, :declaration "
+            "WHERE NOT EXISTS (SELECT 1 FROM proposals WHERE type = :type AND title = :title AND decision IS NULL)",
+            row,
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def proposal(self, proposal_id: str) -> sqlite3.Row | None:
         return self.conn.execute(
             "SELECT * FROM proposals WHERE proposal_id = ?", (proposal_id,)
@@ -176,6 +195,19 @@ class Store:
 
 
 def _self_check() -> None:
+    # ★ 같은 파일을 따로 연 두 저장소(화면·서버)가 같은 제안을 넣어도 하나만 들어간다.
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as _곳:
+        _가, _나 = Store(str(Path(_곳) / "eb.db")), Store(str(Path(_곳) / "eb.db"))
+        _제안 = dict(proposal_id="x1", type="skill_proposal", title="같은 제안", summary="", based_on=[], declaration={})
+        assert _가.add_proposal_if_new(_제안) is True
+        assert _나.add_proposal_if_new({**_제안, "proposal_id": "x2"}) is False, "따로 연 저장소가 같은 제안을 또 넣었다"
+        assert len(_가.pending_proposals()) == 1
+        _가.decide("x1", "reject")
+        assert _나.add_proposal_if_new({**_제안, "proposal_id": "x3"}) is True, "결정된 제안이 새 제안을 막는다"
+        _가.conn.close(); _나.conn.close()
+
     s = Store(":memory:")
 
     e = dict(

@@ -2625,10 +2625,7 @@ class MainWindow(QWidget):
         found = analyze(self.store.conn)
         made = 0
         for p in found:
-            if self.store.same_proposal_pending(p["type"], p["title"]):
-                continue
-            self.store.add_proposal(p)
-            made += 1
+            made += self.store.add_proposal_if_new(p)   # 서버 주기 분석과 겹쳐도 하나만(한 문장)
         self.refresh()
         self.report(
             f"점검했어. 고칠 만한 걸 {made}개 찾았어." if made else "점검했어. 지금은 고칠 게 없어.",
