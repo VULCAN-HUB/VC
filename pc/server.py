@@ -307,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
-    POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename",
+    POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/ask", "/eb/v1/log")
 
     def _길없다(self, path: str) -> dict:
@@ -844,6 +844,45 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"title": notes.제목맞춤(new_t), "was": old_t,
                                     "note": "가리키던 [[링크]]도 같이 고쳤다"})
 
+        if url.path == "/eb/v1/skills/propose":
+            # ★★ **바깥에서 만든 스킬을 들이는 문**(오너 결정 3 추천: 선언문만 · 승인 게이트 · 코드 실행 없음).
+            #   바로 스킬로 저장하지 않는다 — 제안 줄에 넣고 사람이 승인해야 스킬이 된다(결정 18).
+            #   부를 수 있는 것은 **이미 있는 모듈뿐**이다. 모르는 이름·경로 꼴은 400 에 아는 이름을 준다.
+            if self.session is not None:
+                return self._send(403, {"error": "원격에서는 스킬을 못 들인다"})
+            if not isinstance(body, dict):
+                return self._send(400, {"error": "선언문은 JSON 객체다"})
+
+            def 글줄(값: Any, 최대: int) -> bool:
+                return isinstance(값, list) and len(값) <= 최대 and all(
+                    isinstance(x, str) and 0 < len(x) <= 200 for x in 값)
+
+            아는것 = sorted(self.server.eb.base_modules)
+            name, steps = body.get("name"), body.get("steps")
+            triggers, examples = body.get("triggers", []), body.get("examples", [])
+            if not isinstance(name, str) or not name.strip() or len(name) > 80:
+                return self._send(400, {"error": "name 은 80자 안의 글자다"})
+            if not 글줄(triggers, 50) or not 글줄(examples, 50):
+                return self._send(400, {"error": "triggers·examples 는 200자 안 글자 목록(50개까지)이다"})
+            if (not isinstance(steps, list) or not 0 < len(steps) <= 20
+                    or not all(isinstance(s, dict) and s.get("module") in 아는것
+                               and isinstance(s.get("params", {}), dict) for s in steps)):
+                return self._send(400, {"error": "steps 는 아는 모듈만 부르는 1~20단계 목록이다",
+                                        "known": 아는것})
+            summary = body.get("summary") if isinstance(body.get("summary"), str) else ""
+            제안 = dict(
+                proposal_id="ext-" + secrets.token_hex(6), type="skill_proposal",
+                title=f"바깥 스킬: {name.strip()}",
+                summary=summary[:300] or f"{len(steps)}단계 · 반응 {', '.join(triggers[:3]) or '없음'}",
+                based_on=["바깥"],
+                declaration={"name": name.strip(), "triggers": triggers, "examples": examples,
+                             "steps": [{"module": s["module"], "params": s.get("params", {})}
+                                       for s in steps]})
+            self.server.store.add_proposal(제안)
+            self.server.hub.publish(제안)
+            return self._send(202, {"proposal_id": 제안["proposal_id"], "status": "승인 기다림",
+                                    "how": "사람이 proposals/{id}/decision 에 approve 해야 스킬이 된다"})
+
         if url.path == "/eb/v1/analyze":
             return self._analyze()
 
@@ -929,7 +968,9 @@ class Handler(BaseHTTPRequestHandler):
                 skills.Skill(name=chosen, examples=decl.get("examples", []))
             ))
         elif decision == "approve" and row["type"] in ("skill_proposal", "skill_update") and name:
-            applied = asdict(self.server.skills.save(skills.Skill(**decl)))
+            # 선언문에 모르는 칸이 섞여도(바깥 제안·손으로 고친 줄) 승인에서 500 이 나지 않게 아는 칸만 받는다.
+            applied = asdict(self.server.skills.save(skills.Skill(
+                **{k: v for k, v in decl.items() if k in skills.Skill.__dataclass_fields__})))
         elif decision == "revert" and name:
             reverted = self.server.skills.revert(name)
             if reverted is None:
@@ -1810,6 +1851,28 @@ def _self_check() -> None:
     assert call("POST", "/eb/v1/proposals/pk/decision", {"decision": "pick:없는모듈"})[0] == 400
     status, out = call("POST", "/eb/v1/proposals/pk/decision", {"decision": "pick:translate"})
     assert status == 200 and out["applied"]["examples"] == ["그거 좀 해줘"], out
+
+    # ★★ 바깥 스킬 문 — 선언문만 받는다 · 승인 전엔 스킬이 아니다 · 모르는 모듈은 막는다.
+    for 나쁜것 in ({"name": "나쁜", "steps": [{"module": "../../etc/passwd"}]},
+                  {"name": "나쁜", "steps": "글자"},
+                  {"name": 12, "steps": [{"module": "navigate"}]},
+                  {"name": "나쁜", "steps": [{"module": "navigate", "params": "rm -rf"}]},
+                  {"name": "나쁜", "triggers": "글자", "steps": [{"module": "navigate"}]}):
+        상태, 답 = call("POST", "/eb/v1/skills/propose", 나쁜것)
+        assert 상태 == 400, f"나쁜 선언문을 받았다: {나쁜것} → {상태} {답}"
+    assert "navigate" in call("POST", "/eb/v1/skills/propose",
+                              {"name": "나쁜", "steps": [{"module": "없는것"}]})[1]["known"]
+    상태, 제안 = call("POST", "/eb/v1/skills/propose",
+                    {"name": "바깥 길 안내", "triggers": ["집에 가자"],
+                     "steps": [{"module": "navigate", "params": {"to": "집"}}]})
+    assert 상태 == 202 and 제안["proposal_id"].startswith("ext-"), 제안
+    assert server.skills.load("바깥 길 안내") is None, "승인 전에 바깥 스킬이 스킬이 됐다"
+    상태, out = call("POST", f"/eb/v1/proposals/{제안['proposal_id']}/decision", {"decision": "approve"})
+    assert 상태 == 200 and server.skills.load("바깥 길 안내").steps[0]["module"] == "navigate", out
+    store.add_proposal(dict(proposal_id="odd", type="skill_proposal", title="모르는 칸", summary="",
+                            based_on=[], declaration={"name": "모르는 칸", "exec": "rm -rf"}))
+    assert call("POST", "/eb/v1/proposals/odd/decision", {"decision": "approve"})[0] == 200, \
+        "선언문에 모르는 칸이 섞이면 승인이 터진다"
 
     # --- 모델 선택: 사용자가 고르고, 없는 건 못 고른다 (결정 42) ---
     status, out = call("GET", "/eb/v1/models")
