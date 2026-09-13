@@ -72,6 +72,27 @@ class LogEvent:
     detail: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # ★★ **정해진 이름 밖의 값은 받지 않는다.** `Literal` 은 적어 두기만 할 뿐 막지 않아서
+        #   `outcome: "성공"` · `tier: "gpu"` 가 그대로 저장됐고, 분석은 `failure` 만 세므로 **학습 재료가 말없이 빠졌다.**
+        #   숫자 칸에 글자가 와도 그대로 들어갔다. 폰이 한 글자만 틀려도 이렇게 된다 — 문에서 400 으로 돌려준다.
+        from typing import get_args
+
+        for 칸, 틀 in (("phase", Phase), ("tier", Tier), ("outcome", Outcome)):
+            if getattr(self, 칸) not in get_args(틀):
+                raise ValueError(f"{칸} 은 {'·'.join(get_args(틀))} 중 하나다: {getattr(self, 칸)!r}")
+        for 칸 in ("seq", "retries", "clarify_count", "latency_ms", "tokens_in", "tokens_out"):
+            값 = getattr(self, 칸)
+            if (값 is not None or 칸 in ("seq", "retries", "clarify_count")) and (
+                    isinstance(값, bool) or not isinstance(값, int)):
+                raise ValueError(f"{칸} 은 정수다: {값!r}")
+        if isinstance(self.cost_krw, bool) or not isinstance(self.cost_krw, (int, float)):
+            raise ValueError(f"cost_krw 는 숫자다: {self.cost_krw!r}")
+        for 칸 in ("instruction_id", "ts", "module", "step", "failure_point"):
+            값 = getattr(self, 칸)
+            if 값 is not None and not isinstance(값, str):
+                raise ValueError(f"{칸} 은 글자다: {값!r}")
+        if not isinstance(self.detail, dict):
+            raise ValueError(f"detail 은 객체다: {self.detail!r}")
         # 실패인데 어디서 막혔는지 없으면 학습 재료가 못 된다(결정 17·24).
         if self.outcome == "failure" and not self.failure_point:
             raise ValueError("failure 이벤트에는 failure_point가 있어야 한다")
@@ -135,7 +156,21 @@ def _self_check() -> None:
     for kwargs in (
         dict(outcome="failure", failure_point=None),
         dict(outcome="success", failure_point="vision_query"),
+        # ★ 정해진 이름·꼴 밖의 값 — 전엔 그대로 저장돼 분석에서 말없이 빠졌다
+        dict(outcome="성공"),
+        dict(outcome="success", tier_="gpu"),
+        dict(outcome="success", latency_ms="820"),
+        dict(outcome="success", retries=True),
+        dict(outcome="success", detail=[]),
+        dict(outcome="success", module=5),
     ):
+        if "tier_" in kwargs:
+            kwargs = {**{k: v for k, v in kwargs.items() if k != "tier_"}}
+            try:
+                LogEvent(instruction_id="01J", seq=3, phase="module_run", tier="gpu", **kwargs)
+            except ValueError:
+                continue
+            raise AssertionError("tier 가 정해진 이름 밖인데 통과했다")
         try:
             LogEvent(
                 instruction_id="01J", seq=3, phase="module_run", tier="pc", **kwargs

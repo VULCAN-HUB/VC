@@ -1749,6 +1749,8 @@ def _self_check() -> None:
                  ("/eb/v1/remote/approve", {"session": ["가"], "nonce": "x"}),
                  ("/eb/v1/remote/deny", {"session": 5}),
                  ("/eb/v1/remote/close", {"session": ["가"]}),
+                 ("/eb/v1/log", {"instruction_id": "i", "seq": 1, "phase": "module_run",
+                                 "tier": "pc", "outcome": "성공"}),
                  ("/eb/v1/models/download", {"key": ["qwen"]}),
                  ("/eb/v1/models", {"role": 1, "name": ""}),
                  ("/v1/chat/completions", {"messages": [{"role": "user", "content": "안녕"}], "model": 5}),
