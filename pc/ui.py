@@ -2386,15 +2386,19 @@ class MainWindow(QWidget):
     def new_note(self) -> None:
         """빈 항목을 만들고 제목부터 치게 한다."""
         title, n = "새 항목", 2
-        while self.notes.read(title) is not None:
-            title, n = f"새 항목 {n}", n + 1
         # ※ 이 메서드는 장식(`_쓰기막히면알림`)을 못 씌운다 — 씌우면 창 검사가 강제 종료됐다(가르기로 찾음).
         #   그래서 여기서 직접 받는다.
-        try:
-            self.notes.write(Note(title=title, body="", kind="note"))
-        except WriteBlocked:
-            self.report("못 썼어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
-            return
+        # ★ 「없다」고 본 뒤 쓰기 전에 AI 가 같은 제목을 쓰면 빈 글로 덮는다 — 잠그고 다시 본다.
+        while True:
+            with self.notes._글잠금(title):
+                if self.notes.read(title) is None:
+                    try:
+                        self.notes.write(Note(title=title, body="", kind="note"))
+                    except WriteBlocked:
+                        self.report("못 썼어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
+                        return
+                    break
+            title, n = f"새 항목 {n}", n + 1
         self.refresh()
         self._fill_detail(self.notes.read(title))
         # ★ **새로 만든 글은 쓰려고 만든 것이다.** 읽기 모드로 열면 「고치기」를 한 번
@@ -2411,11 +2415,15 @@ class MainWindow(QWidget):
 
         가리키던 링크가 곧바로 이어진다 — 제목이 열쇠라서 만들기만 하면 붙는다.
         """
-        if self.notes.read(title) is not None:
+        # ★ 「없다」고 본 뒤 쓰기 전에 AI 가 같은 제목을 쓰면 빈 글로 덮는다 — 잠그고 다시 본다.
+        with self.notes._글잠금(title):
+            있음 = self.notes.read(title) is not None
+            if not 있음:
+                self._wrote_at = time.monotonic()
+                self.notes.write(Note(title=title, body="", kind="note"))
+        if 있음:
             self.show_note(title)
             return
-        self._wrote_at = time.monotonic()
-        self.notes.write(Note(title=title, body="", kind="note"))
         self.refresh()
         self._fill_detail(self.notes.read(title))
         self.detail_body.setFocus()
