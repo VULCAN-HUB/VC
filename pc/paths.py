@@ -147,6 +147,15 @@ def meaning_dir(고른것: str = "") -> Path:
     """
     root = models_dir()
     차례 = list(MEANING_ORDER)
+    # ★★ **이름을 안 넘기면 설정에 적힌 고른 것을 쓴다.** 전엔 서버만 고른 것을 읽고 창(`Indexer`)·
+    #   `--doctor` 는 기본(큰 것)을 썼다. 사람이 「딸려 온 것」을 고르면 **창(768)과 서버(384)가 같은
+    #   색인에서 서로의 벡터를 계속 지웠고**(폭이 다르면 통째로 버린다), `--doctor` 의 뜻 왕복도
+    #   실무 벡터를 지울 수 있었다. 부르는 쪽마다 맡기지 않고 여기 한 자리에서 읽는다.
+    if not 고른것:
+        try:
+            고른것 = str((load_config().get("models") or {}).get("meaning") or "")
+        except Exception:
+            고른것 = ""
     if 고른것:
         # 「딸려 온 것 (e5-small)」 처럼 꾸민 이름이면 뿌리를 가리킨다.
         차례.insert(0, "" if 고른것.startswith("딸려 온 것") else 고른것)
@@ -426,6 +435,13 @@ def _self_check() -> None:
             #   딸려 온 것도 있어야 「그쪽으로 되돌리기」를 잴 수 있다.
             (Path(tmp) / "model.onnx").write_bytes(b"x")
             (Path(tmp) / "tokenizer.json").write_bytes(b"x")
+            # ★★ **이름을 안 넘겨도 설정에 적힌 고른 것을 따른다** — 창·서버·진단이 같은 모델을 써야
+            #   서로의 벡터를 안 지운다.
+            (Path(tmp) / "eb_config.json").write_text(
+                '{"models": {"meaning": "딸려 온 것 (e5-small)"}}', encoding="utf-8")
+            assert meaning_dir() == Path(tmp), f"설정에서 고른 모델을 안 따른다: {meaning_dir()}"
+            (Path(tmp) / "eb_config.json").unlink()
+            assert meaning_dir() == big, "고른 것이 없으면 받은 큰 것이 먼저다"
             assert meaning_dir() == big, "받은 것이 있으면 여전히 그게 먼저다"
             assert meaning_dir("딸려 온 것 (e5-small)") == Path(tmp),                 "「딸려 온 것」 을 골랐는데 큰 것을 쓴다"
             assert meaning_dir("e5-base") == big, "고른 것을 안 쓴다"
