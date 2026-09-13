@@ -1734,7 +1734,13 @@ class Notes:
         AI가 같은 제목으로 다시 쓸 때마다 식별자와 만든 날짜가 새로 생기면, 20년 뒤에
         "이건 언제 처음 적은 거지"에 답할 수 없다.
         """
-        old = self.read_at(at) if at else self.read(note.title)
+        try:
+            old = self.read_at(at) if at else self.read(note.title)
+        except Vanished:
+            old = None
+        except OSError as e:
+            # 잠겨서 못 읽었다 — 신원(식별자·만든 날)도 지난 판도 못 챙기니 덮지 않는다(서버 507 · 화면 알림).
+            raise WriteBlocked(str(at or note.title)) from e
         if old is not None:
             note.id = note.id or old.id
             note.created = note.created or old.created
@@ -1749,15 +1755,26 @@ class Notes:
         if path.exists():
             try:
                 was = read_text(path)
-            except (Vanished, OSError):
+            except Vanished:
                 was = fresh    # 사라졌으면 남길 지난 판도 없다
+            except OSError as e:
+                # ★★ **못 읽었다고 「없다」로 치면 안 된다.** 딴 프로그램이 잡고 있어 못 읽은 것인데
+                #   예전엔 사라진 것과 같이 다뤄 **지난 판 없이 덮었다** — 사람이 옵시디언에서 고친 글이
+                #   흔적 없이 사라지는 길이다. 멈추고 알린다(서버 507 · 화면 알림).
+                raise WriteBlocked(str(path)) from e
             if was != fresh:
                 # ★★ **밖에서 온 글은 5분 규칙에 안 걸리게 한다.**
                 # 「치는 대로 저장」이라 판이 너무 늘지 않게 5분 안이면 지난 판을
                 # 안 만드는데, 그 사이에 **사람이 옵시디언에서 고친 판**이 들어오면
                 # 그것이 흔적 없이 사라진다. 되돌릴 수도, 사라진 줄 알 수도 없다.
                 # 우리가 쓴 지문과 다르면 남의 손이 닿은 것이므로 **반드시 남긴다.**
-                self.keep_history(path, was, always=self._남의손인가(path, was))
+                try:
+                    self.keep_history(path, was, always=self._남의손인가(path, was))
+                except WriteBlocked:
+                    raise
+                except OSError as e:
+                    # 판을 못 남기면 덮지 않는다. 날것의 OSError 가 새면 서버가 507 대신 500 을 준다.
+                    raise WriteBlocked(str(path)) from e
         _지문 = _해시(fresh)
         _atomic_write(path, fresh)
         self._index_file(path)
@@ -3327,6 +3344,31 @@ def _self_check() -> None:
             n.keep_history = _옛남기기
         assert n.read("판 못 남길 글") is not None and "살아야 할 몸" in n.read("판 못 남길 글").body, \
             "판을 못 남겼는데 글이 사라지거나 덮였다"
+
+        # ★★ 덮어쓰기도 같다 — 지금 글을 못 읽거나(잠김) 판을 못 남기면 덮지 않는다.
+        _덮을길 = n.path_of("판 못 남길 글")
+        _원글 = read_text(_덮을길)
+        _옛읽기 = globals()["read_text"]
+
+        def _잠긴읽기(p, _옛=_옛읽기):
+            if Path(p) == _덮을길:
+                raise PermissionError("딴 프로그램이 잡고 있다")
+            return _옛(p)
+        for _막기 in ("읽기", "남기기"):
+            if _막기 == "읽기":
+                globals()["read_text"] = _잠긴읽기
+            else:
+                n.keep_history = _못남김
+            try:
+                n.write(Note(title="판 못 남길 글", body=f"덮으려는 몸 {_막기}"))
+            except WriteBlocked:
+                pass
+            else:
+                raise AssertionError(f"{_막기}가 막혔는데 그냥 덮었다")
+            finally:
+                globals()["read_text"] = _옛읽기
+                n.keep_history = _옛남기기
+            assert read_text(_덮을길) == _원글, f"{_막기}가 막혔는데 글이 바뀌었다"
 
         # 오늘 일지 만들기·지난 판 되돌리기도 읽고-쓰기라 글 잠금을 기다려야 한다.
         n.keep_history(n.path_of("가리키는 글"), read_text(n.path_of("가리키는 글")), always=True)
