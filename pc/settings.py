@@ -402,10 +402,72 @@ def open_dialog(win, notes: Notes):
         칸.setPlaceholderText("연결됨 — 바꾸려면 새 토큰" if 이름 in 이어진 else "토큰을 붙여 넣는다")
         창.연결칸[이름] = 칸
         줄(연결틀, 보일 + ("  · 연결됨" if 이름 in 이어진 else ""), 칸)
-    구글 = QLabel("Google 계정 — 로그인 창 방식(OAuth)이라 앱 등록이 필요하다. 오너 결정을 기다린다.")
-    구글.setObjectName("note")
-    구글.setWordWrap(True)
-    연결틀.addWidget(구글)
+    # Google — 설치형 OAuth(오너 결정 8). 오너가 Google Cloud 에 「데스크톱 앱」 클라이언트를 등록해 ID·비밀을 넣고 로그인한다.
+    구글풀이 = QLabel("Google (드라이브·캘린더 읽기 전용) — Google Cloud 콘솔에서 「데스크톱 앱」 OAuth 클라이언트를 만들어 "
+                    "ID·비밀을 넣고 로그인한다. 받은 토큰은 보관소에만 들어간다."
+                    + ("  · 연결됨" if "google" in 이어진 else ""))
+    구글풀이.setObjectName("ask_label")
+    구글풀이.setWordWrap(True)
+    연결틀.addWidget(구글풀이)
+    창.구글아이디 = QLineEdit()
+    창.구글아이디.setObjectName("field")
+    창.구글아이디.setPlaceholderText("클라이언트 ID (…apps.googleusercontent.com)")
+    창.구글비밀 = QLineEdit()
+    창.구글비밀.setObjectName("field")
+    창.구글비밀.setEchoMode(QLineEdit.Password)
+    창.구글비밀.setPlaceholderText("클라이언트 비밀")
+    연결틀.addWidget(창.구글아이디)
+    연결틀.addWidget(창.구글비밀)
+    구글단추 = QPushButton("구글 로그인")
+    구글단추.setObjectName("primary")
+
+    def 구글로그인() -> None:
+        import threading
+        import webbrowser
+
+        from PyQt5.QtCore import QTimer
+
+        import google_auth
+
+        결과: dict = {}
+
+        def 뒤() -> None:
+            try:
+                google_auth.login(창.구글아이디.text(), 창.구글비밀.text(), webbrowser.open)
+                결과["됨"] = True
+            except google_auth.GoogleAuthError as e:
+                결과["틀림"] = str(e)
+            except Exception as e:
+                결과["틀림"] = type(e).__name__
+
+        창.안내.setText("브라우저에서 구글 로그인을 마쳐 줘(3분 안)…")
+        구글단추.setEnabled(False)
+        threading.Thread(target=뒤, daemon=True).start()
+        시계 = QTimer(창)
+
+        def 보기() -> None:                          # 뒤 실은 창을 못 만진다 — 창 실에서 결과만 읽는다
+            if not 결과:
+                return
+            시계.stop()
+            구글단추.setEnabled(True)
+            창.구글비밀.clear()
+            if 결과.get("됨"):
+                cfg = paths.load_config()
+                paths.save_config({**cfg, "connections": sorted({*(cfg.get("connections") or []), "google"})})
+                창.안내.setText("구글을 연결했어(읽기 전용). AI 에게는 이름만 알린다.")
+            else:
+                창.안내.setText(f"구글 연결을 못 했어 — {결과['틀림']}")
+
+        시계.timeout.connect(보기)
+        시계.start(400)
+        창._구글시계 = 시계
+
+    구글단추.clicked.connect(구글로그인)
+    창.구글단추 = 구글단추
+    구글줄 = QHBoxLayout()
+    구글줄.addStretch(1)
+    구글줄.addWidget(구글단추)
+    연결틀.addLayout(구글줄)
     연결틀.addStretch(1)
 
     # ── 내 정보 갈래들
@@ -680,6 +742,28 @@ def _self_check() -> None:
             assert ("VC와 나", "VC가 나를 부를 호칭") not in guesses(_남4), "오너가 확인했는데 짐작이 남는다"
             assert "모르면 모른다고" in n.read(PROFILE_TITLE).body, "저장하니 지침이 사라졌다"
             짐작창.deleteLater()
+
+            # ★ 구글 로그인 단추 — 뒤 실에서 로그인하고 창은 타이머로 결과를 받아 연결 이름을 적는다(진짜 구글은 안 부른다)
+            import time as _t
+
+            import google_auth
+
+            _옛로그인 = google_auth.login
+            google_auth.login = lambda *a, **k: None
+            try:
+                구글창 = open_dialog(win, n)
+                구글창.구글아이디.setText("id.apps.googleusercontent.com")
+                구글창.구글비밀.setText("비밀")
+                구글창.구글단추.click()
+                끝 = _t.monotonic() + 5
+                while "google" not in (paths.load_config().get("connections") or []) and _t.monotonic() < 끝:
+                    app.processEvents()
+                    _t.sleep(0.05)
+                assert "google" in paths.load_config().get("connections", []), "구글 로그인 뒤 연결 이름을 안 적었다"
+                assert "구글을 연결했어" in 구글창.안내.text() and not 구글창.구글비밀.text(), 구글창.안내.text()
+                구글창.deleteLater()
+            finally:
+                google_auth.login = _옛로그인
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"

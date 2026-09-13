@@ -32,6 +32,13 @@ ALLOWED: dict[str, dict[str, Any]] = {
                 r"^/search/(repositories|issues|code)$"),
         "post": (),
     },
+    # 오너 결정 8: 설치형 OAuth(google_auth.py) — 읽기 전용 범위, 접근 토큰은 새로고침 토큰으로 그때그때 받는다
+    "google": {
+        "base": "https://www.googleapis.com",
+        "get": (r"^/drive/v3/files$", r"^/drive/v3/files/[A-Za-z0-9_-]+$",
+                r"^/calendar/v3/users/me/calendarList$", r"^/calendar/v3/calendars/[^/?#]+/events$"),
+        "post": (),
+    },
     "notion": {
         "base": "https://api.notion.com/v1",
         "get": (r"^/pages/[A-Za-z0-9-]+$", r"^/blocks/[A-Za-z0-9-]+/children$", r"^/databases/[A-Za-z0-9-]+$"),
@@ -50,6 +57,8 @@ def _머리(name: str, token: str) -> dict[str, str]:
     if name == "github":
         return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                 "User-Agent": "VC", "X-GitHub-Api-Version": "2022-11-28"}
+    if name == "google":
+        return {"Authorization": f"Bearer {token}"}
     return {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28",
             "Content-Type": "application/json"}
 
@@ -67,7 +76,15 @@ def fetch(name: str, path: str, query: dict[str, str] | None = None, body: dict 
     길목록 = 규칙["post"] if body is not None else 규칙["get"]
     if not any(re.match(p, path) for p in 길목록):
         raise ConnectError(400, "읽기용으로 허용한 길이 아니다")
-    token = keystore.get(f"connect:{name}") if keystore.available() else None
+    if name == "google":
+        import google_auth
+
+        try:
+            token = google_auth.access_token()
+        except google_auth.GoogleAuthError as e:
+            raise ConnectError(502, str(e)) from e
+    else:
+        token = keystore.get(f"connect:{name}") if keystore.available() else None
     if not token:
         raise ConnectError(404, f"{name} 은 연결 안 됐다 — 설정 창 「외부 연결」에서 토큰을 넣는다")
     url = 규칙["base"] + urllib.parse.quote(path, safe="/-_.~")
@@ -138,6 +155,29 @@ def _self_check() -> None:
         보관["connect:notion"] = "secret_노션"
         fetch("notion", "/search", body={"query": "회의"}, opener=가짜열기)
         assert 받은[-1].get_method() == "POST" and 받은[-1].full_url.endswith("/v1/search")
+        # google 은 보관소의 새로고침 토큰으로 접근 토큰을 그때그때 받는다 — 연결 안 됐으면 404, 됐으면 그 토큰으로
+        import google_auth
+
+        옛접근 = google_auth.access_token
+        try:
+            google_auth.access_token = lambda: None
+            try:
+                fetch("google", "/drive/v3/files", opener=가짜열기)
+            except ConnectError as e:
+                assert e.code == 404, e.code
+            else:
+                raise AssertionError("연결 안 한 구글을 불렀다")
+            google_auth.access_token = lambda: "ya29.접근"
+            fetch("google", "/drive/v3/files", {"pageSize": "5"}, opener=가짜열기)
+            assert 받은[-1].get_header("Authorization") == "Bearer ya29.접근" and "pageSize=5" in 받은[-1].full_url
+            try:
+                fetch("google", "/drive/v3/files/abc/permissions", opener=가짜열기)
+            except ConnectError as e:
+                assert e.code == 400
+            else:
+                raise AssertionError("구글에서 허용 안 한 길을 불렀다")
+        finally:
+            google_auth.access_token = 옛접근
         긴글 = b'{"x": "' + b"a" * (MAX_CHARS + 10) + b'"}'
         답 = fetch("github", "/user/repos", opener=lambda req, timeout=0: 가짜답(긴글))
         assert 답["cut"] is True and len(답["text"]) == MAX_CHARS and 답["full_chars"] > MAX_CHARS, "긴 답을 안 자른다"

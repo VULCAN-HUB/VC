@@ -192,7 +192,8 @@ GET /eb/v1/connect/github?path=/repos/주인/저장소/issues&state=open
 
 연결한 계정에서 **읽기만** 한다. 허용한 길만 부른다 — GitHub: `/user` · `/user/repos` · `/repos/주인/저장소`(+ `issues`·`pulls`·
 `commits`·`readme`·`branches`·`contents/…`·`issues/번호`) · `/search/(repositories|issues|code)`. Notion 은 `pages/…` · `blocks/…/children` ·
-`databases/…`. 그 밖의 길은 `400`, 연결 안 됐으면 `404`, 원격 PC 는 `403`. 답이 2만 자를 넘으면 앞부분만 `text` 로 주고
+`databases/…`. Google(설정 창에서 로그인한 뒤)은 `/drive/v3/files` · `/drive/v3/files/아이디` ·
+`/calendar/v3/users/me/calendarList` · `/calendar/v3/calendars/아이디/events` — 읽기 전용 범위로만 로그인한다. 그 밖의 길은 `400`, 연결 안 됐으면 `404`, 원격 PC 는 `403`. 답이 2만 자를 넘으면 앞부분만 `text` 로 주고
 `cut: true` · `full_chars` 로 말한다. 토큰은 답·오류 어디에도 안 실린다.
 
 같은 글에 동시에 쓰면 서버가 **글마다 줄을 세운다** — 덧붙이기끼리 줄이 안 사라지고, `replace` 의
