@@ -1419,6 +1419,11 @@ def run() -> None:
     finally:
         _os6.chmod(_잠긴, _stat6.S_IWRITE)
 
+    # ★ 메뉴 신호는 `checked` 를 덧붙여 부른다 — 장식 씌운 슬롯이 그걸 받아도 안 터져야 한다.
+    win.clear_detail()
+    win.drop_note(False)            # 연 글이 없으면 조용히 돌아선다(TypeError 가 나면 안 된다)
+    win.rename_note()
+
     # ★★ **묶은 단축키는 다 알려야 한다.** 열네 개를 묶어 놓고 사람이 알 길이 없었다.
     #   표 하나를 묶기와 도움말이 같이 읽는다 — 설명이 빈 키가 생기면 여기서 터진다.
     도움글 = win.단축키글()

@@ -184,8 +184,14 @@ def _쓰기막히면알림(돌려줄=None):
       창이 통째로 강제 종료됐다(한글 `속` 이었을 때 재 봤다).
     """
     def wrap(fn):
+        # ★ 단추·메뉴 신호는 `checked` 같은 인자를 덧붙여 부른다. 원래 함수가 안 받는 인자는 **떼고** 넘긴다
+        #   — 안 그러면 「지우기」 메뉴를 누를 때 TypeError 로 아무 일도 안 일어난다.
+        받는수 = None if fn.__code__.co_flags & 0x04 else fn.__code__.co_argcount - 1
+
         @functools.wraps(fn)
         def guarded(self, *a, **k):
+            if 받는수 is not None:
+                a = a[:받는수]
             try:
                 return fn(self, *a, **k)
             except WriteBlocked:
