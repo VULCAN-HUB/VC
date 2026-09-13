@@ -1032,6 +1032,35 @@ class Notes:
             except OSError:
                 pass
         self.index_path = index      # 딴 실이 제 연결을 열 때 쓴다
+        # ★★ **색인이 깨져 있으면 옆에 치우고 새로 만든다.** 색인은 `.md` 에서 언제든 다시 만드는
+        #   파생물인데(저장소 규칙 4조), 전원이 나가 파일이 깨지면 `DatabaseError` 로 **프로그램이
+        #   아예 안 켜졌다**(재 봤다: 앞머리 깨짐·반쯤 잘림 둘 다). 잠김 같은 일시 오류는 깨짐이 아니다.
+        try:
+            self._색인열기(index)
+        except sqlite3.OperationalError:
+            raise
+        except sqlite3.DatabaseError as 깨짐:
+            self._깨진색인치우기(index, 깨짐)
+            self._색인열기(index)
+        try:
+            self.conn.executescript(SEARCH_SCHEMA)
+            self.fts = True
+        except sqlite3.OperationalError:
+            # FTS5 없이 지은 파이썬. 느린 옛 길로 돌아가되 뜨기는 한다.
+            self.fts = False
+        self.conn.commit()
+        self._heal_search()
+        self._heal_vectors()
+        self.write_rules()
+        if index_now:
+            self.reindex()
+
+    def _is_history(self, path: Path) -> bool:
+        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다."""
+        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts
+
+    def _색인열기(self, index) -> None:
+        """색인 파일을 열고 표 모양을 맞춘다. 깨졌으면 `sqlite3.DatabaseError` 가 난다."""
         self.conn = sqlite3.connect(index, check_same_thread=False)
         # WAL: 쓰는 놈 하나와 읽는 놈 여럿이 동시에 돈다. 기본(delete)에서는 쓰는 동안
         # 읽기가 통째로 막혀 "database is locked"가 난다 — AI와 사람이 같이 쓰는 구조다.
@@ -1071,22 +1100,27 @@ class Notes:
             있는칸 = {r[1] for r in self.conn.execute(f"PRAGMA table_info({표})")}
             if 있는칸 and 칸 not in 있는칸:
                 self.conn.execute(f"ALTER TABLE {표} ADD COLUMN {칸} {꼴}")
-        try:
-            self.conn.executescript(SEARCH_SCHEMA)
-            self.fts = True
-        except sqlite3.OperationalError:
-            # FTS5 없이 지은 파이썬. 느린 옛 길로 돌아가되 뜨기는 한다.
-            self.fts = False
-        self.conn.commit()
-        self._heal_search()
-        self._heal_vectors()
-        self.write_rules()
-        if index_now:
-            self.reindex()
 
-    def _is_history(self, path: Path) -> bool:
-        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다."""
-        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts
+    def _깨진색인치우기(self, index, 깨짐) -> None:
+        """깨진 색인을 **지우지 않고 옆에 치운다**(무슨 일이 났는지 나중에 볼 수 있게)."""
+        conn = getattr(self, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()           # 연 채로는 윈도우가 파일을 못 옮긴다
+            except Exception:
+                pass
+        if str(index) == ":memory:":
+            return
+        때 = time.strftime("%Y%m%d-%H%M%S")
+        for 곁 in ("", "-wal", "-shm"):
+            자리 = Path(str(index) + 곁)
+            if 자리.exists():
+                try:
+                    자리.replace(Path(f"{index}.깨짐-{때}{곁}"))
+                except OSError:
+                    pass
+        print(f"[색인] 깨져서 옆에 치우고 새로 만든다: {Path(str(index)).name} "
+              f"({type(깨짐).__name__}: {깨짐})")
 
     def notes_files(self):
         """항목 파일만. 지난 판은 항목이 아니다 — 세면 항목 수가 스무 배가 된다.
@@ -2952,6 +2986,24 @@ def _self_check() -> None:
 
                 _sh.rmtree(_앞 + str(n.root) + _B + "긴폴더이름" * 4 + "0", ignore_errors=True)
                 n.reindex()
+
+        # ★★ **깨진 색인에서도 켜져야 한다.** 전원이 나가 색인이 깨지면 프로그램이 안 켜졌다.
+        import tempfile as _tf2
+
+        with _tf2.TemporaryDirectory() as _깨진곳:
+            _뿌리 = Path(_깨진곳) / "notes"
+            _색 = Path(_깨진곳) / "색인.db"
+            _m = Notes(_뿌리, str(_색))
+            _m.write(Note(title="살아남을 글", body="몸 글자"))
+            _m.conn.close()
+            _원 = _색.read_bytes()
+            _색.write_bytes(b"garbage!" * 20 + _원[160:])
+            for _곁 in ("-wal", "-shm"):
+                Path(str(_색) + _곁).unlink(missing_ok=True)
+            _m2 = Notes(_뿌리, str(_색))
+            assert _m2.read("살아남을 글") is not None, "깨진 색인을 다시 만들지 못했다"
+            assert list(Path(_깨진곳).glob("색인.db.깨짐-*")), "깨진 색인을 옆에 안 치웠다(지웠거나 덮었다)"
+            _m2.conn.close()
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
