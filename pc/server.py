@@ -185,6 +185,87 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    def _memory_write(self, title: str, text: str, mode: str, body: dict) -> None:
+        """`/eb/v1/memory` 쓰기 몸. 부르는 쪽이 글 잠금을 쥔 채 부른다."""
+        old = self.server.notes.read(title)
+
+        # **사람이 고쳐 놓은 것을 관찰이 덮으면 안 된다.** 틀린 걸 바로잡았는데
+        # 다음 기록이 되돌려 놓으면 사람은 이 물건을 못 믿는다(결정 22와 같은 결).
+        #
+        # ★★ **`edited_by` 만 보면 못 막는다.** 그 표시는 **화면에서 고칠 때만** 붙는다 —
+        #   옵시디언·메모장으로 고친 것에는 안 붙는데, 이 물건은 **옵시디언 대용**이라
+        #   밖에서 고치는 것이 주된 길이다. 실제로 재 보니 밖에서 보탠 줄을 AI 가
+        #   `force` 없이 통째로 지웠다(201 이 떨어졌다).
+        #   ※ `notes._남의손인가` 가 지문으로 그것을 가려내긴 한다 — 그래서 **지난 판은
+        #     반드시 남는다.** 다만 그건 「덮은 뒤에 되살릴 수 있다」이지 「안 덮는다」가 아니다.
+        #   → **덮어쓰기는 늘 `force` 를 받는다.** 되돌리기 어려운 일은 명시적으로 한다.
+        #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
+        # ★★ **`force` 는 진짜 참(`true`)일 때만 뚫는다.** `bool()` 로 읽으니 글자 `"false"`·`"0"` 도
+        #   참이 되어 **사람이 고친 글을 덮었다** — 덮어쓰기 막이가 글자 한 줄에 무너졌다.
+        if mode == "replace" and old is not None and body.get("force") is not True:
+            return self._send(409, {
+                "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
+                "title": title, "chars": len(old.body),
+                "edited_by": old.edited_by or "(모름 — 밖에서 고쳤을 수 있다)",
+                "hint": "덧붙이려면 mode 를 빼라(기본 append). 정말 덮으려면 force: true"})
+
+        # ★★ **없는 글에 처음 덧붙이는 것도 `append` 로 보낸다.** 전에는 「없으면 새로 쓰기」로 갈라져
+        #   잠금 밖이었다 — 두 AI 가 같은 새 글에 동시에 쌓으면 서로 덮어 줄이 사라졌다(재 봤다).
+        if mode == "append":
+            path = self.server.notes.append(title, text,
+                                            body.get("kind", old.kind if old else "note"),
+                                            pinned=body.get("pinned") is True)
+        else:
+            note = notes.Note(
+                title=title,
+                body=text,
+                kind=body.get("kind", old.kind if old else "note"),
+                pinned=body.get("pinned") is True or bool(old and old.pinned),   # "false" 는 거짓
+                aliases=old.aliases if old else [],
+            )
+            path = self.server.notes.write(note)
+        # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
+        #   못 찾아 **다시 검색한다** — 그게 800자다. 뒤에서 도는 실은 30초마다라 그
+        #   사이가 빈다.
+        #   ★ **`embed_some(1)` 로는 안 된다** — 그 차례의 첫 키가 `used_at DESC` 라
+        #   검색으로 읽힌 글들이 앞선다. 빈 창고에서는 됐는데(읽힌 글이 없었다) 실무
+        #   창고에서 검색을 스무 번 돌린 뒤에는 **엉뚱한 글이 채워졌다.**
+        #   `embed_one` 으로 **이 글만** 콕 집는다. 10ms 쯤이라 쓰기 길에 얹어도 된다.
+        #   ※ 임베더가 아직 없으면(모델 없음·아직 안 올림) 아무 일도 안 한다.
+        try:
+            self.server.notes.embed_one(path)
+            self.server.notes._vec_cache = None
+        except Exception:
+            pass        # 벡터를 못 만들어도 저장은 끝났다
+        답 = {"title": title, "path": str(path), "mode": mode}
+        # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
+        #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
+        if (저장제목 := notes.제목맞춤(title)) != title:
+            답["saved_as"] = 저장제목
+        # ★ **쓴 자리에서 뜻이 가까운 글을 알려 준다**(제목 셋, 60자쯤). 잇기는 **선택**이다 —
+        #   저장소 규칙 1조가 「[[링크]] 를 일부러 넣을 필요 없다, 뜻 검색·비슷한 것 줄이 대신한다」
+        #   이고 실제로 뜻 검색은 안 이은 글도 찾는다(20물음 13). 처음엔 「안 이으면 못 찾는다」고
+        #   적었는데 **틀린 말**이었다. 사람·AI 가 이어짐을 **말하고 싶을 때** 쓸 재료만 준다.
+        try:
+            가까운 = [t for t, _ in self.server.notes.semantic(text[:600], k=4)
+                    if t != title][:3]
+            if 가까운:
+                답["link_to"] = 가까운
+                답["hint"] = "뜻이 가까운 글이다. 이어짐을 적고 싶을 때만 [[제목]] — 안 이어도 뜻 검색이 찾는다"
+        except Exception:
+            pass        # 이을 곳을 못 찾아도 저장은 끝났다
+        # ★★ **force 로 덮었으면 되돌릴 자리를 알려 준다.** 지난 판은 남지만
+        #   AI 가 그것을 볼 길이 없었다(화면에서만 된다) — 안전망이 반쪽이었다.
+        #   덮은 그 자리에서 「되돌리려면 여기」를 주면 AI 가 스스로 고칠 수 있다.
+        if mode == "replace" and old is not None:
+            지난판 = self.server.notes.history(title)
+            if 지난판:
+                언제, 파일 = 지난판[0]
+                답["undo"] = {"when": 언제, "path": str(파일),
+                              "chars": len(old.body),
+                              "how": "그 파일의 몸을 읽어 mode=replace · force 로 다시 쓴다"}
+        return self._send(201, 답)
+
     def _send(self, code: int, payload: Any = None) -> None:
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
@@ -709,84 +790,10 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode", "append")
             if mode not in ("append", "replace"):
                 return self._send(400, {"error": "mode must be append or replace"})
-            old = self.server.notes.read(title)
-
-            # **사람이 고쳐 놓은 것을 관찰이 덮으면 안 된다.** 틀린 걸 바로잡았는데
-            # 다음 기록이 되돌려 놓으면 사람은 이 물건을 못 믿는다(결정 22와 같은 결).
-            #
-            # ★★ **`edited_by` 만 보면 못 막는다.** 그 표시는 **화면에서 고칠 때만** 붙는다 —
-            #   옵시디언·메모장으로 고친 것에는 안 붙는데, 이 물건은 **옵시디언 대용**이라
-            #   밖에서 고치는 것이 주된 길이다. 실제로 재 보니 밖에서 보탠 줄을 AI 가
-            #   `force` 없이 통째로 지웠다(201 이 떨어졌다).
-            #   ※ `notes._남의손인가` 가 지문으로 그것을 가려내긴 한다 — 그래서 **지난 판은
-            #     반드시 남는다.** 다만 그건 「덮은 뒤에 되살릴 수 있다」이지 「안 덮는다」가 아니다.
-            #   → **덮어쓰기는 늘 `force` 를 받는다.** 되돌리기 어려운 일은 명시적으로 한다.
-            #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
-            # ★★ **`force` 는 진짜 참(`true`)일 때만 뚫는다.** `bool()` 로 읽으니 글자 `"false"`·`"0"` 도
-            #   참이 되어 **사람이 고친 글을 덮었다** — 덮어쓰기 막이가 글자 한 줄에 무너졌다.
-            if mode == "replace" and old is not None and body.get("force") is not True:
-                return self._send(409, {
-                    "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
-                    "title": title, "chars": len(old.body),
-                    "edited_by": old.edited_by or "(모름 — 밖에서 고쳤을 수 있다)",
-                    "hint": "덧붙이려면 mode 를 빼라(기본 append). 정말 덮으려면 force: true"})
-
-            # ★★ **없는 글에 처음 덧붙이는 것도 `append` 로 보낸다.** 전에는 「없으면 새로 쓰기」로 갈라져
-            #   잠금 밖이었다 — 두 AI 가 같은 새 글에 동시에 쌓으면 서로 덮어 줄이 사라졌다(재 봤다).
-            if mode == "append":
-                path = self.server.notes.append(title, text,
-                                                body.get("kind", old.kind if old else "note"),
-                                                pinned=body.get("pinned") is True)
-            else:
-                note = notes.Note(
-                    title=title,
-                    body=text,
-                    kind=body.get("kind", old.kind if old else "note"),
-                    pinned=body.get("pinned") is True or bool(old and old.pinned),   # "false" 는 거짓
-                    aliases=old.aliases if old else [],
-                )
-                path = self.server.notes.write(note)
-            # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
-            #   못 찾아 **다시 검색한다** — 그게 800자다. 뒤에서 도는 실은 30초마다라 그
-            #   사이가 빈다.
-            #   ★ **`embed_some(1)` 로는 안 된다** — 그 차례의 첫 키가 `used_at DESC` 라
-            #   검색으로 읽힌 글들이 앞선다. 빈 창고에서는 됐는데(읽힌 글이 없었다) 실무
-            #   창고에서 검색을 스무 번 돌린 뒤에는 **엉뚱한 글이 채워졌다.**
-            #   `embed_one` 으로 **이 글만** 콕 집는다. 10ms 쯤이라 쓰기 길에 얹어도 된다.
-            #   ※ 임베더가 아직 없으면(모델 없음·아직 안 올림) 아무 일도 안 한다.
-            try:
-                self.server.notes.embed_one(path)
-                self.server.notes._vec_cache = None
-            except Exception:
-                pass        # 벡터를 못 만들어도 저장은 끝났다
-            답 = {"title": title, "path": str(path), "mode": mode}
-            # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
-            #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
-            if (저장제목 := notes.제목맞춤(title)) != title:
-                답["saved_as"] = 저장제목
-            # ★ **쓴 자리에서 뜻이 가까운 글을 알려 준다**(제목 셋, 60자쯤). 잇기는 **선택**이다 —
-            #   저장소 규칙 1조가 「[[링크]] 를 일부러 넣을 필요 없다, 뜻 검색·비슷한 것 줄이 대신한다」
-            #   이고 실제로 뜻 검색은 안 이은 글도 찾는다(20물음 13). 처음엔 「안 이으면 못 찾는다」고
-            #   적었는데 **틀린 말**이었다. 사람·AI 가 이어짐을 **말하고 싶을 때** 쓸 재료만 준다.
-            try:
-                가까운 = [t for t, _ in self.server.notes.semantic(text[:600], k=4)
-                        if t != title][:3]
-                if 가까운:
-                    답["link_to"] = 가까운
-                    답["hint"] = "뜻이 가까운 글이다. 이어짐을 적고 싶을 때만 [[제목]] — 안 이어도 뜻 검색이 찾는다"
-            except Exception:
-                pass        # 이을 곳을 못 찾아도 저장은 끝났다
-            # ★★ **force 로 덮었으면 되돌릴 자리를 알려 준다.** 지난 판은 남지만
-            #   AI 가 그것을 볼 길이 없었다(화면에서만 된다) — 안전망이 반쪽이었다.
-            #   덮은 그 자리에서 「되돌리려면 여기」를 주면 AI 가 스스로 고칠 수 있다.
-            if mode == "replace" and old is not None:
-                지난판 = self.server.notes.history(title)
-                if 지난판:
-                    언제, 파일 = 지난판[0]
-                    답["undo"] = {"when": 언제, "path": str(파일),
-                                  "chars": len(old.body),
-                                  "how": "그 파일의 몸을 읽어 mode=replace · force 로 다시 쓴다"}
-            return self._send(201, 답)
+            # ★★ **읽고-막고-쓰기를 한 잠금 안에서.** 밖이면 없던 글을 두 AI 가 동시에 덮거나,
+            #   읽은 뒤 남이 덧붙인 줄을 `force` 없이 통째로 지웠다(막이가 본 `old` 가 낡았다).
+            with self.server.notes._글잠금(title):
+                return self._memory_write(title, text, mode, body)
 
         # ★★ **AI 가 제가 잘못 쓴 글을 못 지우고, 제목도 못 고쳤다.** 화면에서는 둘 다 되는데
         #   문이 없었다 — 옵시디언에서는 당연한 일이고, 창고가 AI 의 바깥 기억이라면
@@ -1608,6 +1615,17 @@ def _self_check() -> None:
         assert 상태 == 409, f"force={가짜참!r} 로 덮어쓰기 막이가 뚫렸다: {상태}"
     assert call("POST", "/eb/v1/memory", {"title": "고정 시험", "text": "몸", "pinned": "false"})[0] == 201
     assert not note_store.read("고정 시험").pinned, '"false" 글자로 고정됐다'
+    # ★★ 덮어쓰기 막이는 잠금 안에서 본다 — 읽은 뒤 남이 만든·덧붙인 글을 force 없이 덮으면 안 된다.
+    _경주: list = []
+    with note_store._글잠금("경주 시험"):
+        _실 = threading.Thread(target=lambda: _경주.append(call(
+            "POST", "/eb/v1/memory", {"title": "경주 시험", "text": "통째로", "mode": "replace"})))
+        _실.start()
+        time.sleep(0.5)
+        note_store.append("경주 시험", "사람이 먼저 적은 줄")
+    _실.join()
+    assert _경주 and _경주[0][0] == 409, f"읽은 뒤 생긴 글을 force 없이 덮었다: {_경주}"
+    assert "사람이 먼저" in note_store.read("경주 시험").body
 
     # ★ **글자가 아닌 값에는 400 과 까닭을 준다**(전엔 500 — 문은 안 열렸지만 왜 안 되는지 몰랐다).
     for 길, 몸 in (("/eb/v1/ask", {"text": 123}),

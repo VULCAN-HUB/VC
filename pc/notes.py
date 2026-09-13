@@ -736,6 +736,9 @@ def _해시(글: str) -> str:
     return hashlib.sha256(글.encode("utf-8", "replace")).hexdigest()[:32]
 
 
+_잡은글잠금 = threading.local()
+
+
 class _덧붙이기잠금:
     """읽고 → 붙이고 → 쓰는 동안 **한 프로그램 안(실)과 프로그램 사이(창·서버)를 같이** 잠근다.
 
@@ -751,9 +754,17 @@ class _덧붙이기잠금:
         self.파일 = 자리폴더 / f"{이름}.lock"
         self.실잠금 = _lock_for(self.파일)
         self.손잡이 = None
+        self.겹침 = False
 
     def __enter__(self):
+        # ★ 같은 실이 이미 쥐고 있으면 그냥 지나간다. 읽고-고치고-쓰기를 감싼 채 `append` 를 부르면
+        #   실잠금에서 영영 멈추거나(Lock 은 겹쳐 못 잡는다) 파일 잠금에서 15초를 헛돈다.
+        잡은 = _잡은글잠금.__dict__.setdefault("파일", set())
+        if self.파일 in 잡은:
+            self.겹침 = True
+            return self
         self.실잠금.acquire()
+        잡은.add(self.파일)
         try:
             self.손잡이 = open(self.파일, "a+b")
             끝 = time.monotonic() + 15
@@ -778,6 +789,8 @@ class _덧붙이기잠금:
         return self
 
     def __exit__(self, *_):
+        if self.겹침:
+            return
         try:
             if self.손잡이 is not None:
                 try:
@@ -794,6 +807,7 @@ class _덧붙이기잠금:
                     pass
                 self.손잡이.close()
         finally:
+            _잡은글잠금.파일.discard(self.파일)
             self.실잠금.release()
 
 
@@ -3154,6 +3168,13 @@ def _self_check() -> None:
             assert f"[[{_이름[0]}]]" in read_text(n.path_of("가리키는 글")),                 "이름 바꾸기가 글 잠금을 안 기다리고 링크를 고친다(그 사이 덧붙인 줄이 사라진다)"
         _실.join()
         assert f"[[{_이름[1]}]]" in read_text(n.path_of("가리키는 글")), "잠금이 풀린 뒤 링크를 안 고쳤다"
+        # ★ 글 잠금을 쥔 채 같은 실이 덧붙여도 안 멈춘다(고정·덮어쓰기가 읽고-쓰기를 감싼다).
+        def _겹쳐잡기():
+            with n._글잠금("가리키는 글"):
+                n.append("가리키는 글", "겹쳐 잡은 줄")
+        _실 = _th7.Thread(target=_겹쳐잡기, daemon=True); _실.start(); _실.join(5)
+        assert not _실.is_alive(), "글 잠금을 쥔 채 덧붙이면 멈춘다(겹쳐 못 잡는다)"
+        assert "겹쳐 잡은 줄" in n.read("가리키는 글").body
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.

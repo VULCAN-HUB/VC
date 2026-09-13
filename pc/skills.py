@@ -70,6 +70,11 @@ class SkillStore:
         self.notes = notes
 
     def save(self, skill: Skill) -> Skill:
+        # 읽고-합치고-쓰기라 잠근다 — 동시에 배우면 한쪽이 배운 말이 사라진다.
+        with self.notes._글잠금(skill.name):
+            return self._save(skill)
+
+    def _save(self, skill: Skill) -> Skill:
         """새 버전을 저장하면서 직전 버전을 안에 남긴다. 되돌릴 곳이 있어야 한다(결정 18).
 
         ponytail: 한 단계만 되돌아간다. 전체 이력이 필요해지면 그때 버전별 항목으로 나눈다.
@@ -93,6 +98,10 @@ class SkillStore:
         return Skill.from_note(note) if note else None
 
     def revert(self, name: str) -> Skill | None:
+        with self.notes._글잠금(name):
+            return self._revert(name)
+
+    def _revert(self, name: str) -> Skill | None:
         cur = self.load(name)
         if not cur or not cur.previous:
             return None

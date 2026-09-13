@@ -1460,12 +1460,19 @@ class MainWindow(QWidget):
                 self.show_note(first)
                 return done(f"이름을 '{first}'로 되돌렸어.", [first])
             if kind == "덧붙이기":
-                note = self.notes.read(first)
-                if note is not None:
-                    note.body = second
-                    self._wrote_at = time.monotonic()
-                    self.notes.write(note, str(self.notes.path_of(first)))
-                    self.show_note(first)
+                # ★★ **붙인 그 글만 뺀다.** 옛 몸으로 되돌리면 그 사이 AI 가 덧붙인 줄까지 사라졌다.
+                with self.notes._글잠금(first):
+                    note = self.notes.read(first)
+                    if note is not None:
+                        붙인 = chr(10) * 2 + second.strip()
+                        if note.body.strip() == second.strip():
+                            note.body = ""
+                        elif 붙인 in note.body:
+                            i = note.body.rfind(붙인)
+                            note.body = note.body[:i] + note.body[i + len(붙인):]
+                        self._wrote_at = time.monotonic()
+                        self.notes.write(note, str(self.notes.path_of(first)))
+                        self.show_note(first)
                 return done(f"'{first}'에 덧붙인 걸 물렀어.", [first])
             return done("무를 게 없어.")
 
@@ -1551,8 +1558,7 @@ class MainWindow(QWidget):
             return done("곁에 띄웠어.", [hit or ROOT])
         if what == "덧붙이기":
             self._wrote_at = time.monotonic()
-            was = self.notes.read(hit)
-            self._undo = ("덧붙이기", hit, was.body if was else "")
+            self._undo = ("덧붙이기", hit, extra)   # 옛 몸이 아니라 붙인 글을 쥔다(무를 때 그것만 뺀다)
             self.notes.append(hit, extra)
             self.show_note(hit)
             # **어디에 무엇을 붙였는지 그대로 보여 준다.** 「학교에 안 갔다 적어줘」가
@@ -1573,15 +1579,19 @@ class MainWindow(QWidget):
         # ★ **고정은 결정 22 로 「늘 먼저」 나오는 힘인데 말로 시키는 길이 없었다** —
         #   화면 단추로만 됐다(옵시디언의 star 자리다). 되돌리기 쉬운 일이라 안 되묻는다.
         if what in ("고정", "고정풀기"):
-            쪽 = self.notes.read(hit) if hit else None
-            if 쪽 is None:
+            if not hit:
                 return False
             켬 = what == "고정"
-            if 쪽.pinned == 켬:
-                return done(f"'{hit}'{orders.tail(hit, '은/는')} 이미 "
-                            + ("고정돼 있어." if 켬 else "고정 안 돼 있어."))
-            쪽.pinned = 켬
-            self.notes.write(쪽)
+            # 읽고-고치고-쓰기라 잠근다 — 그 사이 AI 가 덧붙인 줄을 옛 몸으로 덮으면 안 된다.
+            with self.notes._글잠금(hit):
+                쪽 = self.notes.read(hit)
+                if 쪽 is None:
+                    return False
+                if 쪽.pinned == 켬:
+                    return done(f"'{hit}'{orders.tail(hit, '은/는')} 이미 "
+                                + ("고정돼 있어." if 켬 else "고정 안 돼 있어."))
+                쪽.pinned = 켬
+                self.notes.write(쪽)
             self.refresh()
             return done(f"'{hit}'{orders.tail(hit, '을/를')} "
                         + ("고정했어. 이제 늘 먼저 나와." if 켬 else "고정 풀었어."), [hit])

@@ -480,9 +480,11 @@ def run() -> None:
         first.ask("회의록에 물러날 줄 적어줘")
         first.settle()
         assert "물러날 줄" in fresh.read("회의록").body
+        fresh.append("회의록", "그 사이 AI 가 보탠 줄")   # 무르기 전에 남이 쌓는다
         first.ask("방금 것 취소해")
         first.settle()
         assert "물러날 줄" not in fresh.read("회의록").body, "덧붙인 걸 안 물렀다"
+        assert "그 사이 AI" in fresh.read("회의록").body, "무르면서 그 사이 남이 덧붙인 줄까지 지웠다"
 
         first.ask("무르고")            # 두 번 무르면 무를 게 없다
         first.settle()
