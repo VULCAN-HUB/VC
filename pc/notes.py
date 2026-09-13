@@ -736,6 +736,67 @@ def _해시(글: str) -> str:
     return hashlib.sha256(글.encode("utf-8", "replace")).hexdigest()[:32]
 
 
+class _덧붙이기잠금:
+    """읽고 → 붙이고 → 쓰는 동안 **한 프로그램 안(실)과 프로그램 사이(창·서버)를 같이** 잠근다.
+
+    ★★ 덧붙이기가 잠그지 않아, 같은 글에 동시에 덧붙이면 **80줄 중 40줄이 조용히 사라졌다**(재 봤다:
+    한 프로그램 두 실 40/80, 두 프로그램 41/80). 둘 다 옛 몸을 읽고 제 줄만 붙여 덮었기 때문이다.
+    AI(서버)와 사람(창)이 같은 기록에 쌓는 물건이라 흔한 일이다. 잠금 파일은 기록 폴더 곁(`vc-잠금`)에 둔다
+    — 글 폴더에 두면 옵시디언에 보인다.
+    """
+
+    def __init__(self, 자리폴더: Path, 열쇠: str) -> None:
+        자리폴더.mkdir(parents=True, exist_ok=True)
+        이름 = hashlib.sha256(열쇠.encode("utf-8")).hexdigest()[:24]
+        self.파일 = 자리폴더 / f"{이름}.lock"
+        self.실잠금 = _lock_for(self.파일)
+        self.손잡이 = None
+
+    def __enter__(self):
+        self.실잠금.acquire()
+        try:
+            self.손잡이 = open(self.파일, "a+b")
+            끝 = time.monotonic() + 15
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        self.손잡이.seek(0)
+                        msvcrt.locking(self.손잡이.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(self.손잡이.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return self
+                except OSError:
+                    if time.monotonic() > 끝:
+                        return self          # ponytail: 15초 넘게 못 잡으면 잠금 없이 간다(안 멈추는 쪽)
+                    time.sleep(0.01)
+        except OSError:
+            return self                      # 잠금 파일조차 못 열면 잠금 없이 간다
+        return self
+
+    def __exit__(self, *_):
+        try:
+            if self.손잡이 is not None:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        self.손잡이.seek(0)
+                        msvcrt.locking(self.손잡이.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(self.손잡이.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                self.손잡이.close()
+        finally:
+            self.실잠금.release()
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """옆에 다 쓴 뒤 자리를 바꾼다. 통째로 덮어쓰면 **읽는 쪽이 반쪽을 본다.**
 
@@ -1700,11 +1761,14 @@ class Notes:
         AI가 관찰을 쌓는 기본 방식이다. 덮어쓰기를 기본으로 하면 어제 적은 것이
         오늘 적은 것에 조용히 지워진다 — 기억이 아니라 최신값 저장소가 된다.
         """
-        old = self.read(title)
-        if old is None:
-            return self.write(Note(title=title, body=text, kind=kind))
-        old.body = (old.body.rstrip() + chr(10) * 2 + text.strip()).strip()
-        return self.write(old)
+        자리폴더 = (self.root.parent if str(self.index_path) == ":memory:"
+                  else Path(str(self.index_path)).parent) / "vc-잠금"
+        with _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title)):
+            old = self.read(title)
+            if old is None:
+                return self.write(Note(title=title, body=text, kind=kind))
+            old.body = (old.body.rstrip() + chr(10) * 2 + text.strip()).strip()
+            return self.write(old)
 
     def read_at(self, path: str | Path) -> Note | None:
         """**그 파일**을 읽는다. 제목이 겹칠 때 어느 쪽인지 우리가 고르지 않는다."""
@@ -3040,6 +3104,19 @@ def _self_check() -> None:
                     _os5.environ.pop("VC_DATA", None)
                 else:
                     _os5.environ["VC_DATA"] = _옛자리
+
+        # ★★ **같은 글에 동시에 덧붙여도 줄이 사라지면 안 된다** — 잠그기 전에는 80줄 중 40줄이 사라졌다.
+        import threading as _th7
+
+        n.write(Note(title="같이 쓰는 글", body="시작"))
+        def _쌓기(표):
+            for _i in range(30):
+                n.append("같이 쓰는 글", f"{표}-{_i}")
+        _실들 = [_th7.Thread(target=_쌓기, args=(x,)) for x in "AB"]
+        [t.start() for t in _실들]; [t.join() for t in _실들]
+        _몸 = n.read("같이 쓰는 글").body
+        _남 = sum(1 for x in "AB" for _i in range(30) if f"{x}-{_i}" in _몸)
+        assert _남 == 60, f"동시에 덧붙인 줄이 사라진다: 60줄 중 {_남}줄"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
