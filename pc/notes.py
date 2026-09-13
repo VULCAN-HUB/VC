@@ -1862,11 +1862,12 @@ class Notes:
             return False
         # 색인 네 곳을 다 지운다. 하나라도 남기면 **없는 항목이 태그·별칭 검색에
         # 유령으로 계속 잡힌다** — 이름을 바꾼 뒤 옛 이름이 그렇게 남았다.
-        self._drop_search(str(path))
-        self.conn.execute("DELETE FROM notes WHERE path = ?", (str(path),))
-        for table, col in (("links", "src"), ("tags", "title"), ("aliases", "title")):
-            self.conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (path.stem,))
-        self.conn.commit()
+        with self.conn._잠금:              # 여러 줄이라 한 덩어리로(`_index_file` 과 같은 잠금)
+            self._drop_search(str(path))
+            self.conn.execute("DELETE FROM notes WHERE path = ?", (str(path),))
+            for table, col in (("links", "src"), ("tags", "title"), ("aliases", "title")):
+                self.conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (path.stem,))
+            self.conn.commit()
         return True
 
     # --- 인덱스 ---------------------------------------------------------
@@ -1934,16 +1935,19 @@ class Notes:
         """
         gone = str(gone)
         stem = Path(gone).stem
-        self._drop_search(gone)
-        self.conn.execute("DELETE FROM notes WHERE path = ?", (gone,))
-        still = self.conn.execute(
-            "SELECT 1 FROM notes WHERE title = ? LIMIT 1", (stem,)).fetchone()
-        if still is None:
-            self.conn.execute("DELETE FROM links WHERE src = ?", (stem,))
-            self.conn.execute("DELETE FROM tags WHERE title = ?", (stem,))
-            self.conn.execute("DELETE FROM aliases WHERE title = ?", (stem,))
-        if commit:
-            self.conn.commit()
+        # ★ 「같은 제목이 남았나」 보고 딸린 것을 지우는 사이에 옮긴 글이 색인되면 **그 글의 링크를 지운다**
+        #   — 위에서 막으려던 바로 그 사고다. 한 덩어리로 쥔다(`_index_file` 과 같은 잠금).
+        with self.conn._잠금:
+            self._drop_search(gone)
+            self.conn.execute("DELETE FROM notes WHERE path = ?", (gone,))
+            still = self.conn.execute(
+                "SELECT 1 FROM notes WHERE title = ? LIMIT 1", (stem,)).fetchone()
+            if still is None:
+                self.conn.execute("DELETE FROM links WHERE src = ?", (stem,))
+                self.conn.execute("DELETE FROM tags WHERE title = ?", (stem,))
+                self.conn.execute("DELETE FROM aliases WHERE title = ?", (stem,))
+            if commit:
+                self.conn.commit()
 
     # --- 첨부 -----------------------------------------------------------
 
@@ -3245,6 +3249,14 @@ def _self_check() -> None:
         finally:
             del n.conn.execute
         assert _쥠 and all(_쥠), f"한 글 색인이 연결 잠금을 통째로 안 쥔다: {_쥠}"
+        # forget 도 「남았나 보고 지우기」라 통째로 쥔다 — 그 틈에 옮긴 글이 색인되면 그 링크가 지워진다.
+        _쥠.clear()
+        n.conn.execute = lambda *a: (_쥠.append(n.conn._잠금._is_owned()), _원(*a))[1]
+        try:
+            n.forget(str(n.root / "없는 자리" / "사라진 글.md"))
+        finally:
+            del n.conn.execute
+        assert _쥠 and all(_쥠), f"forget 이 연결 잠금을 통째로 안 쥔다: {_쥠}"
         # ★★ 이름 바꾸기는 새 이름을 잠근다 — 「없다」고 본 뒤 그 이름이 생기면 덮지 말고 물러나야 한다.
         n.write(Note(title="옮길 글", body="옮길 몸"))
         _결과: list = []
