@@ -1054,8 +1054,17 @@ class Notes:
         """
         try:
             for path in self.root.rglob("*.md"):
-                if not self._is_history(path):
-                    yield path
+                if self._is_history(path):
+                    continue
+                # ★★ **점으로 시작하는 폴더는 글이 아니다.** 옵시디언은 `.trash`(지운 글)·`.obsidian`·
+                #   `.git` 을 안 본다. 우리는 봐서 **옵시디언에서 지운 글이 검색에 되살아났다.**
+                try:
+                    속 = path.relative_to(self.root).parts[:-1]
+                except ValueError:
+                    속 = ()
+                if any(조각.startswith(".") for 조각 in 속):
+                    continue
+                yield path
         except (FileNotFoundError, PermissionError, OSError):
             return      # 사라진 자리까지만 세고 멈춘다. 다음 훑기가 마저 본다
 
@@ -2852,6 +2861,14 @@ def _self_check() -> None:
 
         # ★ 제목 조각에 `?`·`:` 를 쳐도 제안이 나와야 한다 — AI 가 틀린 제목을 고칠 길(did_you_mean)이다.
         assert "질문？ 답" in n.titles_like("질문?"), f"`?` 든 조각으로 제목을 못 찾는다: {n.titles_like('질문?')}"
+
+        # ★★ **점 폴더는 글이 아니다** — 옵시디언 휴지통(`.trash`)의 지운 글이 검색에 되살아났다.
+        for 점 in (".trash", ".obsidian", ".git"):
+            (n.root / 점).mkdir(exist_ok=True)
+            (n.root / 점 / f"점폴더 {점[1:]}.md").write_text("지운 글이다", encoding="utf-8")
+        n.reindex()
+        섞인 = [r[0] for r in n.conn.execute("SELECT title FROM notes WHERE title LIKE '점폴더 %'")]
+        assert not 섞인, f"점 폴더 속 md 를 글로 센다: {섞인}"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
