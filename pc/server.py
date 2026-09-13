@@ -1323,6 +1323,19 @@ class EBServer(ThreadingHTTPServer):
                     self.analyze()
                 except Exception as e:  # 분석이 실패해도 서버는 계속 떠 있어야 한다
                     _알림(f"[분석 실패] {e}")
+                # ★ 오너 결정 9: 로컬 대화 모델이 있으면 새 대화에서 오너 정보를 **짐작으로만** 뽑는다(오너 답 안 덮음)
+                try:
+                    모델 = self.picked["using"].get("chat") or ""
+                    if (self.cfg.get("backend") or {}).get("kind") == "local" and 모델:
+                        import selflearn
+                        import talklog
+
+                        적음 = selflearn.run(self.notes, lambda 말: self.backend.chat(말, 모델),
+                                            talklog.read(60), paths.data_dir() / "vc-스스로짐작.txt")
+                        if 적음:
+                            _알림(f"[스스로 짐작] 대화에서 오너 정보 {적음}개를 짐작으로 적었다(질문 창에서 확인)")
+                except Exception as e:
+                    _알림(f"[스스로 짐작 실패] {type(e).__name__}")
 
         threading.Thread(target=loop, daemon=True).start()
 
