@@ -468,7 +468,7 @@ class MainWindow(QWidget):
 
         # 읽는 모습과 고치는 모습을 갈아 끼운다. 평소엔 서식이 입혀 보이고,
         # 고칠 때만 원문이 뜬다 — 가끔 보고 고치는 용도에 이게 맞는다.
-        self.detail_view = NoteView(find_file=self.notes.attachment_path)
+        self.detail_view = NoteView(find_file=self.notes.attachment_path, find_note=self._끼울몸)
         self.detail_view.link_clicked.connect(self.follow_link)
         self.detail_view.tag_clicked.connect(self.show_tag)
         self.detail_view.task_clicked.connect(self.flip_task)
@@ -623,7 +623,7 @@ class MainWindow(QWidget):
         detail_card.setObjectName("reader")
 
         # 옆에 띄우는 읽기 전용 판. 딴 글을 곁에 두고 보면서 쓴다.
-        self.side_read = SideReader(left, find_file=self.notes.attachment_path)
+        self.side_read = SideReader(left, find_file=self.notes.attachment_path, find_note=self._끼울몸)
         self.side_read.link_clicked.connect(self.follow_link)   # follow_link 가 이미 미룬다
         self.side_read.closed.connect(self.close_side)
 
@@ -1110,6 +1110,11 @@ class MainWindow(QWidget):
         # **Esc 는 앱 전체에서 먼저 본다.** 목록이 뜬 동안 키가 어느 길로 오든
         # 우리가 먼저 잡는다 — 위 `eventFilter` 설명 참고.
         QApplication.instance().installEventFilter(self)
+
+    def _끼울몸(self, 제목: str) -> str | None:
+        """끼워 넣은 글의 몸. 읽기 화면이 `![[글]]` 을 펼칠 때 부른다."""
+        쪽 = self.notes.read(제목)
+        return 쪽.body if 쪽 else None
 
     def 단축키글(self) -> str:
         """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""

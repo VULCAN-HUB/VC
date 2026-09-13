@@ -169,10 +169,12 @@ class NoteView(QTextBrowser):
     tag_clicked = pyqtSignal(str)
     task_clicked = pyqtSignal(int)    # 몇 번째 할 일 표를 눌렀나 (0부터)
 
-    def __init__(self, find_file=None) -> None:
+    def __init__(self, find_file=None, find_note=None) -> None:
         super().__init__()
         # 첨부 이름을 실제 파일 자리로 바꿔 주는 사람. 없으면 그림은 이름만 보인다.
         self.find_file = find_file
+        # 끼워 넣은 글(`![[글#소제목]]`)의 **몸**을 찾는 길. 없으면 예전처럼 고리표만 보인다.
+        self.find_note = find_note
         self.limit = self.RENDER_START
         self.setOpenLinks(False)          # 브라우저를 열면 안 된다. 우리끼리 쓰는 이름표다
         self.setOpenExternalLinks(False)
@@ -214,7 +216,21 @@ class NoteView(QTextBrowser):
                     return f"⟨없는 첨부: {name}⟩"
                 return f"![{name}]({Path(path).as_uri()})"
             label = f"{name}#{head}" if head else name
-            return f"[⟨{label}⟩]({self._주소('note:' + label)})"
+            고리 = f"[⟨{label}⟩]({self._주소('note:' + label)})"
+            # ★★ **옵시디언은 끼워 넣은 글을 그 자리에 펼쳐 보인다.** 우리는 고리표만 보여서
+            #   「이번 달: ![[보고서#8월 정산]]」이 읽기 화면에서 **내용 없는 이름표**였다.
+            #   한 겹만 펼친다 — 펼친 속의 `![[…]]` 는 고리로 둔다(서로 끼우면 끝없이 돈다).
+            몸 = self.find_note(name) if self.find_note else None
+            if not 몸:
+                return 고리
+            토막 = notes.section(몸, head) if head else 몸
+            토막 = notes.EMBED_RE.sub(lambda mm: f"⟨{mm.group(1)}⟩", 토막).strip()
+            if not 토막:
+                return 고리
+            if len(토막) > 1500:
+                토막 = 토막[:1500] + "…"
+            인용 = chr(10).join("> " + 줄 for 줄 in 토막.splitlines())
+            return chr(10) + chr(10) + 고리 + chr(10) + chr(10) + 인용 + chr(10) + chr(10)
 
         def link(m):
             name, head = m.group(1).strip(), (m.group(2) or "").strip()
@@ -602,12 +618,12 @@ class SideReader(HudPanel):
     link_clicked = pyqtSignal(str, str)
     closed = pyqtSignal()
 
-    def __init__(self, parent=None, find_file=None) -> None:
+    def __init__(self, parent=None, find_file=None, find_note=None) -> None:
         super().__init__(parent)
         self.setObjectName("reader")
         self.title = QLabel()
         self.title.setObjectName("title")
-        self.view = NoteView(find_file=find_file)
+        self.view = NoteView(find_file=find_file, find_note=find_note)
         self.view.link_clicked.connect(self.link_clicked)
         shut = QPushButton("닫기")
         shut.setObjectName("quiet")
@@ -1632,6 +1648,16 @@ def _self_check() -> None:
     조 = Results.snippet("정답은 **안 먹는 말투** 이고 `코드` 도 있다", "말투", 46)
     assert "**" not in 조 and "`" not in 조, 조
     assert "안 먹는 말투" in 조, 조
+
+    # ★★ **끼워 넣은 글은 그 자리에 펼친다**(옵시디언과 같다). 고리표만 보이면 내용 없는 이름표다.
+    #   한 겹만 — 펼친 속의 `![[…]]` 는 다시 안 펼친다(서로 끼우면 끝없이 돈다).
+    몸들 = {"보고서": "## 7월" + chr(10) + "지난달" + chr(10) + "## 8월 정산" + chr(10) + "정산 끝 ![[보고서]]"}
+    펼침 = NoteView(find_file=lambda n: None, find_note=몸들.get)
+    글 = 펼침.to_markdown("이번 달: ![[보고서#8월 정산]] 참고")
+    assert "정산 끝" in 글, f"끼워 넣은 글을 안 펼친다: {글}"
+    assert "지난달" not in 글, "다른 토막까지 펼쳤다"
+    assert 글.count("정산 끝") == 1, "펼친 속을 또 펼쳤다 — 서로 끼우면 끝없이 돈다"
+    assert "없는글" in NoteView(find_file=lambda n: None, find_note=몸들.get).to_markdown("![[없는글]]"),         "없는 글을 끼우면 고리표라도 남아야 한다"
 
     print("panels self-check 통과")
 
