@@ -1326,12 +1326,31 @@ class ProposalCard(HudPanel):
         box.setSpacing(7)
         box.addWidget(title)
         box.addWidget(summary)
+        # ★★ **무엇을 승인하는지는 우리가 선언문에서 직접 뽑아 보인다.** 요약은 제안한 쪽이 적은 글이라
+        #   바깥 스킬이면 거짓일 수 있다(「무해함」이라 적고 딴 모듈을 부를 수 있다). 부르는 것을 그대로 적는다.
+        단계 = [s for s in (decl.get("steps") or []) if isinstance(s, dict)]
+        if 단계:
+            바깥 = json.loads(row["based_on"] or "[]") == ["바깥"]
+            self.steps_label = QLabel(("바깥에서 온 스킬 · " if 바깥 else "") + "부르는 것: " + " → ".join(
+                f"{s.get('module')}({', '.join(f'{k}={v}' for k, v in (s.get('params') or {}).items())})"
+                for s in 단계[:6]))
+            self.steps_label.setWordWrap(True)
+            self.steps_label.setStyleSheet(
+                f"color:{theme.css(theme.T.WARN if 바깥 else theme.T.DIM, 0.8)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
+            box.addWidget(self.steps_label)
         box.addLayout(row_btn)
 
 
 def _self_check() -> None:
     panel = HudPanel()
     assert panel.objectName() == "hud"
+
+    # ★ 바깥 스킬 제안 카드는 요약이 아니라 **실제로 부르는 모듈**을 보여 준다.
+    _카드 = ProposalCard({"proposal_id": "ext-1", "title": "바깥 스킬: 집에 가기", "summary": "무해함",
+                         "based_on": '["바깥"]',
+                         "declaration": '{"name": "집에 가기", "steps": [{"module": "navigate", "params": {"to": "집"}}]}'})
+    _글 = _카드.steps_label.text()
+    assert "navigate(to=집)" in _글 and "바깥" in _글, f"승인할 것이 카드에 안 보인다: {_글}"
 
     # ★★ **창은 서버에 걸 수 있어야 한다.** 자리를 아무도 안 넘기면 스스로 찾는다.
     # 예전 기본값은 빈 글자라 토큰을 못 읽었고, 토큰이 없으면 `call()` 이 아예
