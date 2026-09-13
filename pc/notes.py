@@ -737,6 +737,7 @@ def _해시(글: str) -> str:
 
 
 _잡은글잠금 = threading.local()
+_이름바꾸기잠금 = threading.Lock()   # ponytail: 프로그램 전체에 하나. 창고가 여럿 떠 느려지면 창고마다로
 
 
 class _덧붙이기잠금:
@@ -2286,6 +2287,13 @@ class Notes:
         return list(dict.fromkeys(r["name"] for r in rows))
 
     def rename(self, old: str, new: str) -> bool:
+        # ★★ 「새 이름이 없나」 보고 쓰는 사이에 남이 그 이름을 만들면(두 이름 바꾸기가 같은 새 이름으로,
+        #   AI 가 그 제목으로 새 글을) 한쪽 글이 덮여 사라진다. 이름 바꾸기끼리 줄 세우고 새 이름을 잠근다.
+        #   순서는 늘 「이름 바꾸기 → 새 이름 → 링크 고칠 글」이라 서로 물고 멈추지 않는다.
+        with _이름바꾸기잠금, self._글잠금(new):
+            return self._rename(old, new)
+
+    def _rename(self, old: str, new: str) -> bool:
         """항목 이름을 바꾸고 **그것을 가리키던 링크도 같이 고친다.**
 
         파일만 바꾸면 다른 노트의 `[[옛이름]]`이 허공을 가리켜 그래프에서 연결이
@@ -3179,6 +3187,20 @@ def _self_check() -> None:
         _실 = _th7.Thread(target=_겹쳐잡기, daemon=True); _실.start(); _실.join(5)
         assert not _실.is_alive(), "글 잠금을 쥔 채 덧붙이면 멈춘다(겹쳐 못 잡는다)"
         assert "겹쳐 잡은 줄" in n.read("가리키는 글").body
+        # ★★ 이름 바꾸기는 새 이름을 잠근다 — 「없다」고 본 뒤 그 이름이 생기면 덮지 말고 물러나야 한다.
+        n.write(Note(title="옮길 글", body="옮길 몸"))
+        _결과: list = []
+        with n._글잠금("겹칠 새 이름"):
+            _실 = _th7.Thread(target=lambda: _결과.append(n.rename("옮길 글", "겹칠 새 이름")), daemon=True)
+            _실.start()
+            _t8.sleep(0.4)
+            assert _실.is_alive(), "이름 바꾸기가 새 이름 잠금을 안 기다린다"
+            n.write(Note(title="겹칠 새 이름", body="먼저 생긴 몸"))
+        _실.join(10)
+        assert _결과 == [False], f"그 사이 생긴 새 이름으로 바꿨다: {_결과}"
+        assert n.read("겹칠 새 이름").body.strip() == "먼저 생긴 몸", "먼저 생긴 글을 덮었다"
+        assert n.read("옮길 글") is not None, "물러났는데 옛 글이 사라졌다"
+
         # 오늘 일지 만들기·지난 판 되돌리기도 읽고-쓰기라 글 잠금을 기다려야 한다.
         n.keep_history(n.path_of("가리키는 글"), read_text(n.path_of("가리키는 글")), always=True)
         _판 = n.history("가리키는 글")[0][1]
