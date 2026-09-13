@@ -89,7 +89,7 @@ class Store:
             self._열기(path)
 
     def _열기(self, path) -> None:
-        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.conn = sqlite3.connect(path, check_same_thread=False, factory=paths.잠근연결)
         # 학습 로그도 서버와 화면이 같이 쓴다 — WAL이라야 서로 안 막는다.
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=8000")

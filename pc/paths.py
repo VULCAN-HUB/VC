@@ -354,8 +354,79 @@ def save_config(값: dict) -> bool:
         return False
 
 
+import sqlite3 as _sq
+import threading as _th
+
+
+class _다읽은:
+    """커서를 잠금 안에서 다 읽어 둔 것. 잠금 밖에서 한 줄씩 당기면 딴 실과 또 엉킨다."""
+
+    def __init__(self, cur) -> None:
+        self._줄 = cur.fetchall() if cur.description else []
+        self.rowcount, self.lastrowid = cur.rowcount, cur.lastrowid
+
+    def fetchone(self):
+        return self._줄.pop(0) if self._줄 else None
+
+    def fetchall(self):
+        줄, self._줄 = self._줄, []
+        return 줄
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class 잠근연결(_sq.Connection):
+    """여러 실이 같이 쓰는 sqlite 연결. `sqlite3.connect(..., factory=잠근연결)`.
+
+    ★★ 서버는 `ThreadingHTTPServer` 라 요청마다 실이 따로인데 `Notes`·`Store` 연결은 하나다.
+    잠그기 전에는 이름 바꾸기의 다시 훑기와 덧붙이기가 겹쳐 `IntegrityError: not an error` 로 터졌다.
+    """
+    # ponytail: 결과를 통째로 읽어 둔다 — 큰 SELECT 는 메모리를 더 먹는다. 문제 되면 그 자리만 fetchmany
+
+    def __init__(self, *a, **k) -> None:
+        super().__init__(*a, **k)
+        self._잠금 = _th.RLock()
+
+    def execute(self, *a):
+        with self._잠금:
+            return _다읽은(super().execute(*a))
+
+    def executemany(self, *a):
+        with self._잠금:
+            return _다읽은(super().executemany(*a))
+
+    def executescript(self, *a):
+        with self._잠금:
+            return super().executescript(*a)
+
+    def commit(self) -> None:
+        with self._잠금:
+            super().commit()
+
+
 def _self_check() -> None:
     import tempfile
+
+    # 잠근연결: 딴 실이 잠금을 쥐면 execute 가 기다린다. 겹쳐 터지는 것은 우연이라 재현 대신 기다림을 본다.
+    import time as _t
+
+    _c = _sq.connect(":memory:", check_same_thread=False, factory=잠근연결)
+    _c.execute("CREATE TABLE t (x)")
+    for _i in range(3):
+        _c.execute("INSERT INTO t VALUES (?)", (_i,))
+    _c.commit()
+    _끝: list = []
+    with _c._잠금:
+        _실 = _th.Thread(target=lambda: _끝.append(_c.execute("SELECT count(*) FROM t").fetchone()[0]))
+        _실.start()
+        _t.sleep(0.3)
+        assert not _끝, "잠근연결이 안 잠근다 — 서버 실들이 한 연결을 겹쳐 쓴다"
+    _실.join()
+    assert _끝 == [3], _끝
+    assert _c.execute("UPDATE t SET x = 0").rowcount == 3
+    assert [r[0] for r in _c.execute("SELECT x FROM t")] == [0, 0, 0]
+    _c.close()
 
     assert app_dir().exists()
     # 소스로 돌 때는 지금 자리다 — 개발 중에 문서 폴더가 더럽혀지면 안 된다.

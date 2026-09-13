@@ -1137,7 +1137,7 @@ class Notes:
 
     def _색인열기(self, index) -> None:
         """색인 파일을 열고 표 모양을 맞춘다. 깨졌으면 `sqlite3.DatabaseError` 가 난다."""
-        self.conn = sqlite3.connect(index, check_same_thread=False)
+        self.conn = sqlite3.connect(index, check_same_thread=False, factory=paths.잠근연결)
         # WAL: 쓰는 놈 하나와 읽는 놈 여럿이 동시에 돈다. 기본(delete)에서는 쓰는 동안
         # 읽기가 통째로 막혀 "database is locked"가 난다 — AI와 사람이 같이 쓰는 구조다.
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -1755,15 +1755,18 @@ class Notes:
         찍힌 = (row[0] if row else "") or ""
         return 찍힌 != _해시(지금글)
 
+    def _글잠금(self, title: str) -> "_덧붙이기잠금":
+        자리폴더 = (self.root.parent if str(self.index_path) == ":memory:"
+                  else Path(str(self.index_path)).parent) / "vc-잠금"
+        return _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title))
+
     def append(self, title: str, text: str, kind: str = "note", pinned: bool = False) -> Path:
         """있으면 뒤에 붙이고, 없으면 새로 만든다.
 
         AI가 관찰을 쌓는 기본 방식이다. 덮어쓰기를 기본으로 하면 어제 적은 것이
         오늘 적은 것에 조용히 지워진다 — 기억이 아니라 최신값 저장소가 된다.
         """
-        자리폴더 = (self.root.parent if str(self.index_path) == ":memory:"
-                  else Path(str(self.index_path)).parent) / "vc-잠금"
-        with _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title)):
+        with self._글잠금(title):
             old = self.read(title)
             if old is None:
                 return self.write(Note(title=title, body=text, kind=kind, pinned=pinned))
@@ -2332,17 +2335,22 @@ class Notes:
             # 훑는 동안 남이 지울 수 있다. 한 파일 때문에 **나머지 링크가 안 고쳐지면**
             # 그래프가 반쯤 끊긴 채로 남는다 — 그게 더 나쁘다.
             try:
-                text = read_text(path)
+                if f"[[{old}" not in read_text(path):
+                    continue
             except (Vanished, OSError):
                 continue
-            if f"[[{old}" not in text:
-                continue
-            새글 = 고치개.sub(바꿔, text)
-            if 새글 != text:
+            # ★ 링크 고치기도 읽고-바꾸고-쓰기다 — 그 사이 덧붙인 줄이 사라지지 않게 같은 잠금 안에서 다시 읽는다.
+            with self._글잠금(path.stem):
                 try:
-                    _atomic_write(path, 새글)
-                except (Vanished, OSError, WriteBlocked):
+                    text = read_text(path)
+                except (Vanished, OSError):
                     continue
+                새글 = 고치개.sub(바꿔, text)
+                if 새글 != text:
+                    try:
+                        _atomic_write(path, 새글)
+                    except (Vanished, OSError, WriteBlocked):
+                        continue
         self.reindex()
         쪽지.unlink(missing_ok=True)      # 끝났으니 쪽지를 지운다
         return True
@@ -3117,6 +3125,35 @@ def _self_check() -> None:
         _몸 = n.read("같이 쓰는 글").body
         _남 = sum(1 for x in "AB" for _i in range(30) if f"{x}-{_i}" in _몸)
         assert _남 == 60, f"동시에 덧붙인 줄이 사라진다: 60줄 중 {_남}줄"
+
+        # ★★ 이름 바꾸기가 링크를 고치는 동안 그 글에 덧붙인 줄도 안 사라진다.
+        n.write(Note(title="바뀔 이름 가", body="대상"))
+        n.write(Note(title="가리키는 글", body="[[바뀔 이름 가]]"))
+        _멈춤 = []
+
+        def _쌓기2():
+            try:
+                for _i in range(300):
+                    n.append("가리키는 글", f"쌓은줄{_i}")
+            finally:
+                _멈춤.append(1)      # 실이 죽어도 아래 고리가 안 멈추면 검사가 끝없이 돈다
+        _실 = _th7.Thread(target=_쌓기2); _실.start()
+        _이름 = ["바뀔 이름 가", "바뀔 이름 나"]
+        while not _멈춤:
+            n.rename(_이름[0], _이름[1]); _이름.reverse()
+        _실.join()
+        _몸 = n.read("가리키는 글").body
+        _남 = sum(1 for _i in range(300) if f"쌓은줄{_i}" + chr(10) in _몸 + chr(10))
+        assert _남 == 300, f"이름 바꾸는 동안 덧붙인 줄이 사라진다: 300 중 {_남}"
+        # 겹침은 우연이라 위 고리로는 잠금을 빼도 통과한다 — 잠금을 쥔 채 이름 바꾸기가 기다리는지 본다.
+        import time as _t8
+
+        with n._글잠금("가리키는 글"):
+            _실 = _th7.Thread(target=n.rename, args=(_이름[0], _이름[1])); _실.start()
+            _t8.sleep(0.5)
+            assert f"[[{_이름[0]}]]" in read_text(n.path_of("가리키는 글")),                 "이름 바꾸기가 글 잠금을 안 기다리고 링크를 고친다(그 사이 덧붙인 줄이 사라진다)"
+        _실.join()
+        assert f"[[{_이름[1]}]]" in read_text(n.path_of("가리키는 글")), "잠금이 풀린 뒤 링크를 안 고쳤다"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
