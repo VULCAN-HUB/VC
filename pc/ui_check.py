@@ -1453,6 +1453,16 @@ def run() -> None:
     win._build_more()
     _차림 = [a.text() for a in win.more_menu.actions()]
     assert any(t.startswith("설정") for t in _차림) and any(t.startswith("전체화면") for t in _차림), _차림
+    # ★ 오늘 일지(Ctrl+D)가 쓰기 막힘에 죽지 않고 까닭을 말한다 — 신호 안 예외는 프로세스를 끝낸다.
+    _일지말: list = []
+    _옛말2, win.report = win.report, lambda t, who=None: _일지말.append(t)
+    _옛일지, win.notes.daily = win.notes.daily, lambda *a, **k: (_ for _ in ()).throw(
+        notes_module.WriteBlocked("잠김"))
+    try:
+        win.open_daily()
+    finally:
+        win.report, win.notes.daily = _옛말2, _옛일지
+    assert any("못 만들었어" in t for t in _일지말), f"오늘 일지가 막혔는데 까닭을 안 말한다: {_일지말}"
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

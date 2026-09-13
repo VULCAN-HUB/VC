@@ -2173,7 +2173,13 @@ class MainWindow(QWidget):
 
     def open_daily(self) -> None:
         """오늘 일지. 없으면 서식대로 만들어 연다."""
-        note = self.notes.daily()
+        # ★ 단축키·차림표 신호에서 불린다 — 쓰기 막힘이 새면 PyQt 가 프로세스를 끝낸다(ask 설명 참고).
+        #   장식은 이런 자리에서 창 검사를 강제 종료시킨 적이 있어(new_note 참고) 직접 받는다.
+        try:
+            note = self.notes.daily()
+        except WriteBlocked:
+            self.report("오늘 일지를 못 만들었어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
+            return
         self.notes.reindex()
         self.show_note(note.title)
         # 일지는 열자마자 쓰려는 것이다 — 새 글과 같은 까닭(시험 쪽 다-3).
