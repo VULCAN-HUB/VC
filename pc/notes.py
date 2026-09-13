@@ -2001,6 +2001,14 @@ class Notes:
             self.conn.execute("DELETE FROM search WHERE rowid = ?", (row[0],))
 
     def _index_file(self, path: Path, commit: bool = True, text: str | None = None) -> None:
+        # ★★ **한 글 색인은 여러 줄이다(notes 넣기 → 낱말 색인 지우고 넣기 → 링크·태그·별칭).**
+        #   연결 잠금은 한 줄씩만 줄 세워서, 그 줄 사이에 딴 실의 다시 훑기가 같은 글을 넣으면
+        #   `IntegrityError: constraint failed` 로 **덧붙이던 실이 죽었다**(부하 걸고 300 중 26 — 열린 문제 17).
+        #   글 하나를 통째로 쥔다. RLock 이라 안의 execute 는 그대로 된다.
+        with self.conn._잠금:
+            return self._index_file_몸(path, commit, text)
+
+    def _index_file_몸(self, path: Path, commit: bool = True, text: str | None = None) -> None:
         note = Note.loads(path.stem, read_text(path) if text is None else text)
         self.conn.execute(
             "INSERT INTO notes (path, id, title, kind, pinned, created, mtime, body) "
@@ -2094,7 +2102,41 @@ class Notes:
             args.append(self._NARROW_ARG[base](value))
         return where, args
 
-    def search(self, q: str, k: int = 8) -> list[sqlite3.Row]:
+    _정규식꼴 = re.compile(r"(?:(?<=\s)|^)/((?:\\/|[^/\s]|(?<=\\)\s)(?:\\/|[^/])*)/(?=\s|$)")
+
+    def search(self, q: str, k: int = 8, 세기: bool = True) -> list[sqlite3.Row]:
+        """`/정규식/` 을 먼저 뽑아 거르고, 나머지는 `_search` 로 찾는다.
+
+        ★ 옵시디언의 `/정규식/` 검색. 낱말 색인은 `ERR-1234` 같은 **꼴**을 못 찾는다(기호에서 끊긴다).
+        제목·본문에 그 꼴이 든 것만 남긴다. 다른 말이 같이 오면 그 말로 넉넉히 찾은 뒤 거른다.
+        틀린 정규식이면 0장 — 짐작해서 넓히지 않는다.
+        """
+        정규식들: list[str] = []
+        q = self._정규식꼴.sub(lambda m: (정규식들.append(m.group(1)), " ")[1], q)
+        if not 정규식들:
+            return self._search(q, k, 세기)
+        try:
+            # ponytail: 파이썬 re 는 시간 한도가 없다 — 길이만 막는다. 되돌이 폭주가 보이면 regex 모듈의 timeout 으로
+            거를 = [re.compile(p, re.IGNORECASE) for p in 정규식들 if len(p) <= 200]
+        except re.error:
+            return []
+        if len(거를) != len(정규식들):
+            return []
+        if q.strip():
+            후보 = self._search(q, max(k * 20, 200), 세기=False)
+        else:
+            후보 = self.conn.execute("SELECT * FROM notes ORDER BY pinned DESC, created DESC").fetchall()
+        나온 = [r for r in 후보
+               if all(g.search(r["title"] + chr(10) + (r["body"] or "")) for g in 거를)
+               and Path(r["path"]).exists()][:k]
+        if 나온 and 세기:
+            self.conn.executemany(
+                "UPDATE notes SET used_at = ?, use_count = use_count + 1 WHERE path = ?",
+                [(time.time(), r["path"]) for r in 나온])
+            self.conn.commit()
+        return 나온
+
+    def _search(self, q: str, k: int = 8, 세기: bool = True) -> list[sqlite3.Row]:
         """낱말 색인으로 찾는다. 좁히는 말도 받는다.
 
         - `모델 선택` — 낱말은 **모두** 들어 있어야 한다. 뒤에 조사가 붙어도 걸리도록
@@ -2180,7 +2222,7 @@ class Notes:
             else:
                 self.forget(r["path"])
         rows = 살아있는
-        if rows:
+        if rows and 세기:
             self.conn.executemany(
                 "UPDATE notes SET used_at = ?, use_count = use_count + 1 WHERE path = ?",
                 [(time.time(), r["path"]) for r in rows],
@@ -3192,6 +3234,17 @@ def _self_check() -> None:
         _실 = _th7.Thread(target=_겹쳐잡기, daemon=True); _실.start(); _실.join(5)
         assert not _실.is_alive(), "글 잠금을 쥔 채 덧붙이면 멈춘다(겹쳐 못 잡는다)"
         assert "겹쳐 잡은 줄" in n.read("가리키는 글").body
+        # ★★ 한 글 색인은 연결 잠금을 **통째로** 쥔다 — 줄마다만 쥐면 그 사이에 딴 실이 끼어 IntegrityError.
+        #   겹침은 우연이라 재현 대신, 안의 execute 가 불릴 때마다 이미 잠금을 쥐고 있었나를 본다.
+        _쥠: list = []
+        _길 = n.path_of("가리키는 글")        # 이 부름도 execute 라 재기 전에 구해 둔다
+        _원 = n.conn.execute
+        n.conn.execute = lambda *a: (_쥠.append(n.conn._잠금._is_owned()), _원(*a))[1]
+        try:
+            n._index_file(_길)
+        finally:
+            del n.conn.execute
+        assert _쥠 and all(_쥠), f"한 글 색인이 연결 잠금을 통째로 안 쥔다: {_쥠}"
         # ★★ 이름 바꾸기는 새 이름을 잠근다 — 「없다」고 본 뒤 그 이름이 생기면 덮지 말고 물러나야 한다.
         n.write(Note(title="옮길 글", body="옮길 몸"))
         _결과: list = []
@@ -3205,6 +3258,17 @@ def _self_check() -> None:
         assert _결과 == [False], f"그 사이 생긴 새 이름으로 바꿨다: {_결과}"
         assert n.read("겹칠 새 이름").body.strip() == "먼저 생긴 몸", "먼저 생긴 글을 덮었다"
         assert n.read("옮길 글") is not None, "물러났는데 옛 글이 사라졌다"
+
+        # ★★ `/정규식/` 검색 — 낱말 색인이 못 찾는 꼴(ERR-1234)을 찾는다. 틀린 정규식은 0장.
+        n.write(Note(title="오류 기록 가", body="로그에 ERR-1234 가 떴다"))
+        n.write(Note(title="오류 기록 나", body="로그에 ERR-12 만 떴다"))
+        _찾 = [r["title"] for r in n.search(r"/ERR-\d{4}/", k=10)]
+        assert _찾 == ["오류 기록 가"], f"정규식 검색이 틀린 것을 준다: {_찾}"
+        assert [r["title"] for r in n.search(r"로그 /ERR-\d{4}/", k=10)] == ["오류 기록 가"], "낱말과 같이 쓴 정규식이 안 걸린다"
+        assert n.search("/[/", k=10) == [], "틀린 정규식인데 뭔가 준다"
+        assert n.search(r"/err-\d{4}/", k=10) and n.search(r"/ERR-\d{4}/ -없는말", k=10) is not None
+        assert not n._정규식꼴.search("path:2026/09 회의"), "path:2026/09 를 정규식으로 뽑는다"
+        assert [m.group(1) for m in n._정규식꼴.finditer(r"a /x\/y/ b")] == [r"x\/y"], "빗금을 품은 정규식을 못 뽑는다"
 
         # 지우기도 「남기고 → 지우기」라 글 잠금을 기다려야 한다.
         n.write(Note(title="지울 글", body="몸"))
