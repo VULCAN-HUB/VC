@@ -43,6 +43,20 @@ def _hide_home(text: str) -> str:
     return text.replace(home, "~").replace(home.replace("\\", "/"), "~")
 
 
+import re  # noqa: E402 — 글 파일 이름 가리기에만 쓴다
+
+_글파일꼴 = re.compile(r"[^\\/\s'\"<>|:*?]+\.md\b")
+
+
+def _hide_names(text: str) -> str:
+    """글 파일 이름(`회의록.md`)을 `(글).md` 로 바꾼다.
+
+    ★ 기록 줄은 예외 문구를 그대로 싣는 곳이 많아 **경로와 함께 글 제목이 딸려 온다**
+    (`PermissionError: ... '…\\2026\\09\\회의록.md'`). 줄마다 막으면 새 줄에서 또 샌다 — 묶음 한 자리에서 막는다.
+    """
+    return _글파일꼴.sub("(글).md", text)
+
+
 def trail(what: str) -> None:
     """한 줄 남긴다. **죽어도 여기까지는 갔다**를 알려 주는 자국이다."""
     try:
@@ -353,16 +367,23 @@ def bundle(out_dir: str | Path = "") -> Path:
         for name in (TRAIL, DEATH):
             f = data / name
             if f.exists():
-                z.writestr(name, _hide_home(f.read_text(encoding="utf-8", errors="replace")))
+                z.writestr(name, _hide_names(_hide_home(f.read_text(encoding="utf-8", errors="replace"))))
         cfg = paths.config_path()
         if cfg.exists():
             try:
                 got = json.loads(cfg.read_text(encoding="utf-8"))
-                # **토큰은 지운다.** 이 파일은 밖으로 나간다.
-                for key in list(got):
-                    if "token" in key.lower() or "secret" in key.lower():
-                        got[key] = "(지움)"
-                z.writestr("설정.json", json.dumps(got, ensure_ascii=False, indent=2))
+
+                # **비밀은 지운다.** 이 파일은 밖으로 나간다.
+                # ★★ 맨 위 칸만 보면 안 된다 — 바깥 AI 키는 `backend.api_key` 처럼 **안쪽**에 있고
+                #   (보관소가 없는 OS·옮기기 전에는 평문), 모델 자리는 집 폴더(사용자 이름) 경로다. 둘 다 샜다.
+                def 지우기(값):
+                    if isinstance(값, dict):
+                        return {k: ("(지움)" if any(w in k.lower() for w in ("token", "secret", "key", "password"))
+                                    else 지우기(v)) for k, v in 값.items()}
+                    if isinstance(값, list):
+                        return [지우기(v) for v in 값]
+                    return 값
+                z.writestr("설정.json", _hide_home(json.dumps(지우기(got), ensure_ascii=False, indent=2)))
             except (OSError, ValueError):
                 pass
     return zip_path
@@ -474,8 +495,13 @@ def _self_check() -> None:
             assert home not in json.dumps(got, ensure_ascii=False), "사용자 이름이 샜다"
 
             # 토큰이 든 설정을 넣어 두고, 묶음에 안 담기는지 본다
+            # 기록 줄에 예외 문구로 딸려 온 글 파일 이름도 묶음에 안 담긴다
+            trail(r"[시험] PermissionError: 'D:\창고\2026\09\남몰래쓴제목.md' 를 못 읽었다")
             paths.config_path().write_text(
-                json.dumps({"pair_token": "비밀값123", "port": 8765}), encoding="utf-8")
+                json.dumps({"pair_token": "비밀값123", "port": 8765,
+                            # 안쪽 칸의 바깥 AI 키 · 집 폴더가 든 모델 자리도 새면 안 된다
+                            "backend": {"kind": "anthropic", "api_key": "sk-안쪽비밀456",
+                                        "model_dir": str(Path.home() / "models")}}), encoding="utf-8")
             made = bundle()
             assert made.exists() and made.suffix == ".zip"
             with zipfile.ZipFile(made) as z:
@@ -483,6 +509,8 @@ def _self_check() -> None:
                 assert {"무엇이 어디.json", TRAIL, DEATH, "설정.json"} <= names, names
                 blob = b"".join(z.read(n) for n in names)
             assert "비밀값123".encode() not in blob, "토큰이 묶음에 들어갔다"
+            assert "sk-안쪽비밀456".encode() not in blob, "설정 안쪽의 API 키가 묶음에 들어갔다"
+            assert "남몰래쓴제목".encode() not in blob, "기록 줄의 글 파일 이름이 묶음에 들어갔다"
             assert home.encode() not in blob, "사용자 이름이 묶음에 들어갔다"
         finally:
             stop_watching()
