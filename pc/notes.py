@@ -1327,7 +1327,11 @@ class Notes:
             width = len(_call_embed(embed, ["크기 재기"], "query: ")[0])
         except Exception:
             return        # 모델이 시원찮으면 뜻 검색만 꺼진다. 찾기는 살아야 한다
-        self.drop_vectors_if_changed(width)
+        # ★ **벡터를 통째로 버리면 말한다.** 모델 폭이 바뀌면 수천 장을 다시 만드는 몇 분짜리 일인데
+        #   아무 표시가 없어, 그동안 뜻 검색이 약한 까닭을 알 길이 없었다.
+        if self.drop_vectors_if_changed(width):
+            self.벡터버림수 = getattr(self, "벡터버림수", 0) + 1
+            print(f"[뜻 벡터] 모델 폭이 {width} 로 바뀌어 벡터를 통째로 다시 만든다")
         self._vec_cache = None
 
     def vec_left(self) -> int:
@@ -3556,8 +3560,10 @@ def _self_check() -> None:
         # ★★ **밖에서 고친 글은 바로 그 뜻으로 찾혀야 한다.** 옵시디언·메모장으로 고치는 것은
         #   흔한 일인데, 채우는 실은 30초마다 돈다. 그 사이에 물으면 **고치기 전 뜻**으로
         #   답한다 — 아무 표시도 없이 조용히 틀린다. 몇 장 안 낡았으면 찾는 자리에서 따라잡는다.
+        _버림앞 = getattr(n, "벡터버림수", 0)
         n.use_embedder(작은모델 := (lambda 글들, 머리="": [
             [1.0 if "잠수함" in 글 else 0.0, 1.0 if "김치" in 글 else 0.0, 0.1] for 글 in 글들]))
+        assert getattr(n, "벡터버림수", 0) == _버림앞 + 1, "벡터를 통째로 버리고도 말하지 않는다"
         n.write(Note(title="밖에서 고칠 글", body="김치 이야기다."))
         n.write(Note(title="딴 김치 글", body="김치 이야기다."))
         n.reindex()
