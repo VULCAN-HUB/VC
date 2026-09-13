@@ -564,6 +564,9 @@ class Handler(BaseHTTPRequestHandler):
             # 폰만 승인할 수 있다. 원격 토큰으로 자기 자신을 승인시키면 문이 무너진다.
             if self.session is not None:
                 return self._send(403, {"error": "폰에서만 승인할 수 있다"})
+            # ★ 글자가 아닌 값이 오면 답 없이 500 이었다(문은 안 열렸지만 왜 안 되는지 모른다).
+            if any(not isinstance(body.get(k, ""), str) for k in ("code", "session", "nonce", "by")):
+                return self._send(400, {"error": "code·session·nonce·by 는 글자여야 한다"})
             by = body.get("by") or "폰"
             if body.get("code"):
                 ok = self.server.gate.approve_code(body["code"], by)  # 폰 중계 경로
@@ -575,6 +578,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/remote/deny":
             if self.session is not None:
                 return self._send(403, {"error": "폰에서만 거절할 수 있다"})
+            if not isinstance(body.get("session", ""), str):
+                return self._send(400, {"error": "session 은 글자여야 한다"})
             return self._send(200, {"ok": self.server.gate.deny(body.get("session", ""))})
 
         if url.path == "/eb/v1/remote/close":
@@ -768,6 +773,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = url.path.strip("/").split("/")
         if len(parts) == 5 and parts[:3] == ["eb", "v1", "proposals"] and parts[4] == "decision":
             decision = body.get("decision") or ""
+            if not isinstance(decision, str):
+                return self._send(400, {"error": "decision 은 글자여야 한다"})
             # "pick:번역" 은 후보 중 하나를 고른 것이다(되묻던 표현을 그 모듈에 배운다).
             if decision not in ("approve", "reject", "revert") and not decision.startswith("pick:"):
                 return self._send(400, {"error": "bad decision"})
@@ -779,6 +786,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ask(self, body: Any) -> None:
         """지시를 받아 실제로 돌린다. 결과는 파일로도 남겨 어디서든 내려받게 한다."""
+        if not isinstance(body.get("text") or "", str):
+            return self._send(400, {"error": "text must be text", "got": type(body.get("text")).__name__})
         text = (body.get("text") or "").strip()
         if not text:
             return self._send(400, {"error": "text required"})
@@ -860,6 +869,8 @@ class Handler(BaseHTTPRequestHandler):
         messages = body.get("messages")
         if not messages:
             return self._send(400, {"error": "messages required"})
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            return self._send(400, {"error": "messages must be a list of objects"})
         # 요청이 모델을 지정하지 않으면 지금 쓰기로 정해진 글자 모델을 쓴다(결정 42).
         model = body.get("model") or self.server.picked["using"]["chat"]
         try:
@@ -1511,6 +1522,16 @@ def _self_check() -> None:
         assert 상태 == 409, f"force={가짜참!r} 로 덮어쓰기 막이가 뚫렸다: {상태}"
     assert call("POST", "/eb/v1/memory", {"title": "고정 시험", "text": "몸", "pinned": "false"})[0] == 201
     assert not note_store.read("고정 시험").pinned, '"false" 글자로 고정됐다'
+
+    # ★ **글자가 아닌 값에는 400 과 까닭을 준다**(전엔 500 — 문은 안 열렸지만 왜 안 되는지 몰랐다).
+    for 길, 몸 in (("/eb/v1/ask", {"text": 123}),
+                 ("/v1/chat/completions", {"messages": "안녕"}),
+                 ("/eb/v1/remote/approve", {"code": 1234}),
+                 ("/eb/v1/remote/approve", {"session": ["가"], "nonce": "x"}),
+                 ("/eb/v1/remote/deny", {"session": 5}),
+                 ("/eb/v1/proposals/nope/decision", {"decision": 1})):
+        상태, _ = call("POST", 길, 몸)
+        assert 상태 == 400, f"{길} {몸} → {상태} (400 이어야 한다)"
 
     # ★ 갈래가 글자가 아니면 400 — 조용히 "None" 같은 갈래로 저장되면 좁히기에 영영 안 걸린다.
     for 나쁜갈래 in (["가", "나"], None, 123):
