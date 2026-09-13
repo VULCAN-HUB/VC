@@ -618,7 +618,7 @@ class MainWindow(QWidget):
         self.backs = Results(limit=4)
         self.backs.picked.connect(self.show_note)
         self.backs.hide()
-        # 이름은 적었는데 링크로 안 이은 곳 — 옵시디언의 「연결 안 된 언급」. 외딴 글을 잇는 자리다.
+        # 이름은 적었는데 링크로 안 이은 곳 — 옵시디언의 「연결 안 된 언급」. 이어짐을 적고 싶을 때 쓰는 재료다.
         self.mentions_head = QLabel("이름만 적힌 곳 (안 이어짐)")
         self.mentions_head.setStyleSheet(self.backs_head.styleSheet())
         self.mentions_head.hide()
@@ -1481,7 +1481,7 @@ class MainWindow(QWidget):
             #   외딴이라 「서른 개야」가 된다. 모두 몇 장인지 세어 **사실대로** 말한다.
             모두 = self.notes.외딴것수()
             꼬리 = f" 최근 {len(외딴)}개만 보여줄게." if 모두 > len(외딴) else ""
-            return done(f"아무 데도 안 이어진 글 {모두}개야.{꼬리} 이어 두면 나중에 찾기 쉬워.",
+            return done(f"링크로 안 이은 글 {모두}개야.{꼬리} 안 이어도 뜻으로는 찾혀.",
                         외딴[:3])
 
         # 여기부터는 대상이 있어야 한다.
