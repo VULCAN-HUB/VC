@@ -633,6 +633,11 @@ class Handler(BaseHTTPRequestHandler):
             title, text = title.strip(), text.strip()
             if not title or not text:
                 return self._send(400, {"error": "title and text required"})
+            # ★ **갈래도 글자여야 한다.** 목록·null 이 오면 `"None"`·`"['가', '나']"` 같은 갈래로
+            #   조용히 저장돼 `kind:` 좁히기에 영영 안 걸렸다(재 봤다).
+            if "kind" in body and not isinstance(body["kind"], str):
+                return self._send(400, {"error": "kind must be text",
+                                        "got": type(body["kind"]).__name__})
             # 기본은 **덧붙이기**다. 덮어쓰기를 기본으로 하면 어제 적은 것이 오늘
             # 적은 것에 조용히 지워져, 기억이 아니라 최신값 저장소가 된다.
             mode = body.get("mode", "append")
@@ -1495,6 +1500,11 @@ def _self_check() -> None:
     assert 상태 == 404 and "POST" in (길틀림.get("hint") or ""), f"메서드가 틀렸다고 안 말한다: {길틀림}"
     상태, 없는길 = call("GET", "/eb/v1/memory/all")
     assert 상태 == 404 and 없는길.get("paths"), f"있는 길을 안 알려 준다: {없는길}"
+
+    # ★ 갈래가 글자가 아니면 400 — 조용히 "None" 같은 갈래로 저장되면 좁히기에 영영 안 걸린다.
+    for 나쁜갈래 in (["가", "나"], None, 123):
+        상태, _ = call("POST", "/eb/v1/memory", {"title": "갈래 시험", "text": "몸", "kind": 나쁜갈래})
+        assert 상태 == 400, f"글자 아닌 갈래를 받았다: {나쁜갈래!r} → {상태}"
 
     # ★ **못 쓰면 못 썼다고 말해야 한다.** 읽기 전용 파일에서 `WriteBlocked` 가 그대로
     #   새 나가 서버가 답도 없이 연결을 끊었다 — AI 는 성공인지 실패인지도 모른다.
