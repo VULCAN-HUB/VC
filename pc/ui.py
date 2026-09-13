@@ -1170,7 +1170,21 @@ class MainWindow(QWidget):
         return chr(10).join(f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items())
 
     def 단축키보기(self) -> None:
-        box = QMessageBox(QMessageBox.NoIcon, "단축키", self.단축키글(), QMessageBox.NoButton, self)
+        # ★ 공백으로 칸을 맞추면 비례 글꼴에서 줄이 들쭉날쭉했고, 한글 글꼴은 `\` 를 `₩` 로 그렸다(그려 보고 찾았다).
+        #   표로 그리고 키는 모노 글꼴·강조색으로 — 주 창 계기판 글씨와 같은 결. 검사가 읽는 평문(`단축키글`)은 그대로다.
+        import html
+
+        묶음: dict[str, list[str]] = {}
+        for keys, _, 설명 in self.단축키표:
+            묶음.setdefault(설명, []).append(keys)
+        줄들 = "".join(
+            f"<tr><td style='padding:3px 18px 3px 0; color:{theme.T.ACCENT.name()}; font-family:{theme.MONO};'>"
+            f"{html.escape(' · '.join(키들)).replace(chr(92), '＼')}</td>"   # 한글 글꼴은 \ 를 ₩ 로 그린다 — 보이는 글자만 전각으로
+            f"<td style='padding:3px 0; color:{theme.T.TEXT.name()};'>{html.escape(설명)}</td></tr>"
+            for 설명, 키들 in 묶음.items())
+        box = QMessageBox(QMessageBox.NoIcon, "단축키", f"<table cellspacing='0'>{줄들}</table>",
+                          QMessageBox.NoButton, self)
+        box.setTextFormat(Qt.RichText)
         box.addButton("닫는다", QMessageBox.RejectRole)
         box.open()          # 창을 붙들지 않는다
 
