@@ -340,6 +340,19 @@ class NoteView(QTextBrowser):
                 bar.setValue(bar.value() + self.cursorRect(cur).top())
                 return
             block = block.next()
+        # ★ 블록(`^이름`)은 입힌 글에 이름이 안 보인다 — 부르는 쪽이 그 덩이 첫 줄 글자를 넘긴다.
+        #   목록 표지·꾸밈이 벗겨져 딱 맞지 않을 수 있어 **그 글자로 시작하는 줄**까지 본다.
+        if len(want) >= 2:
+            block = self.document().begin()
+            while block.isValid():
+                if block.text().strip().startswith(want):
+                    cur = self.textCursor()
+                    cur.setPosition(block.position())
+                    self.setTextCursor(cur)
+                    bar = self.verticalScrollBar()
+                    bar.setValue(bar.value() + self.cursorRect(cur).top())
+                    return
+                block = block.next()
         self.verticalScrollBar().setValue(0)
 
     def resizeEvent(self, event) -> None:
@@ -565,7 +578,18 @@ class NoteBody(QTextEdit):
             return
         want = heading.strip().lower()
         at = 0
+        # ★ `[[글#^이름]]` 은 소제목이 아니라 **줄 끝 블록 이름**이다. `#` 줄만 찾으면 맨 위에 떨어졌다.
+        블록 = want[1:] if want.startswith("^") else ""
         for line in self.toPlainText().splitlines():
+            if 블록:
+                m = notes.BLOCK_RE.search(line)
+                if m and m.group(1).lower() == 블록:
+                    cur.setPosition(at)
+                    self.setTextCursor(cur)
+                    self.ensureCursorVisible()
+                    return
+                at += len(line) + 1
+                continue
             bare = line.lstrip("#").strip().lower()
             if bare == want and line.lstrip().startswith("#"):
                 cur.setPosition(at)
@@ -1658,6 +1682,16 @@ def _self_check() -> None:
     assert "지난달" not in 글, "다른 토막까지 펼쳤다"
     assert 글.count("정산 끝") == 1, "펼친 속을 또 펼쳤다 — 서로 끼우면 끝없이 돈다"
     assert "없는글" in NoteView(find_file=lambda n: None, find_note=몸들.get).to_markdown("![[없는글]]"),         "없는 글을 끼우면 고리표라도 남아야 한다"
+
+    # ★ **`[[글#^이름]]` 으로 가면 그 줄로 가야 한다.** 편집기는 `#` 소제목만 찾아 맨 위에 떨어졌다.
+    쓸몸 = NoteBody()
+    쓸몸.setPlainText("첫 줄" + chr(10) * 30 + "여기가 답이다. ^답칸" + chr(10) + "끝")
+    쓸몸.go_to_heading("^답칸")
+    assert 쓸몸.textCursor().block().text().startswith("여기가 답"), "블록 이름으로 그 줄에 안 간다(편집기)"
+    읽몸 = NoteView(find_file=lambda n: None)
+    읽몸.setMarkdown("첫 줄" + chr(10) * 2 + "- 둘째 항목 이다" + chr(10) * 2 + "끝")
+    읽몸.go_to_heading("둘째 항목")
+    assert 읽몸.textCursor().block().text().strip().startswith("둘째 항목"), "읽기 화면이 덩이 첫 줄로 안 간다"
 
     print("panels self-check 통과")
 

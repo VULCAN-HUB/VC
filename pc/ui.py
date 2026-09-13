@@ -1600,7 +1600,19 @@ class MainWindow(QWidget):
             return
         self.show_note(hit)
         if heading:
+            # ★ **보이는 쪽에서 옮긴다.** 편집기에서만 옮겨서 읽기 화면(기본)으로 열면 늘 맨 위였다.
+            읽기 = self.detail_stack.currentIndex() != 1
+            # 편집기 커서는 늘 옮긴다 — 고치기로 넘어가면 그 자리에서 이어 쓰게.
             self.detail_body.go_to_heading(heading)
+            box = self.detail_view if 읽기 else self.detail_body
+            want = heading
+            if 읽기 and heading.startswith("^"):
+                # 읽기 화면엔 블록 이름이 안 보인다 — 그 덩이 첫 줄 글자로 찾는다.
+                쪽 = self.notes.read(hit)
+                토막 = notes_module.block(쪽.body, heading) if 쪽 else ""
+                첫 = (토막.splitlines() or [""])[0].strip().lstrip("-*+ ").strip()
+                want = re.sub(r"[*_`~\[\]]", "", 첫)[:40] or heading
+            box.go_to_heading(want)
 
     def show_year(self, year: str) -> None:
         """그해에 처음 적은 것들을 늘어놓는다."""
