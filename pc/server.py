@@ -243,8 +243,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.server.notes.embed_one(path)
             self.server.notes._vec_cache = None
-        except Exception:
-            pass        # 벡터를 못 만들어도 저장은 끝났다
+        except Exception as e:
+            # 벡터를 못 만들어도 저장은 끝났다. 다만 **방금 쓴 글이 뜻으로 안 찾히는 것**이라 남긴다.
+            _알림(f"[뜻 벡터] 방금 쓴 글을 못 만들었다 — {type(e).__name__}: {e}")
         답 = {"title": title, "path": str(path), "mode": mode}
         # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
         #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
@@ -433,8 +434,9 @@ class Handler(BaseHTTPRequestHandler):
                                "사람에게 알려라(화면 「받을 모델」 칸, 296MB). "
                                "[잰 것] 같은 창고에서 찾은 물음 10 → 12.")),
                 }
-            except Exception:
-                pass        # 판을 못 만들어도 인사는 해야 한다
+            except Exception as e:
+                # 판을 못 만들어도 인사는 해야 한다. 다만 판이 빠진 인사는 AI 를 헛검색으로 이끈다 — 남긴다.
+                _알림(f"[인사 판 실패] {type(e).__name__}: {e}")
             return self._send(200, 몸)
 
         if url.path == "/eb/v1/memory/search":
@@ -1445,6 +1447,17 @@ def _self_check() -> None:
     안적힌 = [이름 for 이름 in 영문이름 if f"{이름}:" not in 판["how"]]
     assert not 안적힌, f"좁히는 이름이 안내에 없다 — 되는데 AI 가 모른다: {sorted(안적힌)}"
     assert "/정규식/" in 판["how"], "정규식 검색이 되는데 안내에 없다"
+    # ★ 인사의 창고 판을 못 만들면 인사는 하되 **기록에 남긴다** — 판 없는 인사는 AI 를 헛검색으로 이끈다.
+    _들은: list = []
+    _옛알림, _옛외딴 = globals()["_알림"], server.notes.외딴것수
+    globals()["_알림"] = _들은.append
+    server.notes.외딴것수 = lambda: 1 / 0
+    try:
+        _상태, _인사 = call("GET", "/eb/v1/hello")
+    finally:
+        globals()["_알림"], server.notes.외딴것수 = _옛알림, _옛외딴
+    assert _상태 == 200 and "store" not in _인사, (_상태, _인사.get("store"))
+    assert any("[인사 판 실패]" in 말 for 말 in _들은), f"인사 판 실패가 기록에 안 남는다: {_들은}"
     # ★★ **큰 뜻 모델이 없으면 그 사실을 AI 에게 말해야 한다.** 받으면 같은 창고에서
     #   찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개). AI 가 이걸 봐야
     #   사람에게 알려 줄 수 있다 — **있는 줄도 모르면 없는 것과 같다.**

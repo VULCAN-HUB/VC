@@ -1106,8 +1106,9 @@ class MainWindow(QWidget):
                 fn = self._waiting.pop(0)
                 try:
                     fn()
-                except Exception:
-                    pass   # 화면 조작 하나가 창을 죽이면 안 된다
+                except Exception as e:
+                    # 화면 조작 하나가 창을 죽이면 안 된다. 다만 누른 것이 **말없이 안 먹는** 자리라 남긴다.
+                    report.trail(f"[화면 조작 실패] {type(e).__name__}: {e}")
         finally:
             self._draining = False
 

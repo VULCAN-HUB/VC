@@ -1420,7 +1420,8 @@ class Notes:
             return
         try:
             width = len(_call_embed(embed, ["크기 재기"], "query: ")[0])
-        except Exception:
+        except Exception as e:
+            _알림(f"[뜻 벡터] 모델 폭을 못 재 뜻 검색을 끈다 — {type(e).__name__}: {e}")
             return        # 모델이 시원찮으면 뜻 검색만 꺼진다. 찾기는 살아야 한다
         # ★ **벡터를 통째로 버리면 말한다.** 모델 폭이 바뀌면 수천 장을 다시 만드는 몇 분짜리 일인데
         #   아무 표시가 없어, 그동안 뜻 검색이 약한 까닭을 알 길이 없었다.
@@ -1563,8 +1564,8 @@ class Notes:
             if 0 < 낡은수 <= max(k, 8):
                 while self.embed_some(8):
                     pass
-        except Exception:
-            pass        # 못 채워도 찾기는 돌아야 한다
+        except Exception as e:
+            _알림(f"[뜻 벡터] 찾기 전에 낡은 벡터를 못 채웠다 — {type(e).__name__}: {e}")   # 못 채워도 찾기는 돈다
         got = self._vectors()
         if got is None:
             return []
