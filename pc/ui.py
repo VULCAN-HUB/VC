@@ -320,7 +320,8 @@ class MainWindow(QWidget):
             + "좁히기 — kind:결정 · tag:이름 · year:2026 · path:2026/09 · title:이름(=file:)" + chr(10)
             + "빼기 — -kind:일 (잡담이 준다) · -낱말" + chr(10)
             + '"따옴표" 는 그 구절 그대로' + chr(10)
-            + "하나라도 — TODO OR FIXME (또는)")
+            + "하나라도 — TODO OR FIXME (또는)" + chr(10)
+            + "F1 — 단축키 모두 보기")
         self.ask_box.setObjectName("ask")
         self.ask_box.setFixedWidth(240)
         self.ask_box.returnPressed.connect(lambda: self.ask(self.ask_box.text()))
@@ -1076,31 +1077,51 @@ class MainWindow(QWidget):
         self._run_waiting()
 
     def _bind_keys(self) -> None:
-        """손이 마우스로 안 가게 한다. 하루에 수십 번 하는 것만 묶는다."""
-        for keys, act in (
-            ("Ctrl+O", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll())),
-            ("Ctrl+F", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll())),
-            ("Ctrl+E", self.toggle_edit),
-            ("Ctrl+N", self.new_note),
+        """손이 마우스로 안 가게 한다. 하루에 수십 번 하는 것만 묶는다.
+
+        ★★ **묶어 놓고 안 알려 주면 없는 것과 같다.** 단축키가 열네 개인데 사람이 알 길이
+        하나도 없었다(Ctrl+D·Alt+←·Ctrl+\ 를 누가 짐작하나). 표를 **한 자리**에 두고
+        묶기와 도움말(F1)이 같은 표를 읽는다 — 따로 적으면 반드시 어긋난다.
+        """
+        self.단축키표 = (
+            ("Ctrl+O", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll()), "찾기칸으로"),
+            ("Ctrl+F", lambda: (self.ask_box.setFocus(), self.ask_box.selectAll()), "찾기칸으로"),
+            ("Ctrl+E", self.toggle_edit, "읽기 ↔ 고치기"),
+            ("Ctrl+N", self.new_note, "새 글"),
             # 치는 대로 저장되지만 Ctrl+S를 누르는 손버릇은 안 없어진다. 눌리면
             # 기다리지 않고 그 자리에서 쓴다 — **아무 일도 안 일어나면 불안하다.**
-            ("Ctrl+S", self.save_note),
-            ("Ctrl+D", self.open_daily),
-            ("Alt+Left", self.go_back),
-            ("Alt+Right", self.go_forward),
-            ("Ctrl+\\", self.open_side_here),
+            ("Ctrl+S", self.save_note, "지금 저장"),
+            ("Ctrl+D", self.open_daily, "오늘 일지"),
+            ("Alt+Left", self.go_back, "뒤로"),
+            ("Alt+Right", self.go_forward, "앞으로"),
+            ("Ctrl+\\", self.open_side_here, "곁에 띄우기"),
             # ★ **글자 크기.** 옵시디언과 같은 손버릇이다. `Ctrl+=` 와 `Ctrl++` 둘 다 받는다
             #   — 자판에 따라 어느 쪽이 오는지 다르다.
-            ("Ctrl+=", lambda: self.글자키우기(0.1)),
-            ("Ctrl++", lambda: self.글자키우기(0.1)),
-            ("Ctrl+-", lambda: self.글자키우기(-0.1)),
-            ("Ctrl+0", lambda: self.글자키우기(0)),
-            ("Esc", self.escape),
-        ):
+            ("Ctrl+=", lambda: self.글자키우기(0.1), "글자 키우기"),
+            ("Ctrl++", lambda: self.글자키우기(0.1), "글자 키우기"),
+            ("Ctrl+-", lambda: self.글자키우기(-0.1), "글자 줄이기"),
+            ("Ctrl+0", lambda: self.글자키우기(0), "글자 제자리"),
+            # ※ 한글 이름 메서드를 `activated=` 에 곧장 넘기면 PyQt 가 이름을 ASCII 로 바꾸다 터진다.
+            ("F1", lambda: self.단축키보기(), "이 목록"),
+            ("Esc", self.escape, "닫기 · 목록 접기"),
+        )
+        for keys, act, _ in self.단축키표:
             QShortcut(QKeySequence(keys), self, activated=act)
         # **Esc 는 앱 전체에서 먼저 본다.** 목록이 뜬 동안 키가 어느 길로 오든
         # 우리가 먼저 잡는다 — 위 `eventFilter` 설명 참고.
         QApplication.instance().installEventFilter(self)
+
+    def 단축키글(self) -> str:
+        """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""
+        묶음: dict[str, list[str]] = {}
+        for keys, _, 설명 in self.단축키표:
+            묶음.setdefault(설명, []).append(keys)
+        return chr(10).join(f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items())
+
+    def 단축키보기(self) -> None:
+        box = QMessageBox(QMessageBox.NoIcon, "단축키", self.단축키글(), QMessageBox.NoButton, self)
+        box.addButton("닫는다", QMessageBox.RejectRole)
+        box.open()          # 창을 붙들지 않는다
 
     def 글자키우기(self, 만큼: float) -> None:
         """글자를 키우거나 줄인다. `만큼=0` 이면 제자리(1.0)로.
