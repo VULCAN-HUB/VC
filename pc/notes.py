@@ -791,6 +791,21 @@ _전각 = str.maketrans({"?": "？", ":": "：", "/": "／", "\\": "＼", "|": "
                       "*": "＊", '"': "＂", "<": "＜", ">": "＞"})
 
 
+def _알림(말: str) -> None:
+    """콘솔에 찍고 **기록 파일(vc-기록.log)에도** 남긴다.
+
+    ★ 구운 판은 콘솔이 없어(`--noconsole`) `print` 가 조용히 사라진다 — 색인을 깨짐으로 옆에 치웠다,
+    벡터를 통째로 버렸다 같은 알림을 **아무도 못 봤다.** `report` 는 여기서 늦게 불러 순환을 피한다.
+    """
+    print(말)
+    try:
+        import report
+
+        report.trail(말)
+    except Exception:
+        pass
+
+
 def 훑어내림(뿌리, 끝: tuple[str, ...] | None = None, 폴더도: bool = False):
     """뿌리 아래를 **안전하게** 내려간다. 연결 폴더(심볼릭·정션)와 점 폴더에는 안 들어간다.
 
@@ -1119,7 +1134,7 @@ class Notes:
                     자리.replace(Path(f"{index}.깨짐-{때}{곁}"))
                 except OSError:
                     pass
-        print(f"[색인] 깨져서 옆에 치우고 새로 만든다: {Path(str(index)).name} "
+        _알림(f"[색인] 깨져서 옆에 치우고 새로 만든다: {Path(str(index)).name} "
               f"({type(깨짐).__name__}: {깨짐})")
 
     def notes_files(self):
@@ -1331,7 +1346,7 @@ class Notes:
         #   아무 표시가 없어, 그동안 뜻 검색이 약한 까닭을 알 길이 없었다.
         if self.drop_vectors_if_changed(width):
             self.벡터버림수 = getattr(self, "벡터버림수", 0) + 1
-            print(f"[뜻 벡터] 모델 폭이 {width} 로 바뀌어 벡터를 통째로 다시 만든다")
+            _알림(f"[뜻 벡터] 모델 폭이 {width} 로 바뀌어 벡터를 통째로 다시 만든다")
         self._vec_cache = None
 
     def vec_left(self) -> int:
@@ -3008,6 +3023,23 @@ def _self_check() -> None:
             assert _m2.read("살아남을 글") is not None, "깨진 색인을 다시 만들지 못했다"
             assert list(Path(_깨진곳).glob("색인.db.깨짐-*")), "깨진 색인을 옆에 안 치웠다(지웠거나 덮었다)"
             _m2.conn.close()
+
+        # ★ **알림은 기록 파일에도 남아야 한다** — 구운 판은 콘솔이 없어 print 가 사라진다.
+        import os as _os5
+        import tempfile as _tf4
+
+        with _tf4.TemporaryDirectory() as _알곳:
+            _옛자리 = _os5.environ.get("VC_DATA")
+            _os5.environ["VC_DATA"] = _알곳
+            try:
+                _알림("시험 알림 한 줄")
+                _로그 = Path(_알곳) / "vc-기록.log"
+                assert _로그.exists() and "시험 알림 한 줄" in _로그.read_text(encoding="utf-8"),                     "알림이 기록 파일에 안 남는다(구운 판에서는 아무도 못 본다)"
+            finally:
+                if _옛자리 is None:
+                    _os5.environ.pop("VC_DATA", None)
+                else:
+                    _os5.environ["VC_DATA"] = _옛자리
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.

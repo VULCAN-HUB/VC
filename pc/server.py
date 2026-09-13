@@ -55,6 +55,17 @@ MAX_HITS_BRIEF = 200
 MAX_NOTE_CHARS = 20000
 
 
+def _알림(말: str) -> None:
+    """콘솔에 찍고 **기록 파일에도** 남긴다 — 구운 판은 콘솔이 없어 `print` 가 사라진다."""
+    print(말)
+    try:
+        import report
+
+        report.trail(말)
+    except Exception:
+        pass
+
+
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     """설정이 없으면 페어링 토큰을 만들어 저장한다. 이 토큰이 QR에 실린다(결정 16)."""
     if path.exists():
@@ -70,7 +81,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
                 path.replace(path.with_name(f"{path.name}.깨짐-{time.strftime('%Y%m%d-%H%M%S')}"))
             except OSError:
                 pass
-            print(f"[설정] 깨져서 옆에 치우고 새로 만든다 ({type(깨짐).__name__}) — 폰은 다시 짝지어야 한다")
+            _알림(f"[설정] 깨져서 옆에 치우고 새로 만든다 ({type(깨짐).__name__}) — 폰은 다시 짝지어야 한다")
         else:
             if not isinstance(cfg.get("pair_token"), str) or not cfg.get("pair_token"):
                 cfg["pair_token"] = secrets.token_urlsafe(32)
@@ -224,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
             # ★ **예상 못 한 예외도 답은 한다.** 새로 넣은 조회에서 SQL 이 틀렸을 때 서버가
             #   답도 없이 연결을 끊었다 — 부르는 쪽은 무엇이 틀렸는지 모른다. 이름만 알려 준다.
             # ★ 경로만 찍는다 — 브라우저 링크는 `?t=토큰` 을 달고 오므로 통째로 찍으면 열쇠가 샌다.
-            print(f"[서버] GET {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            _알림(f"[서버] GET {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _get(self) -> None:
@@ -568,7 +579,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "where": str(막힘),
                                     "hint": "읽기 전용이거나 잠겼거나 자리가 없다"})
         except Exception as 뜻밖:
-            print(f"[서버] POST {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            _알림(f"[서버] POST {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _post(self) -> None:
@@ -1048,11 +1059,11 @@ class EBServer(ThreadingHTTPServer):
                         self.downloader.progress.state = "idle"
                         model_dir = (self.cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
                         self.picked = models_config.resolve(self.cfg, model_dir)
-                        print("[모델] 새로 받은 것을 목록에 넣었다")
+                        _알림("[모델] 새로 받은 것을 목록에 넣었다")
                     if sweep is not None and sweep():
-                        print("[엔진] 놀아서 모델을 내렸다")
+                        _알림("[엔진] 놀아서 모델을 내렸다")
                 except Exception as e:  # 청소가 실패해도 서버는 계속 떠 있어야 한다
-                    print(f"[청소 실패] {e}")
+                    _알림(f"[청소 실패] {e}")
 
         threading.Thread(target=loop, daemon=True).start()
 
@@ -1150,7 +1161,7 @@ class EBServer(ThreadingHTTPServer):
                 try:
                     self.analyze()
                 except Exception as e:  # 분석이 실패해도 서버는 계속 떠 있어야 한다
-                    print(f"[분석 실패] {e}")
+                    _알림(f"[분석 실패] {e}")
 
         threading.Thread(target=loop, daemon=True).start()
 

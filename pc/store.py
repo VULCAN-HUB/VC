@@ -80,6 +80,12 @@ class Store:
                         except OSError:
                             pass
             print(f"[기록] 깨져서 옆에 치우고 새로 연다: {Path(str(path)).name} ({type(깨짐).__name__})")
+            try:
+                import report
+
+                report.trail(f"[기록] 깨져서 옆에 치우고 새로 연다: {Path(str(path)).name}")
+            except Exception:
+                pass
             self._열기(path)
 
     def _열기(self, path) -> None:
