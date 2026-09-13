@@ -235,12 +235,20 @@ def 훑기(뿌리: str | Path, 끝: tuple[str, ...] = (".md", ".txt")) -> list[P
                   if not 남의것.search(str(p.relative_to(뿌리))))
 
 
-def 읽기(p: Path) -> str:
-    """어떤 인코딩으로 적혔든 읽는다. 못 읽으면 빈 글 — 한 파일 때문에 안 멈춘다."""
+def 읽기(p: Path) -> str | None:
+    """어떤 인코딩으로 적혔든 읽는다. 글자로 못 풀면 빈 글, **열 수조차 없으면 `None`**.
+
+    ★ 전에는 잠긴 파일·권한 없는 파일도 빈 글로 돌려 셈에 「빈 파일」로 찍혔다 — 사람은
+    「비어 있구나」 하고 넘어가는데 실은 **못 읽은 것**이다. 한 파일 때문에 멈추지는 않는다.
+    """
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return None
     for enc in ("utf-8-sig", "utf-8", "cp949"):
         try:
-            return p.read_text(encoding=enc)
-        except (UnicodeDecodeError, OSError):
+            return raw.decode(enc)
+        except UnicodeDecodeError:
             continue
     return ""
 
@@ -262,6 +270,10 @@ def 들일것(뿌리: str | Path, 이미: set[str] | None = None) -> tuple[list[
     s = 셈()
     for p in 훑기(뿌리):
         raw = 읽기(p)
+        if raw is None:
+            s.본것 += 1
+            s.버림("못 읽음(잠김·권한)")
+            continue
         if not raw.strip():
             s.본것 += 1
             s.버림("빈 파일")
@@ -399,6 +411,18 @@ def _self_check() -> None:
         # 원본은 그 자리에 그대로 있다. 옮기면 두 벌이 되고 어느 쪽이 참인지 모른다.
         assert (뿌리 / "내글.md").exists(), "원본을 건드렸다"
 
+    # ★ 열 수 없는 파일은 「빈 파일」이 아니라 「못 읽음」으로 센다 — 사람이 비었다고 넘겨짚지 않게.
+    import tempfile as _tf6
+    with _tf6.TemporaryDirectory() as _곳:
+        assert 읽기(Path(_곳)) is None, "폴더(열 수 없는 것)를 읽었다고 한다"
+        (Path(_곳) / "잠긴.md").write_text("몸이 충분히 길어서 짧다고 안 버려질 글이다 몸이 충분히 길다", encoding="utf-8")
+        _진짜읽기 = globals()["읽기"]
+        globals()["읽기"] = lambda _p: None
+        try:
+            _, _셈 = 들일것(_곳)
+        finally:
+            globals()["읽기"] = _진짜읽기
+        assert _셈.버린것.get("못 읽음(잠김·권한)") == 1 and "빈 파일" not in _셈.버린것, f"못 읽은 것을 빈 파일로 센다: {_셈}"
     print("ingest self-check 통과")
 
 
