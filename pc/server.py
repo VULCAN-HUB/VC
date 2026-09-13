@@ -643,6 +643,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass        # 벡터를 못 만들어도 저장은 끝났다
             답 = {"title": title, "path": str(path), "mode": mode}
+            # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
+            #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
+            if (저장제목 := notes.제목맞춤(title)) != title:
+                답["saved_as"] = 저장제목
             # ★★ **그물이 안 자란다.** 오너 창고는 2820장 중 2700장(95%)이 아무 데도 안
             #   이어져 있고 `/eb/v1/graph` 가 13자다 — AI 가 글을 부을 뿐 잇지 않기 때문이다.
             #   이어지지 않은 글은 뜻 검색 말고는 닿을 길이 없다.

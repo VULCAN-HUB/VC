@@ -571,9 +571,16 @@ def parse_links(body: str) -> list[tuple[str, str]]:
 
     첨부(`![[사진.png]]`)는 뺀다 — 항목이 아니라 파일이다.
     """
-    return [(m.group(1).strip(), (m.group(2) or "").strip())
+    # ponytail: 경로 구분자(/ \)는 안 바꾼다 — 「A/B」 제목으로 건 링크는 resolve 가 잡지만
+    #   역링크 목록에서는 빠진다. 그런 제목이 흔해지면 링크 표에 맞춘 꼴을 따로 둔다.
+    return [(_링크맞춤(m.group(1).strip()), (m.group(2) or "").strip())
             for m in LINK_RE.finditer(body)
             if m.group(1).strip() and not is_attachment(m.group(1).strip())]
+
+
+def _링크맞춤(이름: str) -> str:
+    return unicodedata.normalize("NFC", 이름).translate(
+        {k: v for k, v in _전각.items() if chr(k) not in "/\\"})
 
 
 def parse_attachments(body: str) -> list[str]:
@@ -778,6 +785,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+# 파일 이름에 못 쓰는 글자를 **모양이 같은 전각 글자**로 바꾼다. 옵시디언은 이 글자들을 제목에서
+# 아예 막는다. 우리는 막지 않고 바꾼다 — AI 는 「질문? 답」 같은 제목을 흔히 짓는다.
+_전각 = str.maketrans({"?": "？", ":": "：", "/": "／", "\\": "＼", "|": "｜",
+                      "*": "＊", '"': "＂", "<": "＜", ">": "＞"})
+
+
+def 제목맞춤(title: str) -> str:
+    """제목을 **한 꼴**로 모은다 — NFC(맥 한글) + 파일에 못 쓰는 글자는 전각으로.
+
+    ★★ 전에는 못 쓰는 글자를 `-` 로 바꿨다. 그러자 ① 「질문? 답」이 「질문- 답」으로 저장돼
+    **`[[질문? 답]]` 링크가 끊겼고** ② 「질문? 답」과 「질문: 답」이 **같은 파일로 서로 덮였다.**
+    전각은 뜻이 그대로 보이고 서로 안 겹친다. 제목을 받는 모든 자리가 이것을 거친다.
+    """
+    return unicodedata.normalize("NFC", title).translate(_전각)
+
+
 def safe_title(title: str) -> str:
     """제목을 파일명으로 쓴다. 옵시디언에서 [[제목]]으로 이어지려면 이름이 곧 식별자다.
 
@@ -787,7 +810,7 @@ def safe_title(title: str) -> str:
     그래서 **자를 때만** 제목 지문 여섯 자를 꼬리로 붙인다 — 안 자르는 제목은 그대로다
     (기존 파일 이름이 바뀌면 옵시디언 링크가 끊긴다).
     """
-    cleaned = UNSAFE.sub("-", title).strip().strip(".")
+    cleaned = UNSAFE.sub("-", 제목맞춤(title)).strip().strip(".")
     if len(cleaned) > 80:
         지문 = hashlib.sha256(title.encode("utf-8")).hexdigest()[:6]
         return cleaned[:73].rstrip() + "~" + 지문
@@ -918,7 +941,7 @@ class Note:
         #   `[[회의록]]` 링크가 파일이 있는데도 「아직 없는 것」으로 셌다. 오너의 맥이 오면
         #   같은 볼트를 두 기계가 나눠 쓴다. **읽는 첫 자리에서 NFC 로 모은다**
         #   (파일은 우리가 다시 쓸 때까지 그대로다).
-        title = unicodedata.normalize("NFC", title)
+        title = 제목맞춤(title)
         raw = unicodedata.normalize("NFC", raw)
         m = FRONTMATTER_RE.match(raw)
         if not m:
@@ -1477,7 +1500,7 @@ class Notes:
         옵시디언도 버거워진다. 훑는 속도는 폴더를 나눠도 같지만(실측), 사람이 열어
         볼 때가 다르다.
         """
-        title = unicodedata.normalize("NFC", title)   # 맥(NFD)에서 친 제목도 같게
+        title = 제목맞춤(title)   # 맥(NFD)·못 쓰는 글자를 한 꼴로
         row = self.conn.execute(
             "SELECT path FROM notes WHERE title = ? ORDER BY mtime DESC LIMIT 1",
             (title,)).fetchone()
@@ -1489,6 +1512,18 @@ class Notes:
         folder.mkdir(parents=True, exist_ok=True)
         이름 = safe_title(title)
         자리 = folder / f"{이름}.md"
+        # ★ **옛 판이 `-` 로 바꿔 저장한 파일**을 버리지 않는다. 그 파일은 이미 「질문- 답.md」로
+        #   있고 색인 제목도 그렇다 — 새 규칙으로만 찾으면 **있는 글이 안 열린다.**
+        #   ※ 여기 올 때 제목은 이미 전각으로 맞춰져 있다 — **되돌린 뒤에** 옛 규칙을 입혀야 한다.
+        옛이름 = UNSAFE.sub("-", title.translate({ord(v): k for k, v in
+                                                  ((chr(a), b) for a, b in _전각.items())})
+                          ).strip().strip(".")[:80]
+        if 옛이름 != 이름:
+            옛줄 = self.conn.execute(
+                "SELECT path FROM notes WHERE title = ? ORDER BY mtime DESC LIMIT 1",
+                (옛이름,)).fetchone()
+            if 옛줄 and Path(옛줄["path"]).exists():
+                return Path(옛줄["path"])
         # ★★ **대소문자만 다른 제목이 서로를 조용히 덮었다.** 윈도우 파일 이름은
         #   대소문자를 안 가려서 `Alpha` 와 `alpha` 가 같은 파일이 된다 — 재 보니
         #   먼저 쓴 것이 사라졌다(둘 다 읽으면 나중 몸이 나왔다). 아무 말도 안 나온다.
@@ -1590,7 +1625,7 @@ class Notes:
         return [Path(r["path"]) for r in rows] if len(rows) > 1 else []
 
     def read(self, title: str) -> Note | None:
-        title = unicodedata.normalize("NFC", title)   # 맥(NFD)에서 친 제목도 같게
+        title = 제목맞춤(title)   # 맥(NFD)·못 쓰는 글자를 한 꼴로
         path = self.path_of(title)
         if not path.exists():
             # ★★ **별칭으로도 열려야 한다.** 옵시디언은 `aliases` 로 글이 열리는데
@@ -1852,7 +1887,7 @@ class Notes:
         "경로": lambda v: "%" + v.replace("/", chr(92)) + "%",
         "종류": lambda v: v,
         "해": lambda v: v,
-        "제목": lambda v: "%" + v + "%",
+        "제목": lambda v: "%" + 제목맞춤(v) + "%",
     }
 
     def _narrow_sql(self, narrow: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
@@ -2072,6 +2107,7 @@ class Notes:
 
         새 이름이 이미 있으면 안 바꾼다 — 덮어쓰면 기록이 사라진다.
         """
+        old, new = 제목맞춤(old), 제목맞춤(new)
         note = self.read(old)
         if note is None or self.read(new) is not None:
             return False
@@ -2120,7 +2156,7 @@ class Notes:
         #   같은 정규식(`LINK_RE`)으로 바꾼다 — 찾는 쪽과 고치는 쪽이 갈리면 또 새 나간다.
         def 바꿔(m: "re.Match") -> str:
             이름, 소제목, 보일 = m.group(1), m.group(2), m.group(3)
-            if 이름.strip() != old:
+            if 제목맞춤(이름.strip()) != 제목맞춤(old):
                 return m.group(0)
             끼움 = "!" if m.group(0).startswith("!") else ""
             안 = new + (f"#{소제목}" if 소제목 else "") + (f"|{보일}" if 보일 else "")
@@ -2168,6 +2204,10 @@ class Notes:
         """
         if self.conn.execute("SELECT 1 FROM notes WHERE title = ?", (name,)).fetchone():
             return name
+        맞춘 = 제목맞춤(name)
+        if 맞춘 != name and self.conn.execute(
+                "SELECT 1 FROM notes WHERE title = ?", (맞춘,)).fetchone():
+            return 맞춘
         row = self.conn.execute("SELECT title FROM aliases WHERE alias = ?", (name,)).fetchone()
         if row:
             return row["title"]
@@ -2181,6 +2221,7 @@ class Notes:
 
     def _names(self, title: str) -> list[str]:
         """이 항목을 가리킬 수 있는 모든 이름 — 제목과 별칭들."""
+        title = 제목맞춤(title)
         alias = [r["alias"] for r in self.conn.execute(
             "SELECT alias FROM aliases WHERE title = ?", (title,))]
         return [title, *alias]
@@ -2192,6 +2233,7 @@ class Notes:
         따로 떨어진 점으로 보이면 그래프가 두 배로 부푼다. 아직 없는 항목을 가리키는
         링크(미해결)는 여기서 뺀다 — 없는 것과 이을 수는 없다.
         """
+        title = 제목맞춤(title)
         out = set()
         for r in self.conn.execute("SELECT dst FROM links WHERE src = ?", (title,)):
             hit = self.resolve(r["dst"])
@@ -2212,6 +2254,7 @@ class Notes:
 
         별칭으로 부른 것도 같이 잡는다. 문장은 그 링크가 실제로 놓인 줄을 준다.
         """
+        title = 제목맞춤(title)
         names = set(self._names(title))
         holes = ",".join("?" * len(names))
         out = []
@@ -2751,6 +2794,20 @@ def _self_check() -> None:
         assert n.read("맥회의록") is not None, "맥에서 온 한글 제목 글이 안 열린다"
         assert "맥회의록" in [r["title"] for r in n.search("맥에서")], "맥에서 온 한글 본문이 안 찾힌다"
         assert "맥회의록" not in dict(n.unresolved()), "파일이 있는데 링크를 「아직 없는 것」으로 센다"
+
+        # ★★ **파일에 못 쓰는 글자가 든 제목.** 전에는 `-` 로 바꿔 「질문? 답」 링크가 끊겼고,
+        #   「질문? 답」과 「질문: 답」이 같은 파일로 서로 덮였다.
+        n.write(Note(title="질문? 답", body="물음표 몸"))
+        n.write(Note(title="질문: 답", body="쌍점 몸"))
+        assert n.read("질문? 답").body.startswith("물음표"), "못 쓰는 글자 제목끼리 서로 덮는다"
+        assert n.read("질문: 답").body.startswith("쌍점"), "못 쓰는 글자 제목끼리 서로 덮는다"
+        n.write(Note(title="물음 가리킴", body="[[질문? 답]] 본다"))
+        assert "질문？ 답" not in dict(n.unresolved()) and "질문? 답" not in dict(n.unresolved()),             f"못 쓰는 글자 제목으로 건 링크가 끊겼다: {n.unresolved()}"
+        assert "물음 가리킴" in [t for t, _ in n.backlinks("질문? 답")], "역링크가 안 잡힌다"
+        # 옛 판이 `-` 로 저장한 파일도 그 제목으로 열려야 한다.
+        (n.root / "옛- 제목.md").write_text("옛 판이 쓴 몸", encoding="utf-8")
+        n.reindex()
+        assert (n.read("옛? 제목") or Note(title="", body="")).body.startswith("옛 판"),             "옛 판이 `-` 로 저장한 글이 원래 제목으로 안 열린다"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
