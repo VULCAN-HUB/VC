@@ -40,6 +40,7 @@ from modules import build_modules
 from notes import Notes
 from orchestrator import Orchestrator
 from skills import SkillStore
+import keystore
 from store import Store
 
 CONFIG_PATH = paths.config_path()
@@ -83,8 +84,15 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
                 pass
             _알림(f"[설정] 깨져서 옆에 치우고 새로 만든다 ({type(깨짐).__name__}) — 폰은 다시 짝지어야 한다")
         else:
+            바꿈 = False
             if not isinstance(cfg.get("pair_token"), str) or not cfg.get("pair_token"):
                 cfg["pair_token"] = secrets.token_urlsafe(32)
+                바꿈 = True
+            # ★★ 바깥 AI 키가 평문으로 있으면 운영체제 보관소로 옮기고 설정에서는 지운다(오너 결정 1).
+            #   설정 파일은 진단 묶음·백업·동기화로 쉽게 밖에 나간다. 못 옮기면 그대로 둔다(키를 잃지 않게).
+            if isinstance(cfg.get("backend"), dict) and keystore.평문키옮기기(cfg["backend"]):
+                바꿈 = True
+            if 바꿈:
                 path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
             return cfg
     cfg = {
@@ -1719,6 +1727,21 @@ def _self_check() -> None:
         assert list(Path(_설곳).glob("eb_config.json.깨짐-*")), "깨진 설정을 옆에 안 치웠다"
         _설.write_text(json.dumps({"backend": {"kind": "local"}}), encoding="utf-8")
         assert load_config(_설).get("pair_token"), "열쇠가 빠진 설정에 열쇠를 안 채운다"
+        # ★★ 평문 API 키는 운영체제 보관소로 옮기고 설정 파일에서는 지운다(오너 결정 1).
+        #   ※ 시험 종류 이름을 따로 쓴다 — `anthropic` 으로 재면 사람이 넣어 둔 진짜 키를 덮는다.
+        if keystore.available():
+            _가짜 = "sk-시험-" + secrets.token_hex(8)
+            _뒤 = {"kind": "시험종류-" + secrets.token_hex(4), "api_key": _가짜}
+            try:
+                _설.write_text(json.dumps({"pair_token": "t", "backend": _뒤}), encoding="utf-8")
+                _읽음 = load_config(_설)
+                # 글자로 찾으면 안 된다 — json 이 한글을 \uXXXX 로 적어 늘 「없다」가 된다. 읽어서 본다.
+                assert "api_key" not in json.loads(_설.read_text(encoding="utf-8"))["backend"], \
+                    "평문 API 키가 설정 파일에 남는다"
+                assert _읽음["backend"].get("api_key_in") == "keystore", _읽음
+                assert keystore.키꺼내기(_읽음["backend"]) == _가짜, "옮긴 키를 못 꺼낸다"
+            finally:
+                keystore.delete(keystore.키이름(_뒤))
 
     # ★ **못 쓰면 못 썼다고 말해야 한다.** 읽기 전용 파일에서 `WriteBlocked` 가 그대로
     #   새 나가 서버가 답도 없이 연결을 끊었다 — AI 는 성공인지 실패인지도 모른다.

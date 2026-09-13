@@ -116,7 +116,7 @@ a = Analysis(
         "graph3d", "logo", "store", "talklog", "orchestrator", "modules",
         "skills", "engine", "backends", "remote", "phone_relay",
         "product_search", "models_config", "model_store", "eb_protocol",
-        "ingest", "gate", "settings",
+        "ingest", "gate", "settings", "keystore",
     ] + ort_hidden + llama_hidden,
     hookspath=[],
     runtime_hooks=[],

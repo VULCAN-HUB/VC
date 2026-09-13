@@ -194,12 +194,15 @@ def build(cfg: dict[str, Any]) -> Backend:
         from engine import LocalEngine
 
         return LocalEngine(**{k: v for k, v in cfg.items() if k != "kind"})
+    import keystore
+
+    # 키는 설정의 평문이 아니라 운영체제 보관소에 산다(오너 결정 1). 평문이 남아 있으면 그것을 쓴다.
     if kind == "openai_compatible":
-        return OpenAICompatible(cfg["base_url"], cfg.get("api_key", ""))
+        return OpenAICompatible(cfg["base_url"], keystore.키꺼내기(cfg))
     if kind == "anthropic":
-        return Anthropic(cfg["api_key"])
+        return Anthropic(keystore.키꺼내기(cfg))
     if kind == "gemini":
-        return Gemini(cfg["api_key"])
+        return Gemini(keystore.키꺼내기(cfg))
     raise ValueError(f"모르는 백엔드 종류: {kind}")
 
 
@@ -254,6 +257,18 @@ def _self_check() -> None:
             ({"kind": "gemini", "api_key": "k"}, Gemini),
         ):
             assert isinstance(build(cfg), cls)
+        # ★ 설정에 키가 없으면 운영체제 보관소에서 꺼낸다(오너 결정 1). 진짜 보관소는 안 건드린다.
+        import keystore
+
+        옛get, 옛있나 = keystore.get, keystore.available
+        keystore.get = lambda 이름: "보관소키" if 이름 == "backend:gemini" else None
+        keystore.available = lambda: True
+        try:
+            assert build({"kind": "gemini", "api_key_in": "keystore"}).api_key == "보관소키", \
+                "보관소로 옮긴 키를 어댑터가 못 받는다"
+            assert build({"kind": "gemini", "api_key": "평문"}).api_key == "평문"
+        finally:
+            keystore.get, keystore.available = 옛get, 옛있나
         try:
             build({"kind": "없는것"})
         except ValueError:
