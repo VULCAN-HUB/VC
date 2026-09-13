@@ -187,9 +187,17 @@ def open_dialog(win, notes: Notes):
                                  QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
                                  QVBoxLayout, QWidget)
 
+    import theme
+
     창 = QDialog(win)
     창.setWindowTitle("설정 · 내 정보")
     창.resize(640, 620)
+    # ★ 칸 이름(탭)을 테마 색으로 못 박는다 — 안 박으면 부모 창 색을 물려받아 **어두운 바탕에 어두운 글자**가 되고,
+    #   고른 칸은 흰 바탕에 옅은 글자라 거의 안 읽혔다(그려 보고 찾았다). 칸이 열다섯이라 이름이 안 보이면 못 고른다.
+    창.setStyleSheet(
+        f"QTabBar::tab {{ color: {theme.T.TEXT.name()}; background: {theme.css(theme.T.ACCENT, 0.06)};"
+        f" padding: 5px 10px; border: 1px solid {theme.css(theme.T.ACCENT, 0.18)}; }}"
+        f" QTabBar::tab:selected {{ color: {theme.T.BG.name()}; background: {theme.T.ACCENT.name()}; }}")
     판 = QTabWidget()
 
     화면 = QWidget()
