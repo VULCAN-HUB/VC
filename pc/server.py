@@ -1115,7 +1115,7 @@ def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
     server.start_housekeeping()
     server.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다
     print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
-    print(f"페어링 토큰: {cfg['pair_token']}")
+    print(f"페어링 열쇠: {paths.config_path()} 의 pair_token")   # 값은 안 찍는다(파일로 받으면 샌다)
     server.serve_forever()
 
 

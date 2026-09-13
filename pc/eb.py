@@ -289,7 +289,9 @@ def main(argv: list[str] | None = None) -> int:
     if want_server and not server_alive():
         start_server(cfg)
         print(f"VC 서버 {HOST}:{PORT} (프로토콜 {srv.PROTOCOL_VERSION})")
-        print(f"페어링 토큰: {cfg['pair_token']}")
+        # ★ **토큰 값은 찍지 않는다 — 자리만 말한다.** stdout 을 파일로 받는 쓰임(`--no-ui > 기록`)이
+        #   있어 값을 찍으면 열쇠가 파일에 남는다. `--doctor` 와 같은 규칙이다(열쇠를 두 군데 두지 않는다).
+        print(f"페어링 열쇠: {paths.config_path()} 의 pair_token")
         # ★★ **열려 있다는 것을 말한다.** 시험하는 쪽이 방화벽 물음을 보고서야
         # 알았다 — 「모르는 새 열린다」가 문제였다. 막이는 있지만(토큰 없으면 401)
         # **같은 공유기의 다른 기기에서 닿는다는 사실 자체**를 쓰는 사람이 알아야 한다.
@@ -815,6 +817,16 @@ def _self_check() -> None:
     # ★ 열려 있는 자리를 말한다 — 「모르는 새 열린다」가 문제였다
     for 있어야, 몇, 까닭 in ((' 다른 기기에서도', 3, "듣는 자리를 안 알린다"),):
         assert not 소스있다 or 본문3.count(있어야) >= 몇, f"{까닭} ({본문3.count(있어야)}군데)"
+
+    # ★★ **토큰 값을 콘솔에 찍지 않는다.** 켤 때 `페어링 토큰: <값>` 을 찍어, stdout 을 파일로
+    #   받으면(시험 쪽이 실제로 그렇게 받았다) 열쇠가 파일에 남았다. 소스에 그 꼴이 다시 생기면 터진다.
+    #   (세는 글자를 조각으로 지어 이 줄이 제 몸을 세지 않게 한다.)
+    for _파일 in ("eb.py", "server.py"):
+        try:
+            _글 = pathlib.Path(__file__).with_name(_파일).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        assert (chr(123) + "cfg[" + chr(39) + "pair_token" + chr(39) + "]" + chr(125)) not in _글, f"{_파일} 이 토큰 값을 콘솔에 찍는다"
 
     # ★ 창고의 마지막 쓸모는 AI 가 꺼내 쓰는 것인데, 포트와 열쇠 자리가 어디에도 안 적혀
     #   있어 사람에게 물어야 했다. `--doctor` 가 그 한 줄을 적는지 본다.
