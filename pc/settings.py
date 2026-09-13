@@ -182,96 +182,170 @@ def toggle_full(win) -> str:
     return mode
 
 
+def _dialog_css(theme) -> str:
+    """설정 창 옷. 주 창과 같은 결(어두운 바탕 · 붉은 강조 · 모노 계기판 글씨)에 창만의 몇 줄을 더한다.
+
+    ★ 처음엔 윈도우 기본 탭·폼 그대로라 **이 창만 옛날 프로그램처럼** 보였다(오너: 「너무 올드하다」).
+    주 창의 `theme.stylesheet()` 를 그대로 입히고 목록·칸·콤보만 같은 말투로 맞춘다.
+    """
+    T, css, 글자, MONO = theme.T, theme.css, theme.글자, theme.MONO
+    return theme.stylesheet() + f"""
+        QDialog {{ background: {T.BG.name()}; }}
+        QFrame#hud {{ background: {css(T.ACCENT, 0.03)}; border: 1px solid {css(T.ACCENT, 0.14)};
+                      border-radius: 8px; }}
+        QListWidget#nav {{ background: transparent; border: none; outline: none;
+                           font-family: {MONO}; font-size:{글자(11)}; }}
+        QListWidget#nav::item {{ color: {css(T.DIM, 0.6)}; padding: 7px 10px; margin: 1px 0;
+                                 border-left: 2px solid transparent; }}
+        QListWidget#nav::item:hover {{ color: {T.TEXT.name()}; background: {css(T.ACCENT, 0.05)}; }}
+        QListWidget#nav::item:selected {{ color: {T.ACCENT.name()}; background: {css(T.ACCENT, 0.10)};
+                                          border-left: 2px solid {T.ACCENT.name()}; }}
+        QLabel#ask_label {{ color: {css(T.DIM, 0.62)}; font-family: {MONO}; font-size:{글자(10)};
+                            letter-spacing: 1px; padding-top: 4px; }}
+        QLineEdit#field {{ background: {css(T.ACCENT, 0.03)}; border: none;
+                           border-bottom: 1px solid {css(T.ACCENT, 0.18)}; border-radius: 0;
+                           padding: 5px 2px; color: {T.TEXT.name()}; font-size:{글자(12)}; }}
+        QLineEdit#field:focus {{ background: {css(T.ACCENT, 0.07)}; border-bottom: 1px solid {T.ACCENT.name()}; }}
+        QComboBox#pick {{ min-height: 22px; }}
+        QLabel#note {{ color: {css(T.DIM, 0.45)}; font-size:{글자(10)}; }}
+        QLabel#say {{ color: {T.TEXT.name()}; font-size:{글자(11)}; padding: 8px 12px;
+                      background: {css(T.ACCENT, 0.05)}; border-left: 2px solid {T.ACCENT.name()}; }}
+    """
+
+
 def open_dialog(win, notes: Notes):
-    from PyQt5.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-                                 QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
+    from PyQt5.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+                                 QListWidget, QPushButton, QScrollArea, QStackedWidget,
                                  QVBoxLayout, QWidget)
 
     import theme
 
     창 = QDialog(win)
     창.setWindowTitle("설정 · 내 정보")
-    창.resize(640, 620)
-    # ★ 칸 이름(탭)을 테마 색으로 못 박는다 — 안 박으면 부모 창 색을 물려받아 **어두운 바탕에 어두운 글자**가 되고,
-    #   고른 칸은 흰 바탕에 옅은 글자라 거의 안 읽혔다(그려 보고 찾았다). 칸이 열다섯이라 이름이 안 보이면 못 고른다.
-    창.setStyleSheet(
-        f"QTabBar::tab {{ color: {theme.T.TEXT.name()}; background: {theme.css(theme.T.ACCENT, 0.06)};"
-        f" padding: 5px 10px; border: 1px solid {theme.css(theme.T.ACCENT, 0.18)}; }}"
-        f" QTabBar::tab:selected {{ color: {theme.T.BG.name()}; background: {theme.T.ACCENT.name()}; }}")
-    판 = QTabWidget()
+    창.resize(760, 620)
+    창.setStyleSheet(_dialog_css(theme))
 
-    화면 = QWidget()
-    화면틀 = QFormLayout(화면)
+    # ── 왼쪽 목록 · 오른쪽 쪽. 갈래가 열다섯이라 위 탭 줄에 넣으면 이름이 잘리고 화살표로 넘겨야 했다.
+    창.목록 = QListWidget()
+    창.목록.setObjectName("nav")
+    창.목록.setFixedWidth(150)
+    창.쪽들 = QStackedWidget()
+    창.목록.currentRowChanged.connect(창.쪽들.setCurrentIndex)
+    창.갈래이름: list[str] = []
+
+    def 쪽(이름: str, 풀이: str) -> tuple[QVBoxLayout, QWidget]:
+        """소제목(`// 이름`) + 한 줄 설명 + 굴림 칸. 주 창 옆칸과 같은 꼴이다."""
+        속 = QWidget()
+        틀 = QVBoxLayout(속)
+        틀.setContentsMargins(18, 14, 18, 14)
+        틀.setSpacing(8)
+        틀.addWidget(theme.section(이름, 풀이))
+        굴림 = QScrollArea()
+        굴림.setWidgetResizable(True)
+        굴림.setFrameShape(QFrame.NoFrame)
+        굴림.setWidget(속)
+        창.쪽들.addWidget(굴림)
+        창.목록.addItem(이름)
+        창.갈래이름.append(이름)
+        return 틀, 속
+
+    def 줄(틀: QVBoxLayout, 이름: str, 칸) -> None:
+        말 = QLabel(이름)
+        말.setObjectName("ask_label")
+        틀.addWidget(말)
+        틀.addWidget(칸)
+
+    # ── 화면
+    화면틀, _ = 쪽("화면", "창 · 최대화 · 전체화면. F11 로 언제든 켜고 끈다.")
     창.방식 = QComboBox()
+    창.방식.setObjectName("pick")
     창.방식.addItems(MODES)
     지금 = "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
     창.방식.setCurrentText(paths.load_config().get("화면방식", 지금) if 지금 == "창" else 지금)
-    창.방식.setToolTip("F11 로 전체화면을 켜고 끈다")
-    화면틀.addRow("화면 방식", 창.방식)
-    판.addTab(화면, "화면")
+    줄(화면틀, "화면 방식", 창.방식)
+    화면틀.addStretch(1)
 
-    # 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
-    바깥 = QWidget()
-    바깥틀 = QFormLayout(바깥)
+    # ── 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
+    바깥틀, _ = 쪽("바깥 AI", "자체 엔진 대신 클라우드 모델을 쓴다. 키는 운영체제 보관소에 들어가고, 바꾸면 다시 켜야 적용된다.")
     쓰던 = paths.load_config().get("backend") or {}
     창.뒤종류 = QComboBox()
+    창.뒤종류.setObjectName("pick")
     for 이름, 보일 in BACKENDS.items():
         창.뒤종류.addItem(보일, 이름)
     창.뒤종류.setCurrentIndex(max(0, 창.뒤종류.findData(쓰던.get("kind", "local"))))
     창.뒤주소 = QLineEdit(쓰던.get("base_url", ""))
     창.뒤주소.setPlaceholderText("OpenAI 호환일 때만 — http://…/v1")
     창.뒤모델 = QLineEdit(쓰던.get("model", ""))
-    창.뒤모델.setPlaceholderText("바깥 AI 일 때 — 제공자의 모델 이름")
+    창.뒤모델.setPlaceholderText("제공자의 모델 이름")
     창.뒤키 = QLineEdit()
     창.뒤키.setEchoMode(QLineEdit.Password)
-    창.뒤키.setPlaceholderText("비워 두면 쓰던 키 그대로 · 운영체제 보관소에 넣는다")
-    바깥틀.addRow("종류", 창.뒤종류)
-    바깥틀.addRow("주소", 창.뒤주소)
-    바깥틀.addRow("모델", 창.뒤모델)
-    바깥틀.addRow("API 키", 창.뒤키)
-    바깥틀.addRow(QLabel("바깥 AI 를 바꾸면 VC 를 다시 켜야 적용된다."))
+    창.뒤키.setPlaceholderText("비워 두면 쓰던 키 그대로")
+    for 칸 in (창.뒤주소, 창.뒤모델, 창.뒤키):
+        칸.setObjectName("field")
+    for 이름, 칸 in (("종류", 창.뒤종류), ("주소", 창.뒤주소), ("모델", 창.뒤모델), ("API 키", 창.뒤키)):
+        줄(바깥틀, 이름, 칸)
+    바깥틀.addStretch(1)
     창.뒤처음 = (창.뒤종류.currentData(), 창.뒤주소.text(), 창.뒤모델.text())
-    판.addTab(바깥, "바깥 AI")
 
+    # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
     답, _ = from_body(옛.body if 옛 else "")
     창.칸들: dict[str, dict[str, QLineEdit]] = {}
 
     def 칸만들기(이름: str, 질문들: list[str]) -> None:
-        속 = QWidget()
-        틀 = QFormLayout(속)
+        틀, _속 = 쪽(이름, "비워 두면 안 적는다. 적은 것만 창고의 「나에 대해」 글로 남는다.")
         창.칸들[이름] = {}
+        꼬리 = QHBoxLayout()                       # 「내 질문 더하기」 — 늘 맨 아래
 
         def 줄더하기(q: str) -> None:
             if not q or q in 창.칸들[이름]:
                 return
             칸 = QLineEdit(답.get(이름, {}).get(q, ""))
-            칸.setPlaceholderText("비워 두면 안 적는다")
+            칸.setObjectName("field")
             창.칸들[이름][q] = 칸
-            틀.insertRow(틀.rowCount() - 1, q, 칸)
+            말 = QLabel(q)
+            말.setObjectName("ask_label")
+            자리 = 틀.indexOf(꼬리위젯)
+            틀.insertWidget(자리, 말)
+            틀.insertWidget(자리 + 1, 칸)
 
         새질문 = QLineEdit()
-        새질문.setPlaceholderText("내 질문 더하기")
+        새질문.setObjectName("field")
+        새질문.setPlaceholderText("+ 내 질문 더하기")
         더함 = QPushButton("더하기")
+        더함.setObjectName("quiet")
         더함.clicked.connect(lambda: (줄더하기(새질문.text().strip()), 새질문.clear()))
-        줄 = QHBoxLayout()
-        줄.addWidget(새질문, 1)
-        줄.addWidget(더함)
-        틀.addRow(줄)
+        꼬리.setContentsMargins(0, 10, 0, 0)
+        꼬리.addWidget(새질문, 1)
+        꼬리.addWidget(더함)
+        꼬리위젯 = QWidget()
+        꼬리위젯.setLayout(꼬리)
+        틀.addWidget(꼬리위젯)
+        틀.addStretch(1)
         for q in [*질문들, *[q for q in 답.get(이름, {}) if q not in 질문들]]:
             줄더하기(q)
         창.칸들[이름]["__더하기"] = 새질문
         창.칸들[이름]["__줄더하기"] = 줄더하기
-        굴림 = QScrollArea()
-        굴림.setWidgetResizable(True)
-        굴림.setWidget(속)
-        판.addTab(굴림, 이름)
 
     for 이름, 질문들 in QUESTIONS.items():
         칸만들기(이름, 질문들)
     for 이름 in 답:
         if 이름 not in QUESTIONS:
             칸만들기(이름, [])
+
+    def 셈다시() -> None:
+        """목록에 갈래마다 적은 수를 붙인다 — 어디를 채웠는지 한눈에 보인다."""
+        for i, 이름 in enumerate(창.갈래이름):
+            쌍 = {q: w for q, w in 창.칸들.get(이름, {}).items() if not q.startswith("__")}
+            적음 = sum(1 for w in 쌍.values() if w.text().strip())
+            창.목록.item(i).setText(f"{이름}  {적음}/{len(쌍)}" if 쌍 else 이름)
+
+    for 쌍 in 창.칸들.values():
+        for q, w in 쌍.items():
+            if not q.startswith("__"):
+                w.textChanged.connect(셈다시)
+    셈다시()
+    창.목록.setCurrentRow(0)
 
     def 저장() -> None:
         고친 = {칸: {q: w.text() for q, w in 쌍.items() if not q.startswith("__")}
@@ -297,18 +371,50 @@ def open_dialog(win, notes: Notes):
             return                              # 다시 켜야 한다는 말을 보게 창을 둔다
         창.accept()
 
-    단추 = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-    단추.button(QDialogButtonBox.Save).setText("저장")
-    단추.button(QDialogButtonBox.Cancel).setText("닫기")
-    단추.accepted.connect(저장)
-    단추.rejected.connect(창.reject)
     틀 = QVBoxLayout(창)
-    안내 = QLabel("내 정보는 창고의 「나에 대해」 글로 남는다. AI 가 꺼내 쓰고, 옵시디언에서 고쳐도 된다.")
-    안내.setWordWrap(True)
-    창.안내 = 안내
-    틀.addWidget(안내)
+    틀.setContentsMargins(18, 16, 18, 14)
+    틀.setSpacing(10)
+    틀.addWidget(theme.section("설정 · 내 정보", "내 정보는 창고의 「나에 대해」 글로 남는다. AI 가 꺼내 쓰고, 옵시디언에서 고쳐도 된다."))
+
+    판 = QFrame()
+    판.setObjectName("hud")
+    판틀 = QHBoxLayout(판)
+    판틀.setContentsMargins(8, 8, 8, 8)
+    판틀.setSpacing(0)
+    판틀.addWidget(창.목록)
+    판틀.addWidget(창.쪽들, 1)
     틀.addWidget(판, 1)
-    틀.addWidget(단추)
+
+    안내 = QLabel("")
+    안내.setObjectName("say")
+    안내.setWordWrap(True)
+    안내.hide()
+    창.안내 = 안내
+    원래setText = 안내.setText
+    안내.setText = lambda 글: (원래setText(글), 안내.setVisible(bool(글)))[0]   # 말할 게 있을 때만 띠를 띄운다
+
+    닫기 = QPushButton("닫기")
+    닫기.setObjectName("quiet")
+    닫기.clicked.connect(창.reject)
+    저장단추 = QPushButton("저장")
+    저장단추.setObjectName("primary")
+    저장단추.setDefault(True)
+    저장단추.setMinimumWidth(96)
+    저장단추.clicked.connect(저장)
+    틀.addWidget(안내)                            # 말할 게 있을 때만 뜨는 띠 — 단추 줄과 따로
+    단추줄 = QHBoxLayout()
+    단추줄.addStretch(1)                          # 단추는 오른쪽에 붙인다(늘어나지 않게)
+    단추줄.addWidget(닫기)
+    단추줄.addWidget(저장단추)
+    틀.addLayout(단추줄)
+
+    # 빈 칸 안내 글은 흐리게 — 스타일시트로는 못 바꿔서 팔레트로 준다. 안 하면 적은 값처럼 밝게 보였다.
+    from PyQt5.QtGui import QPalette
+
+    for 칸 in 창.findChildren(QLineEdit):
+        색 = 칸.palette()
+        색.setColor(QPalette.PlaceholderText, theme.rgba(theme.T.DIM, 90))
+        칸.setPalette(색)
     창.저장 = 저장
     창.open()
     return 창
