@@ -843,8 +843,10 @@ class Indexer(QThread):
             self.again = False
             try:
                 changed = self.notes.reindex()
-            except Exception:
+            except Exception as e:
                 changed = 0   # 훑다 실패해도 창이 죽으면 안 된다
+                # ★ 말없이 0 으로 넘기면 구운 판(콘솔 없음)에서는 **아무도 모른다** — 기록에 남긴다.
+                notes._알림(f"[색인 실 실패] 훑기 — {type(e).__name__}: {e}")
             self.done.emit(changed)
             self._build_meaning()
             if not self.again:
@@ -872,8 +874,9 @@ class Indexer(QThread):
                 if not pin_runtime():
                     return
                 got = onnx_embedder(self.model_dir, max_tokens=EMBED_TOKENS)
-            except Exception:
+            except Exception as e:
                 got = None
+                notes._알림(f"[색인 실 실패] 뜻 모델 올리기 — {type(e).__name__}: {e}")
             if got is None:
                 return
             self.notes.use_embedder(got)
@@ -882,7 +885,8 @@ class Indexer(QThread):
                 width = len(got(["크기 재기"], "query: ")[0])
                 if self.notes.drop_vectors_if_changed(width):
                     self.meaning.emit(self.notes.vec_left())
-            except Exception:
+            except Exception as e:
+                notes._알림(f"[색인 실 실패] 뜻 모델 폭 재기 — {type(e).__name__}: {e}")
                 return
             self.embedder.emit(got)
         if getattr(self.notes, "_embed", None) is None:
@@ -890,7 +894,8 @@ class Indexer(QThread):
         while not self.again:
             try:
                 got = self.notes.embed_some(8)
-            except Exception:
+            except Exception as e:
+                notes._알림(f"[색인 실 실패] 뜻 벡터 만들기 — {type(e).__name__}: {e}")
                 return   # 벡터를 못 만들어도 검색은 낱말로 돈다
             if not got:
                 break
@@ -1351,6 +1356,28 @@ def _self_check() -> None:
                          "declaration": '{"name": "집에 가기", "steps": [{"module": "navigate", "params": {"to": "집"}}]}'})
     _글 = _카드.steps_label.text()
     assert "navigate(to=집)" in _글 and "바깥" in _글, f"승인할 것이 카드에 안 보인다: {_글}"
+
+    # ★ 색인 실이 훑다 실패하면 기록 파일에 남는다 — 구운 판은 콘솔이 없어 말없이 넘기면 아무도 모른다.
+    import os as _os9
+    import tempfile as _tf9
+
+    with _tf9.TemporaryDirectory() as _곳:
+        _옛 = _os9.environ.get("VC_DATA")
+        _os9.environ["VC_DATA"] = _곳
+        try:
+            _색 = Indexer(notes.Notes(Path(_곳) / "notes", index_now=False), model_dir=str(Path(_곳) / "없는모델"))
+            _색.notes.reindex = lambda: 1 / 0
+            _색._embed_tried = True            # 모델 올리기는 건너뛴다(이 검사는 훑기 실패만 본다)
+            _색.run()
+            _기록길 = Path(_곳) / "vc-기록.log"
+            _기록 = _기록길.read_text(encoding="utf-8") if _기록길.exists() else ""
+            assert "[색인 실 실패] 훑기" in _기록, f"색인 실 실패가 기록에 안 남는다: {_기록[-200:]}"
+            _색.notes.conn.close()
+        finally:
+            if _옛 is None:
+                _os9.environ.pop("VC_DATA", None)
+            else:
+                _os9.environ["VC_DATA"] = _옛
 
     # ★★ **창은 서버에 걸 수 있어야 한다.** 자리를 아무도 안 넘기면 스스로 찾는다.
     # 예전 기본값은 빈 글자라 토큰을 못 읽었고, 토큰이 없으면 `call()` 이 아예
