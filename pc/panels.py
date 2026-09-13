@@ -1167,7 +1167,7 @@ class ServerLink:
         self.down_until = 0.0
         try:
             self.token = json.loads(Path(config).read_text(encoding="utf-8"))["pair_token"]
-        except (OSError, KeyError, json.JSONDecodeError):
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):   # 설정이 목록·글자로 망가져도 창은 뜬다
             pass  # 서버를 아직 한 번도 안 띄운 상태. 원격 칸만 비어 보인다
 
     QUIET_SEC = 5.0      # 실패한 뒤 이만큼은 안 건다
