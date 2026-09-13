@@ -1247,11 +1247,13 @@ if __name__ == "__main__":
                     continue
                 if f"스키마: {적는판}" in 머리:
                     continue
-                쪽 = n.read_at(str(길))
-                if 쪽 is None:
-                    continue
-                # `write` 가 앞머리를 끌어올리고 스키마를 박는다. 지난 판도 남긴다.
-                n.write(쪽, str(길))
+                # ★ 창고 전부를 읽고-다시-쓰는 길이라 켜 둔 VC 에 AI 가 쌓는 중일 수 있다 — 글마다 잠근다.
+                with n._글잠금(길.stem):
+                    쪽 = n.read_at(str(길))
+                    if 쪽 is None:
+                        continue
+                    # `write` 가 앞머리를 끌어올리고 스키마를 박는다. 지난 판도 남긴다.
+                    n.write(쪽, str(길))
                 고친것 += 1
             n.reindex()
             남 = sum(1 for 길 in n.notes_files()
