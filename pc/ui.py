@@ -1957,36 +1957,38 @@ class MainWindow(QWidget):
         """치는 대로 저장한다. 열린 항목이 없으면 아무 일도 안 한다."""
         if self.editing is None:
             return
-        note = self.notes.read_at(self.editing_at)
-        if note is None:
-            return
-        body = self.detail_body.toPlainText()
-        kind = self.detail_kind.currentData() or note.kind
-        if body == note.body.strip() and kind == note.kind:
-            return                      # 바뀐 게 없으면 파일을 안 건드린다
-        # **밖에서 바뀐 글을 말없이 덮지 않는다.** 열어 둔 사이 옵시디언이나 동기화가
-        # 고쳐 놨으면, 우리 글로 덮기 **전에** 그쪽을 한 판 남긴다 — 낯선 PC 에서
-        # 밖에서 온 줄이 파일에도 이력에도 없이 사라졌다(2/2 재현).
-        if note.body.strip() not in (getattr(self, "_opened_body", ""), body):
+        # 읽고-견주고-쓰기를 잠금 안에서 — 그 사이 AI 가 덧붙인 줄을 「밖에서 온 것」으로 못 보고 덮지 않게.
+        with self.notes._글잠금(self.editing):
+            note = self.notes.read_at(self.editing_at)
+            if note is None:
+                return
+            body = self.detail_body.toPlainText()
+            kind = self.detail_kind.currentData() or note.kind
+            if body == note.body.strip() and kind == note.kind:
+                return                      # 바뀐 게 없으면 파일을 안 건드린다
+            # **밖에서 바뀐 글을 말없이 덮지 않는다.** 열어 둔 사이 옵시디언이나 동기화가
+            # 고쳐 놨으면, 우리 글로 덮기 **전에** 그쪽을 한 판 남긴다 — 낯선 PC 에서
+            # 밖에서 온 줄이 파일에도 이력에도 없이 사라졌다(2/2 재현).
+            if note.body.strip() not in (getattr(self, "_opened_body", ""), body):
+                try:
+                    self.notes.keep_history(Path(self.editing_at),
+                                            read_text(Path(self.editing_at)), always=True)
+                    self.report(f"{orders.josa(note.title, '을/를')} 밖에서도 고쳤길래 "
+                                f"그쪽은 「지난 판」에 남겼어.",
+                                [note.title])
+                except (OSError, ValueError):
+                    pass
+            note.body, note.kind = body, kind
+            # 사람이 손댄 표시. AI가 나중에 통째로 덮어쓰려 하면 서버가 막는다.
+            note.edited_by = "사람"
+            self._wrote_at = time.monotonic()
             try:
-                self.notes.keep_history(Path(self.editing_at),
-                                        read_text(Path(self.editing_at)), always=True)
-                self.report(f"{orders.josa(note.title, '을/를')} 밖에서도 고쳤길래 "
-                            f"그쪽은 「지난 판」에 남겼어.",
-                            [note.title])
-            except (OSError, ValueError):
-                pass
-        note.body, note.kind = body, kind
-        # 사람이 손댄 표시. AI가 나중에 통째로 덮어쓰려 하면 서버가 막는다.
-        note.edited_by = "사람"
-        self._wrote_at = time.monotonic()
-        try:
-            self.notes.write(note, self.editing_at)
-        except WriteBlocked:
-            # 사람이 잠가 둔 파일이다. 글은 옆에 남았으니 어디 있는지 말해 준다.
-            self.report(f"'{note.title}' 파일이 잠겨 있어 못 썼어. "
-                        f"쓰던 글은 옆에 '(못 쓴 글)' 로 남겨 뒀어.", [note.title])
-            return
+                self.notes.write(note, self.editing_at)
+            except WriteBlocked:
+                # 사람이 잠가 둔 파일이다. 글은 옆에 남았으니 어디 있는지 말해 준다.
+                self.report(f"'{note.title}' 파일이 잠겨 있어 못 썼어. "
+                            f"쓰던 글은 옆에 '(못 쓴 글)' 로 남겨 뒀어.", [note.title])
+                return
         # **방금 쓴 것이 이제 「연 순간의 글」이다.** 안 고치면 두 번째 저장부터
         # 디스크에 있는 내 글이 `_opened_body`(맨 처음 것)와도 `body`(새로 친 것)와도
         # 달라서, **자기가 쓴 것을 남이 쓴 것으로 본다** — 낯선 PC 에서 아무도 안
@@ -2320,16 +2322,18 @@ class MainWindow(QWidget):
         """
         if self.editing is None:
             return
-        note = self.notes.read_at(self.editing_at)
-        if note is None:
-            return
-        out = flip_task(note.body, nth)
-        if out is None:
-            return
-        note.body, note.edited_by = out[0], "사람"
-        self._wrote_at = time.monotonic()
-        self.notes.write(note, self.editing_at)
-        # 보이는 것도 같이 바꾼다. 눌렀는데 그대로면 안 먹은 줄 안다.
+        # 뒤집고 쓰는 사이 덧붙인 줄이 이력 없이 사라지지 않게 잠근다.
+        with self.notes._글잠금(self.editing):
+            note = self.notes.read_at(self.editing_at)
+            if note is None:
+                return
+            out = flip_task(note.body, nth)
+            if out is None:
+                return
+            note.body, note.edited_by = out[0], "사람"
+            self._wrote_at = time.monotonic()
+            self.notes.write(note, self.editing_at)
+            # 보이는 것도 같이 바꾼다. 눌렀는데 그대로면 안 먹은 줄 안다.
         at = self.detail_view.verticalScrollBar().value()
         self.detail_view.show_note(note.body)
         self.detail_view.verticalScrollBar().setValue(at)

@@ -1287,11 +1287,13 @@ class Notes:
         old.title = title
         # **되돌리기 직전 글을 반드시 한 판 남긴다.** 5분 묶음에 먹히면 그 글이
         # 파일에도 이력에도 없어진다 — 낯선 PC 에서 실제로 4줄이 사라졌다.
-        try:
-            self.keep_history(path, read_text(path), always=True)
-        except (Vanished, OSError):
-            pass
-        self.write(old)
+        # 남기기와 쓰기 사이에 덧붙인 줄은 이력에도 파일에도 없게 된다 — 한 잠금 안에서.
+        with self._글잠금(title):
+            try:
+                self.keep_history(path, read_text(path), always=True)
+            except (Vanished, OSError):
+                pass
+            self.write(old)
         return True
 
     # --- 오늘 일지 · 서식 ------------------------------------------------
@@ -1303,13 +1305,15 @@ class Notes:
         한 폴더에 몰리지 않는다.
         """
         day = day or time.strftime("%Y-%m-%d")
-        got = self.read(day)
-        if got is not None:
-            return got
-        body = self.fill_slots(self.template("일지"), day) or f"# {day}" + chr(10)
-        note = Note(title=day, body=body, kind="note")
-        self.write(note)
-        return note
+        # 없나 보고 만드는 사이 AI 가 오늘 일지에 먼저 쌓으면 서식이 그 줄을 덮는다 — 잠금 안에서.
+        with self._글잠금(day):
+            got = self.read(day)
+            if got is not None:
+                return got
+            body = self.fill_slots(self.template("일지"), day) or f"# {day}" + chr(10)
+            note = Note(title=day, body=body, kind="note")
+            self.write(note)
+            return note
 
     # 이 저장소를 만지는 모두(사람·AI·나중에 붙을 무엇이든)가 읽을 규칙. 항목으로는
     # 안 세는 자리(`_서식`)에 둔다.
@@ -3175,6 +3179,17 @@ def _self_check() -> None:
         _실 = _th7.Thread(target=_겹쳐잡기, daemon=True); _실.start(); _실.join(5)
         assert not _실.is_alive(), "글 잠금을 쥔 채 덧붙이면 멈춘다(겹쳐 못 잡는다)"
         assert "겹쳐 잡은 줄" in n.read("가리키는 글").body
+        # 오늘 일지 만들기·지난 판 되돌리기도 읽고-쓰기라 글 잠금을 기다려야 한다.
+        n.keep_history(n.path_of("가리키는 글"), read_text(n.path_of("가리키는 글")), always=True)
+        _판 = n.history("가리키는 글")[0][1]
+        for _일, _인자 in ((n.daily, ("2031-01-02",)), (n.restore, ("가리키는 글", _판))):
+            _잠글 = _인자[0]
+            with n._글잠금(_잠글):
+                _실 = _th7.Thread(target=_일, args=_인자, daemon=True); _실.start()
+                _t8.sleep(0.4)
+                assert _실.is_alive(), f"{_일.__name__} 가 글 잠금을 안 기다린다"
+            _실.join(10)
+            assert not _실.is_alive()
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
