@@ -1433,6 +1433,12 @@ def run() -> None:
         assert 설명.strip(), f"설명 없는 단축키가 있다: {키}"
         assert 키 in 도움글, f"도움말에 {키} 가 없다"
     assert "F1" in win.ask_box.toolTip(), "단축키 보는 법(F1)을 안 알려 준다"
+    # 전체화면·설정 창으로 가는 길이 키와 「⋯」 둘 다 있어야 한다.
+    _키들 = {키 for 키, _, _ in win.단축키표}
+    assert {"F11", "Ctrl+,"} <= _키들, f"전체화면·설정 단축키가 없다: {_키들}"
+    win._build_more()
+    _차림 = [a.text() for a in win.more_menu.actions()]
+    assert any(t.startswith("설정") for t in _차림) and any(t.startswith("전체화면") for t in _차림), _차림
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

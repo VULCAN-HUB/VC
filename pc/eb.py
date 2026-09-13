@@ -356,7 +356,9 @@ def main(argv: list[str] | None = None) -> int:
     #   갈 데가 없다. 서버를 안 켰으면 아무 말도 안 한다.
     if want_server:
         win.열린자리알리기(HOST, PORT)
-    win.show()
+    import settings
+
+    settings.apply_screen(win, str(paths.load_config().get("화면방식", "창")))
     report.trail("창 떴다")
     if 화면상태:
         _화면상태재기(app, win)

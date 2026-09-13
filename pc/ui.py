@@ -33,6 +33,7 @@ from typing import Callable
 # 낡은 런타임을 DLL 찾는 자리 앞에 끼워 넣기 전에 해야 한다.
 import paths
 import report
+import settings
 import talklog
 
 from PyQt5.QtCore import QEvent, QFileSystemWatcher, QRectF, Qt, QThread, QTimer, pyqtSignal
@@ -1145,6 +1146,8 @@ class MainWindow(QWidget):
             ("Ctrl+0", lambda: self.글자키우기(0), "글자 제자리"),
             # ※ 한글 이름 메서드를 `activated=` 에 곧장 넘기면 PyQt 가 이름을 ASCII 로 바꾸다 터진다.
             ("F1", lambda: self.단축키보기(), "이 목록"),
+            ("F11", lambda: settings.toggle_full(self), "전체화면 켜고 끄기"),
+            ("Ctrl+,", lambda: settings.open_dialog(self, self.notes), "설정 · 내 정보"),
             ("Esc", self.escape, "닫기 · 목록 접기"),
         )
         for keys, act, _ in self.단축키표:
@@ -2210,6 +2213,9 @@ class MainWindow(QWidget):
             gone = self.more_menu.addAction("지우기", self.drop_note)
             gone.setToolTip("이 항목을 지운다. 파일이 사라진다")
         self.more_menu.addSeparator()
+        self.more_menu.addAction("설정 · 내 정보  (Ctrl+,)",
+                                 lambda: self._later(lambda: settings.open_dialog(self, self.notes)))
+        self.more_menu.addAction("전체화면  (F11)", lambda: settings.toggle_full(self))
         self.more_menu.addAction("문제 알리기 (진단 묶기)", self.make_report)
 
     def _put_template(self, name: str) -> None:

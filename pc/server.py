@@ -367,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
             #   ※ 좁히는 문법도 같이 적는다 — **아는 길을 안 알려 주면 없는 것과 같다.**
             #     (오너 지시 2026-09-12: 크레딧을 줄이는 것이 성능이다.)
             try:
+                import settings
+
                 c = self.server.notes.conn
                 갈래 = {r[0]: r[1] for r in c.execute(
                     "SELECT kind, count(*) FROM notes GROUP BY kind "
@@ -385,6 +387,9 @@ class Handler(BaseHTTPRequestHandler):
                     # ★ **안 이어진 글이 몇 장인가.** 오너 창고는 2820장 중 2700장(95%)이라
                     #   (링크는 선택이다 — 저장소 규칙 1조: 뜻 검색이 안 이은 글도 찾는다.)
                     "orphans": self.server.notes.외딴것수(),
+                    # ★ 사람이 설정에서 적은 「내 정보」 글. 고정하지 않으니 **제목을 알려 줘야** AI 가 찾아 편다.
+                    **({"me": settings.PROFILE_TITLE}
+                       if self.server.notes.read(settings.PROFILE_TITLE) is not None else {}),
                     # ★ 기록자리.txt 를 못 따라 기본 자리로 켰으면 AI 도 알아야 한다(창고가 비어 보인다).
                     **({"data_dir_warning": 쪽지} if (쪽지 := paths.적어둔자리문제()) else {}),
                     "tags": [r[0] for r in c.execute(
@@ -1317,6 +1322,12 @@ def _self_check() -> None:
     assert 인사글자 <= 1200, f"인사가 너무 커졌다: {인사글자}자 — 붙일 만한 값인지 재 봐라"
     assert "kinds" in 판 and "how" in 판, f"갈래나 쓰는 법이 빠졌다: {판}"
     assert "kind:" in 판["how"] and "k=" in 판["how"], f"좁히는 법을 안 알려 준다: {판['how']}"
+    # ★ 「내 정보」 글은 고정하지 않으니 인사가 제목을 알려 줘야 AI 가 편다. 없으면 안 싣는다.
+    assert "me" not in 판, f"내 정보 글이 없는데 me 를 싣는다: {판}"
+    server.notes.write(notes.Note(title="나에 대해", body="## 음식" + chr(10) + "- **좋아하는 음식**: 국수"))
+    _판2 = (call("GET", "/eb/v1/hello")[1] or {}).get("store") or {}
+    assert _판2.get("me") == "나에 대해", f"내 정보 글이 있는데 인사가 안 알려 준다: {_판2}"
+    server.notes.delete("나에 대해")
     # ★★ **안내가 실제 길과 어긋나면 AI 를 잘못 이끈다.** 새 길을 내고 `how` 를 안 고치면
     #   그 길은 없는 것과 같고(아무도 안 부른다), 없앤 길을 적어 두면 AI 가 헛걸음한다.
     #   그래서 **적힌 길은 다 실제로 돌아야 한다** — 여기서 한 번씩 불러 본다.
