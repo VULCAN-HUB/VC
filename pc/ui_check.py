@@ -1404,6 +1404,21 @@ def run() -> None:
         win._뜻모델있나 = _옛있나
         notes._embed = _옛임베더
 
+    # ★★ **쓰기가 막히면 말로 알려야 한다** — 전엔 말로 덧붙이기가 아무 말 없이 안 써졌다.
+    import orders as _orders6
+    import os as _os6
+    import stat as _stat6
+
+    notes.write(Note(title="잠긴 글 시험", body="몸"))
+    _잠긴 = notes.path_of("잠긴 글 시험")
+    _os6.chmod(_잠긴, _stat6.S_IREAD)
+    try:
+        _한것 = win.do_order(_orders6.read_order("잠긴 글 시험에 덧붙일 줄 적어줘"))
+        assert _한것 is True, "쓰기가 막혔는데 검색으로 흘러갔다"
+        assert "못 썼어" in win.say.text(), f"쓰기가 막혔는데 말하지 않는다: {win.say.text()!r}"
+    finally:
+        _os6.chmod(_잠긴, _stat6.S_IWRITE)
+
     # ★★ **묶은 단축키는 다 알려야 한다.** 열네 개를 묶어 놓고 사람이 알 길이 없었다.
     #   표 하나를 묶기와 도움말이 같이 읽는다 — 설명이 빈 키가 생기면 여기서 터진다.
     도움글 = win.단축키글()

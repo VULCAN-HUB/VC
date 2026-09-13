@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import functools
 import re
 import sys
 import threading
@@ -170,6 +171,28 @@ class VoiceWorker(QThread):
 
     def stop(self) -> None:
         self._stop.set()
+
+
+
+def _쓰기막히면알림(돌려줄=None):
+    """글을 쓰는 자리에서 `WriteBlocked` 가 나면 **말로 알린다.**
+
+    ★★ 파일이 읽기 전용이거나 딴 프로그램이 잡고 있으면 쓰기가 막힌다. 저장(`save_note`)만 그걸
+    받고, 말로 덧붙이기·고정·이름 바꾸기·새 글·지우기·할 일 켜기는 안 받아서 **아무 말 없이
+    안 써졌다**(창은 훅 덕에 안 죽지만 사람은 됐는 줄 안다). 한 자리에서 받는다.
+    ※ 안쪽 함수 이름은 **영문**이어야 한다 — PyQt 가 슬롯 이름(`co_name`)을 ASCII 로 바꾸다
+      창이 통째로 강제 종료됐다(한글 `속` 이었을 때 재 봤다).
+    """
+    def wrap(fn):
+        @functools.wraps(fn)
+        def guarded(self, *a, **k):
+            try:
+                return fn(self, *a, **k)
+            except WriteBlocked:
+                self.report("못 썼어 — 그 파일이 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
+                return 돌려줄
+        return guarded
+    return wrap
 
 
 class MainWindow(QWidget):
@@ -1395,6 +1418,7 @@ class MainWindow(QWidget):
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
 
+    @_쓰기막히면알림(돌려줄=True)
     def do_order(self, order: "orders.Order", started: float = 0.0) -> bool:
         """시킨 것을 한다. 못 하면 `False` — 그러면 부르는 쪽이 검색으로 넘긴다.
 
@@ -2266,6 +2290,7 @@ class MainWindow(QWidget):
         """읽는 화면에서 할 일 표를 눌렀다. 신호가 끝난 뒤에 뒤집는다."""
         self._later(lambda: self._do_flip_task(nth))
 
+    @_쓰기막히면알림()
     def _do_flip_task(self, nth: int) -> None:
         """원문을 뒤집고 바로 저장한다.
 
@@ -2290,6 +2315,7 @@ class MainWindow(QWidget):
         # 네모를 모르는 옛 글이 덮어써서 체크가 풀린다 — 낯선 PC 에서 그렇게 났다.
         self.detail_body.setPlainText(note.body.strip())
 
+    @_쓰기막히면알림()
     def rename_note(self) -> None:
         """제목을 바꾸면 **가리키던 링크도 같이 옮긴다**(notes.rename)."""
         # ★ 친 제목을 **저장될 꼴**로 먼저 맞춘다(맥 한글·`? :` 같은 글자는 전각). 안 맞추면
@@ -2336,7 +2362,13 @@ class MainWindow(QWidget):
         title, n = "새 항목", 2
         while self.notes.read(title) is not None:
             title, n = f"새 항목 {n}", n + 1
-        self.notes.write(Note(title=title, body="", kind="note"))
+        # ※ 이 메서드는 장식(`_쓰기막히면알림`)을 못 씌운다 — 씌우면 창 검사가 강제 종료됐다(가르기로 찾음).
+        #   그래서 여기서 직접 받는다.
+        try:
+            self.notes.write(Note(title=title, body="", kind="note"))
+        except WriteBlocked:
+            self.report("못 썼어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
+            return
         self.refresh()
         self._fill_detail(self.notes.read(title))
         # ★ **새로 만든 글은 쓰려고 만든 것이다.** 읽기 모드로 열면 「고치기」를 한 번
@@ -2347,6 +2379,7 @@ class MainWindow(QWidget):
         self.detail_title.selectAll()
         self.graph.focus_on([title], zoom=FOCUS_ZOOM)
 
+    @_쓰기막히면알림()
     def fill_gap(self, title: str) -> None:
         """비어 있던 이름으로 항목을 만든다.
 
@@ -2363,6 +2396,7 @@ class MainWindow(QWidget):
         self.graph.focus_on([title], zoom=FOCUS_ZOOM)
         self.report(f"{title} 만들었어. 뭘 적을까?", [title])
 
+    @_쓰기막히면알림()
     def drop_note(self) -> None:
         """지운다. 파일이 사라지므로 한 번 묻는다."""
         if self.editing is None:
