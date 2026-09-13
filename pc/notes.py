@@ -1046,27 +1046,37 @@ class Notes:
     def notes_files(self):
         """항목 파일만. 지난 판은 항목이 아니다 — 세면 항목 수가 스무 배가 된다.
 
-        ★★ **훑는 중에 폴더가 사라져도 멈추면 안 된다.** `rglob` 은 게으르게 도는데,
-        도는 사이에 남이 폴더를 지우면 `FileNotFoundError` 로 **색인이 통째로 터진다.**
-        실제로 그랬다(지난 판 폴더가 생겼다 지워지는 사이). 밖에서 파일을 만지는 것이
+        ★★ **훑는 중에 폴더가 사라져도 멈추면 안 된다.** 밖에서 파일을 만지는 것이
         이 물건의 정상 쓰임이다 — 옵시디언·동기화 도구·사람 손. **한 폴더 때문에
         20년치가 안 보이면 안 된다.**
+
+        ★★ **연결 폴더(정션·심볼릭 링크)는 따라가지 않는다.** 볼트 안에 볼트 자신을 가리키는
+        정션이 있으면 `rglob` 이 끝없이 따라 들어가 경로가 너무 길어져 터졌고, 그 자리에서
+        훑기가 멈춰 **뒤에 있는 글이 조용히 빠졌다**(재 봤다). 한 폴더씩 내려가며 연결 폴더·
+        점 폴더(`.trash`·`.obsidian`·`.git`)·지난 판을 **들어가기 전에** 잘라 낸다.
         """
-        try:
-            for path in self.root.rglob("*.md"):
-                if self._is_history(path):
-                    continue
-                # ★★ **점으로 시작하는 폴더는 글이 아니다.** 옵시디언은 `.trash`(지운 글)·`.obsidian`·
-                #   `.git` 을 안 본다. 우리는 봐서 **옵시디언에서 지운 글이 검색에 되살아났다.**
-                try:
-                    속 = path.relative_to(self.root).parts[:-1]
-                except ValueError:
-                    속 = ()
-                if any(조각.startswith(".") for 조각 in 속):
-                    continue
-                yield path
-        except (FileNotFoundError, PermissionError, OSError):
-            return      # 사라진 자리까지만 세고 멈춘다. 다음 훑기가 마저 본다
+        import stat as _stat
+
+        def 연결인가(자리: str) -> bool:
+            try:
+                st = os.lstat(자리)
+            except OSError:
+                return True        # 못 보는 자리는 들어가지 않는다
+            if _stat.S_ISLNK(st.st_mode):
+                return True
+            return bool(getattr(st, "st_file_attributes", 0) & 0x400)   # 윈도우 재분석 지점(정션)
+
+        def 못들어감(err: OSError) -> None:
+            pass                   # 사라진 폴더·권한 없는 폴더는 건너뛰고 나머지를 본다
+
+        for 위, 폴더들, 파일들 in os.walk(self.root, followlinks=False, onerror=못들어감):
+            폴더들[:] = [d for d in 폴더들
+                        if not d.startswith(".") and not 연결인가(os.path.join(위, d))]
+            for 이름 in 파일들:
+                if 이름.lower().endswith(".md"):
+                    path = Path(위) / 이름
+                    if not self._is_history(path):
+                        yield path
 
     # --- 지난 판 -------------------------------------------------------
 
@@ -2869,6 +2879,26 @@ def _self_check() -> None:
         n.reindex()
         섞인 = [r[0] for r in n.conn.execute("SELECT title FROM notes WHERE title LIKE '점폴더 %'")]
         assert not 섞인, f"점 폴더 속 md 를 글로 센다: {섞인}"
+
+        # ★★ **자기 자신을 가리키는 연결 폴더**가 있으면 훑기가 끝없이 따라 들어가다 멈추고
+        #   뒤 글이 조용히 빠졌다. 정션을 만들 수 있는 자리에서만 잰다.
+        import subprocess as _sp
+
+        (n.root / "고리 앞").mkdir(exist_ok=True)
+        (n.root / "고리 앞" / "고리 뒤 글.md").write_text("고리 뒤에도 있다", encoding="utf-8")
+        고리 = n.root / "고리 앞" / "되돌이"
+        _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+        if 고리.exists():
+            try:
+                import time as _t2
+                t0 = _t2.perf_counter()
+                n.reindex()
+                assert _t2.perf_counter() - t0 < 30, "연결 폴더를 따라 들어가 훑기가 늘어졌다"
+                assert n.read("고리 뒤 글") is not None, "연결 폴더 때문에 글이 빠졌다"
+                assert n.conn.execute(
+                    "SELECT count(*) FROM notes WHERE title = '고리 뒤 글'").fetchone()[0] == 1,                     "연결 폴더를 따라가 같은 글을 여러 번 셌다"
+            finally:
+                고리.rmdir()          # 정션만 지운다(가리키는 곳은 그대로)
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
