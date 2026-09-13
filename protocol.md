@@ -31,6 +31,9 @@ curl -H "Authorization: Bearer <pair_token>" http://127.0.0.1:8765/eb/v1/hello
 
 토큰 **값**은 진단 파일에 안 적는다 — 열쇠를 두 군데 두지 않는다. 자리만 말한다.
 
+`eb_config.json` 이 깨져 있으면 VC 는 그것을 `.깨짐-<시각>` 으로 옆에 치우고 **새 열쇠로** 설정을 만든다.
+그때는 폰·AI 가 쓰던 열쇠가 더는 안 통하므로 **다시 짝지어야 한다**(자리에서 새 `pair_token` 을 읽는다).
+
 ```
 Authorization: Bearer <pair_token>
 ```
