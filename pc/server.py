@@ -203,6 +203,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(410, {"error": "읽는 사이에 없어졌다", "where": str(사라짐)})
         except OSError as 못읽음:
             return self._send(500, {"error": "못 읽었다", "why": type(못읽음).__name__})
+        except Exception as 뜻밖:
+            # ★ **예상 못 한 예외도 답은 한다.** 새로 넣은 조회에서 SQL 이 틀렸을 때 서버가
+            #   답도 없이 연결을 끊었다 — 부르는 쪽은 무엇이 틀렸는지 모른다. 이름만 알려 준다.
+            print(f"[서버] GET {self.path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _get(self) -> None:
         url = urlparse(self.path)
@@ -431,6 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                 답["full_chars"] = len(note.body)
             if not 답["headings"]:
                 del 답["headings"]
+            # ★ **이름만 적고 안 이은 글**(연결 안 된 언급). 창고의 95%가 외딴이라 AI 가 이 목록을 보고
+            #   `[[제목]]` 을 넣으면 그물이 자란다. 있을 때만 싣는다(제목 다섯 개).
+            if 언급 := [t for t, _ in self.server.notes.언급(note.title, k=5)]:
+                답["unlinked"] = 언급
             return self._send(200, 답)
 
         if url.path == "/eb/v1/graph":
@@ -517,6 +526,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(507, {"error": "못 썼다 — 그 자리에 쓸 수 없다",
                                     "where": str(막힘),
                                     "hint": "읽기 전용이거나 잠겼거나 자리가 없다"})
+        except Exception as 뜻밖:
+            print(f"[서버] POST {self.path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _post(self) -> None:
         url = urlparse(self.path)
@@ -1435,6 +1447,22 @@ def _self_check() -> None:
     _, 골라 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("쌍둥이 회의")
                  + "&folder=" + urllib.parse.quote("쌍둥이가"))
     assert 골라.get("text", "").startswith("가 쪽"), f"folder= 로 못 고른다: {골라}"
+
+    # ★ **뜻밖의 예외도 답은 한다.** 새 조회의 SQL 이 틀렸을 때 서버가 답도 없이 끊었다.
+    _진짜언급 = note_store.언급
+    note_store.언급 = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("시험용 고장"))
+    try:
+        assert call("POST", "/eb/v1/memory", {"title": "고장 시험 글", "text": "몸"})[0] == 201
+        상태, 고장 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("고장 시험 글"))
+        assert 상태 == 500 and 고장.get("why") == "RuntimeError", f"뜻밖의 예외에 답을 안 한다: {상태} {고장}"
+    finally:
+        note_store.언급 = _진짜언급
+
+    # ★ 2단이 **이름만 적고 안 이은 글**을 알려 준다.
+    assert call("POST", "/eb/v1/memory", {"title": "언급 대상 글", "text": "몸"})[0] == 201
+    assert call("POST", "/eb/v1/memory", {"title": "말만 한 쪽", "text": "언급 대상 글 이야기"})[0] == 201
+    _, 펼 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("언급 대상 글"))
+    assert "말만 한 쪽" in (펼.get("unlinked") or []), f"연결 안 된 언급을 안 알려 준다: {펼}"
 
     # ★★ **틀렸을 때 무엇이 틀렸는지 말해 준다.** 안 그러면 AI 가 짐작으로 다시 두드린다.
     상태, 다른이름 = call("GET", "/eb/v1/memory/search?query=" + urllib.parse.quote("조이는지"))

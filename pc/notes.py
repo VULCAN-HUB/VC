@@ -2273,6 +2273,35 @@ class Notes:
             out.append((r["src"], line))
         return sorted(out)
 
+    def 언급(self, title: str, k: int = 8) -> list[tuple[str, str]]:
+        """**이름은 적었는데 링크로는 안 이은 글**과 그 줄. 옵시디언의 「연결 안 된 언급」이다.
+
+        ★★ 오너 창고는 95%가 아무 데도 안 이어져 있다. 그런데 글 속에는 서로의 이름이
+        **글자로는** 자주 나온다 — 그것이 곧 「여기 이으면 된다」는 자리다. 역링크만 보여 주면
+        이 자리가 안 보인다. 두 글자 미만 제목은 안 본다(「VC」 같은 것은 어디에나 걸린다 — 그래도
+        두 글자라 보긴 한다. 한 글자는 뜻이 없다).
+        """
+        title = 제목맞춤(title)
+        이름들 = [n for n in self._names(title) if len(n) >= 2]
+        if not 이름들:
+            return []
+        이미 = {src for src, _ in self.backlinks(title)} | {title}
+        def 가둠(v: str) -> str:
+            return "%" + v.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        조건 = " OR ".join("body LIKE ? ESCAPE '!'" for _ in 이름들)
+        out = []
+        for r in self.conn.execute(
+                f"SELECT title, body FROM notes WHERE ({조건}) ORDER BY mtime DESC LIMIT 200",
+                [가둠(n) for n in 이름들]):
+            if r["title"] in 이미:
+                continue
+            줄 = next((l.strip() for l in (r["body"] or "").splitlines()
+                      if any(n in l for n in 이름들)), "")
+            out.append((r["title"], 줄[:160]))
+            if len(out) >= k:
+                break
+        return out
+
     def 외딴것수(self) -> int:
         """외딴 글이 모두 몇 장인가. **목록만 주면 「서른 개야」라고 거짓말한다** —
         오너 창고를 재 보니 2836장 중 2700장(95%)이 외딴이었다."""
@@ -2808,6 +2837,16 @@ def _self_check() -> None:
         (n.root / "옛- 제목.md").write_text("옛 판이 쓴 몸", encoding="utf-8")
         n.reindex()
         assert (n.read("옛? 제목") or Note(title="", body="")).body.startswith("옛 판"),             "옛 판이 `-` 로 저장한 글이 원래 제목으로 안 열린다"
+
+        # ★★ **연결 안 된 언급** — 이름은 글자로 적었는데 링크로 안 이은 글. 외딴 글을 잇는 자리다.
+        n.write(Note(title="언급 받는 글", body="몸"))
+        n.write(Note(title="말만 한 글", body="어제 언급 받는 글 을 다시 봤다"))
+        n.write(Note(title="이은 글", body="[[언급 받는 글]] 이어 뒀다"))
+        언 = dict(n.언급("언급 받는 글"))
+        assert "말만 한 글" in 언, f"이름만 적은 글을 못 찾는다: {언}"
+        assert "이은 글" not in 언, "이미 이은 글까지 언급으로 센다"
+        assert "언급 받는 글" not in 언, "제 글을 언급으로 센다"
+        assert "다시 봤다" in 언["말만 한 글"], "어느 줄인지 안 준다"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.

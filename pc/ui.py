@@ -618,6 +618,13 @@ class MainWindow(QWidget):
         self.backs = Results(limit=4)
         self.backs.picked.connect(self.show_note)
         self.backs.hide()
+        # 이름은 적었는데 링크로 안 이은 곳 — 옵시디언의 「연결 안 된 언급」. 외딴 글을 잇는 자리다.
+        self.mentions_head = QLabel("이름만 적힌 곳 (안 이어짐)")
+        self.mentions_head.setStyleSheet(self.backs_head.styleSheet())
+        self.mentions_head.hide()
+        self.mentions = Results(limit=4)
+        self.mentions.picked.connect(self.show_note)
+        self.mentions.hide()
 
         detail_card = self.detail_card = HudPanel(left)  # 그래프 위에 뜨는 본문 판
         detail_card.setObjectName("reader")
@@ -646,6 +653,8 @@ class MainWindow(QWidget):
         dbox.addWidget(self.embeds)
         dbox.addWidget(self.backs_head)
         dbox.addWidget(self.backs)
+        dbox.addWidget(self.mentions_head)
+        dbox.addWidget(self.mentions)
 
         self.footer = QLabel()
         self.footer.setStyleSheet(
@@ -1758,6 +1767,10 @@ class MainWindow(QWidget):
         self.backs.show_hits(backs)
         self.backs_head.setVisible(bool(backs))
         self.backs.setVisible(bool(backs))
+        언급 = self.notes.언급(title)
+        self.mentions.show_hits(언급)
+        self.mentions_head.setVisible(bool(언급))
+        self.mentions.setVisible(bool(언급))
 
     def _indexed(self, changed: int) -> None:
         """훑기가 끝났다. 바뀐 게 있을 때만 다시 그린다 — 없으면 화면을 건드릴 이유가 없다."""
@@ -2419,6 +2432,9 @@ class MainWindow(QWidget):
         self.backs.show_hits([])
         self.backs_head.hide()
         self.backs.hide()
+        self.mentions.show_hits([])
+        self.mentions_head.hide()
+        self.mentions.hide()
 
     def _paint_say(self) -> None:
         self.say.setText(self._say_text + ("  ▍" if self._caret_on else "   "))
