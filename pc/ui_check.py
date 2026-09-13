@@ -1387,6 +1387,20 @@ def run() -> None:
     assert win.editing == "바뀐？ 이름 시험", f"바꾼 제목을 저장될 꼴로 안 맞춘다: {win.editing}"
     assert "바꿀 이름 시험" not in win._trail, f"뒤로가기 줄에 옛 이름이 남았다: {win._trail}"
 
+    # ★ **뜻 모델이 아직 안 올랐으면 못 찾았다는 말에 그 사실을 붙인다.** 켠 뒤 몇 초는 자연말이
+    #   조용히 0건이라 사람이 「없구나」 하고 떠났다.
+    _옛임베더 = getattr(notes, "_embed", None)
+    notes._embed = None
+    _옛있나 = win._뜻모델있나
+    try:
+        win._뜻모델있나 = lambda: True
+        assert "올리는 중" in win._못찾았다고("아무 말"), "뜻 모델이 오르는 중이라고 안 말한다"
+        win._뜻모델있나 = lambda: False
+        assert "올리는 중" not in win._못찾았다고("아무 말"), "모델이 없는데 올리는 중이라고 한다"
+    finally:
+        win._뜻모델있나 = _옛있나
+        notes._embed = _옛임베더
+
     # ★★ **묶은 단축키는 다 알려야 한다.** 열네 개를 묶어 놓고 사람이 알 길이 없었다.
     #   표 하나를 묶기와 도움말이 같이 읽는다 — 설명이 빈 키가 생기면 여기서 터진다.
     도움글 = win.단축키글()

@@ -1974,12 +1974,24 @@ class MainWindow(QWidget):
         `'"이런 구절"'` 처럼 두 겹으로 보인다.
         """
         말 = f"{self._감싸기(text)}로는 못 찾겠어."
+        # ★ **뜻 모델이 아직 안 올랐으면 그렇다고 말한다.** 켠 뒤 몇 초는 낱말로만 찾아서
+        #   자연말 물음이 조용히 0건이 된다 — 사람은 「없구나」 하고 떠난다(서버 1단과 같은 구멍).
+        if getattr(self.notes, "_embed", None) is None and self._뜻모델있나():
+            말 += " 뜻 검색은 아직 올리는 중이야 — 조금 뒤 다시 쳐 봐."
         if '"' in text:
             헐겁게 = text.replace('"', " ").strip()
             남은 = len(self.notes.search(헐겁게, k=8)) if 헐겁게 else 0
             if 남은:
                 말 += f" 따옴표를 떼면 비슷한 게 {남은}개 있어."
         return 말
+
+    def _뜻모델있나(self) -> bool:
+        """뜻 모델 파일이 있나. 있는데 아직 안 붙었으면 「올리는 중」이다."""
+        try:
+            return (paths.meaning_dir(
+                (paths.load_config().get("models") or {}).get("meaning", "")) / "model.onnx").is_file()
+        except Exception:
+            return False
 
     def _저장했다고(self, title: str) -> None:
         """말풍선으로 「저장했어」. **상태줄을 안 쓴다.**
