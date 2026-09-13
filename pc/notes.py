@@ -25,6 +25,7 @@ import os
 import random
 import hashlib
 import re
+import unicodedata
 import shutil
 import stat
 import sqlite3
@@ -912,6 +913,13 @@ class Note:
 
     @classmethod
     def loads(cls, title: str, raw: str) -> Note:
+        # ★★ **맥에서 온 한글은 조합형(NFD)이다.** 맥 파일 이름·글은 「ㅎ+ㅚ+ㅣ」처럼 풀어
+        #   적혀서, 윈도우에서 친 「회의록」(NFC)과 **글자가 다르다** — 재 보니 그 글이 안 열리고
+        #   `[[회의록]]` 링크가 파일이 있는데도 「아직 없는 것」으로 셌다. 오너의 맥이 오면
+        #   같은 볼트를 두 기계가 나눠 쓴다. **읽는 첫 자리에서 NFC 로 모은다**
+        #   (파일은 우리가 다시 쓸 때까지 그대로다).
+        title = unicodedata.normalize("NFC", title)
+        raw = unicodedata.normalize("NFC", raw)
         m = FRONTMATTER_RE.match(raw)
         if not m:
             # 사용자가 손으로 만든 파일. 그대로 받아들인다.
@@ -1469,6 +1477,7 @@ class Notes:
         옵시디언도 버거워진다. 훑는 속도는 폴더를 나눠도 같지만(실측), 사람이 열어
         볼 때가 다르다.
         """
+        title = unicodedata.normalize("NFC", title)   # 맥(NFD)에서 친 제목도 같게
         row = self.conn.execute(
             "SELECT path FROM notes WHERE title = ? ORDER BY mtime DESC LIMIT 1",
             (title,)).fetchone()
@@ -1581,6 +1590,7 @@ class Notes:
         return [Path(r["path"]) for r in rows] if len(rows) > 1 else []
 
     def read(self, title: str) -> Note | None:
+        title = unicodedata.normalize("NFC", title)   # 맥(NFD)에서 친 제목도 같게
         path = self.path_of(title)
         if not path.exists():
             # ★★ **별칭으로도 열려야 한다.** 옵시디언은 `aliases` 로 글이 열리는데
@@ -1871,6 +1881,7 @@ class Notes:
         차례는 bm25가 매기되 제목에 든 것을 12배로 친다. 고정된 항목은 늘 먼저다
         — 사용자가 직접 말한 것은 관찰에 밀리지 않는다(결정 22).
         """
+        q = unicodedata.normalize("NFC", q)           # 맥(NFD)에서 친 물음도 같게
         ask = Ask(q)
         rows: list[sqlite3.Row] = []
         where, args = self._narrow_sql(ask.narrow)
@@ -2728,6 +2739,18 @@ def _self_check() -> None:
         assert "plugin: dataview" in 다시, f"중첩 사전이 사라졌다: {다시[:150]}"
         assert "이어 적는다" in 다시, f"여러 줄 글이 사라졌다: {다시[:150]}"
         assert "note: >" in 다시, f"여러 줄 표시(>)가 사라졌다: {다시[:150]}"
+
+        # ★★ **맥(NFD) 한글.** 맥 파일 이름은 「회의록」을 풀어 적어 윈도우에서 친 글자와 다르다 —
+        #   그 글이 안 열리고, `[[회의록]]` 이 파일이 있는데도 「아직 없는 것」으로 셌다.
+        import unicodedata as _u
+
+        맥이름 = _u.normalize("NFD", "맥회의록")
+        (n.root / f"{맥이름}.md").write_text(_u.normalize("NFD", "맥에서 적은 몸"), encoding="utf-8")
+        (n.root / "맥 가리킴.md").write_text("[[맥회의록]] 본다", encoding="utf-8")
+        n.reindex()
+        assert n.read("맥회의록") is not None, "맥에서 온 한글 제목 글이 안 열린다"
+        assert "맥회의록" in [r["title"] for r in n.search("맥에서")], "맥에서 온 한글 본문이 안 찾힌다"
+        assert "맥회의록" not in dict(n.unresolved()), "파일이 있는데 링크를 「아직 없는 것」으로 센다"
 
         # ★ **외딴 글**(옵시디언의 「고아 노트」). AI 가 3천 장을 붓는 창고라 쌓이기 쉽고,
         #   그물에서 빠진 글은 뜻 검색 말고는 닿을 길이 없다. 고정한 것은 뺀다.
