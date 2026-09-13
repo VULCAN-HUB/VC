@@ -770,6 +770,10 @@ class MainWindow(QWidget):
         # 동안 창이 통째로 굳는다 — 켤 때 제일 먼저 보이는 게 굳은 창이면 안 된다.
         self._bind_keys()
         QTimer.singleShot(0, self._greet_server)
+        # ★★ **기록자리.txt 를 못 따라 기본 자리로 켰으면 창에서 바로 말한다.** 안 그러면 빈 기록을
+        #   보고 「다 사라졌다」고 느낀다(빠진 외장·오타).
+        if 쪽지문제 := paths.적어둔자리문제():
+            QTimer.singleShot(0, lambda: self.report("★ " + 쪽지문제, [ROOT]))
 
     def _apply_style(self) -> None:
         # 선택자 없는 속성과 선택자 규칙을 한 문자열에 섞으면 뒤쪽이 통째로 무시된다.

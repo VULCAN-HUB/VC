@@ -1931,6 +1931,8 @@ if __name__ == "__main__":
             if 하다만:
                 report["하다 만 이름 바꾸기"] = (
                     f"{하다만[0]} → {하다만[1]} · 링크가 반쯤 끊겼다. 그 이름으로 다시 바꿔라")
+            if 쪽지문제 := paths.적어둔자리문제():
+                report["★ 기록 자리"] = 쪽지문제
             report["AI 가 붙는 법"] = (
                 f"GET http://127.0.0.1:{PORT}/eb/v1/hello · "
                 f"헤더 Authorization: Bearer <{paths.data_dir() / 'eb_config.json'} 의 pair_token> "

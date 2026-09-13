@@ -275,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
                     # ★ **안 이어진 글이 몇 장인가.** 오너 창고는 2820장 중 2700장(95%)이라
                     #   (링크는 선택이다 — 저장소 규칙 1조: 뜻 검색이 안 이은 글도 찾는다.)
                     "orphans": self.server.notes.외딴것수(),
+                    # ★ 기록자리.txt 를 못 따라 기본 자리로 켰으면 AI 도 알아야 한다(창고가 비어 보인다).
+                    **({"data_dir_warning": 쪽지} if (쪽지 := paths.적어둔자리문제()) else {}),
                     "tags": [r[0] for r in c.execute(
                         "SELECT tag FROM tags GROUP BY tag ORDER BY count(*) DESC LIMIT 12")],
                     "how": ("search?q= 로 찾는다. 좁히려면 q 에 kind:결정 · tag:이름 을 섞고, "
