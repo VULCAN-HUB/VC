@@ -328,6 +328,7 @@ class Handler(BaseHTTPRequestHandler):
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
+                  "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log")
 
     def _길없다(self, path: str) -> dict:
@@ -410,6 +411,8 @@ class Handler(BaseHTTPRequestHandler):
                     # ★ 사람이 설정에서 적은 「내 정보」 글. 고정하지 않으니 **제목을 알려 줘야** AI 가 찾아 편다.
                     **({"me": settings.PROFILE_TITLE}
                        if self.server.notes.read(settings.PROFILE_TITLE) is not None else {}),
+                    # 오너가 설정에서 연결한 바깥 계정 **이름만**(토큰은 보관소에만 있다)
+                    **({"connections": 연결} if (연결 := paths.load_config().get("connections")) else {}),
                     # ★ 기록자리.txt 를 못 따라 기본 자리로 켰으면 AI 도 알아야 한다(창고가 비어 보인다).
                     **({"data_dir_warning": 쪽지} if (쪽지 := paths.적어둔자리문제()) else {}),
                     "tags": [r[0] for r in c.execute(
@@ -429,7 +432,8 @@ class Handler(BaseHTTPRequestHandler):
                             "목록 밖에 있던 글이 1~4등으로 올라온다. "
                             "쓰기는 memory 에 POST(덧붙기가 기본). link_to 는 뜻이 가까운 글(잇기는 선택). "
                             "통째로 덮으려면 mode=replace 와 force 가 둘 다 있어야 한다. "
-                            "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다)."
+                            "치우기는 memory/delete(되돌릴 자리를 준다) · 제목 고치기는 memory/rename(링크도 고친다). "
+                            "대화에서 오너에 대해 알게 되면 me/learn 에 POST(category·question·answer·source) — 오너 답은 안 덮는다."
                             + ("" if 큰모델있나 else
                                " ※ 더 잘 찾으려면 큰 뜻 모델 e5-base 를 받으라고 "
                                "사람에게 알려라(화면 「받을 모델」 칸, 296MB). "
@@ -874,6 +878,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "no such note", "title": old_t})
             return self._send(200, {"title": notes.제목맞춤(new_t), "was": old_t,
                                     "note": "가리키던 [[링크]]도 같이 고쳤다"})
+
+        if url.path == "/eb/v1/me/learn":
+            # ★★ **오너가 안 채워도 쓰다 보면 채워지게**(오너 지시). AI 가 대화에서 알게 된 오너 정보를
+            #   「나에 대해」 글의 「VC가 알아낸 것」에 짐작으로 적는다. 오너가 적은 답은 절대 안 덮고(200 owner),
+            #   질문 창 빈 칸에 흐리게 보여 오너가 확인한다. 원격 PC 는 못 적는다.
+            if self.session is not None:
+                return self._send(403, {"error": "원격에서는 오너 정보를 못 적는다"})
+            import settings
+
+            갈래, 질문, 답, 출처 = (body.get(k, "") for k in ("category", "question", "answer", "source"))
+            if not all(isinstance(x, str) for x in (갈래, 질문, 답, 출처)) or not 질문.strip() or not 답.strip():
+                return self._send(400, {"error": "category·question·answer(·source) 는 글자다",
+                                        "categories": list(settings.QUESTIONS)})
+            if len(질문) > 80 or len(답) > 300 or len(출처) > 60 or len(갈래) > 20:
+                return self._send(400, {"error": "question 80 · answer 300 · source 60 자 안"})
+            갈래 = 갈래.strip() if 갈래.strip() in settings.QUESTIONS else "기타"
+            결과 = settings.learn(self.server.notes, 갈래, 질문.strip(), 답, 출처)
+            return self._send(201 if 결과 == "saved" else 200,
+                              {"result": 결과, "category": 갈래, "title": settings.PROFILE_TITLE})
 
         if url.path == "/eb/v1/skills/propose":
             # ★★ **바깥에서 만든 스킬을 들이는 문**(오너 결정 3 추천: 선언문만 · 승인 게이트 · 코드 실행 없음).
@@ -1984,6 +2007,23 @@ def _self_check() -> None:
                             based_on=[], declaration={"name": "모르는 칸", "exec": "rm -rf"}))
     assert call("POST", "/eb/v1/proposals/odd/decision", {"decision": "approve"})[0] == 200, \
         "선언문에 모르는 칸이 섞이면 승인이 터진다"
+
+    # ★★ 쓰다 보면 채워지는 오너 정보 — 짐작으로 적고, 오너 답은 안 덮는다
+    import settings as _설정
+
+    assert call("POST", "/eb/v1/me/learn", {"category": "VC와 나", "question": "", "answer": "x"})[0] == 400
+    assert call("POST", "/eb/v1/me/learn", {"category": "VC와 나", "question": "q", "answer": 5})[0] == 400
+    상태, 답 = call("POST", "/eb/v1/me/learn", {"category": "VC와 나", "question": "나의 주요 업무",
+                                             "answer": "앱 개발", "source": "대화"})
+    assert 상태 == 201 and 답["result"] == "saved", 답
+    _, _남 = _설정.from_body(note_store.read(_설정.PROFILE_TITLE).body)
+    assert _설정.guesses(_남).get(("VC와 나", "나의 주요 업무"), "").startswith("앱 개발"), _남
+    _설정.save_profile(note_store, {"음식": {"좋아하는 음식": "국수"}})
+    상태, 답 = call("POST", "/eb/v1/me/learn", {"category": "음식", "question": "좋아하는 음식", "answer": "냉면"})
+    assert 상태 == 200 and 답["result"] == "owner", f"오너 답을 짐작이 덮으려 한다: {답}"
+    assert "냉면" not in note_store.read(_설정.PROFILE_TITLE).body
+    assert call("POST", "/eb/v1/me/learn", {"category": "없는갈래", "question": "q", "answer": "a"})[1]["category"] == "기타"
+    note_store.delete(_설정.PROFILE_TITLE)
 
     # ★★ 바깥 AI 로 켜면 그 제공자의 모델 이름을 쓴다(깐 gguf 이름이 클라우드로 나가면 안 된다)
     with tempfile.TemporaryDirectory() as _바깥곳:

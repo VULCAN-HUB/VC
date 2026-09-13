@@ -18,6 +18,18 @@ MODES = ("창", "최대화", "전체화면")
 PROFILE_TITLE = "나에 대해"
 
 QUESTIONS: dict[str, list[str]] = {
+    # ★ 맨 앞 — VC 가 **이 사람을 위해 어떻게 일할지**를 정하는 질문(오너: 사소한 취향보다 이게 먼저 필요하다)
+    "VC와 나": [
+        "VC가 나를 부를 호칭", "나의 주요 업무", "직책·역할", "지금 제일 중요한 일·프로젝트",
+        "VC에게 가장 맡기고 싶은 일", "VC가 절대 하면 안 되는 일", "VC가 혼자 정해도 되는 범위",
+        "꼭 나에게 물어봐야 하는 일", "보고받고 싶은 때·방식", "급한 일로 치는 기준",
+        "일에서 자주 쓰는 용어·약어", "함께 일하는 사람·팀(관계만)", "잘했다고 볼 기준",
+        "VC를 주로 쓰는 때(출근·작업 중·밤)", "VC를 주로 쓰는 곳(PC·폰·원격)", "VC에게 기대하는 역할(비서·동료·검토자)",
+        "틀린 답보다 싫은 것(느림·장황함·확신 없는 말)", "알림이 오면 좋은 일", "절대 알림 받기 싫은 때",
+        "내 대신 써도 되는 말투(메일·메시지)", "내 이름으로 보내면 안 되는 것", "비밀로 다룰 주제",
+        "VC가 스스로 배워도 되는 것", "VC가 기억하면 안 되는 것", "한 번에 맡길 수 있는 일의 크기",
+        "일이 막혔을 때 먼저 할 것", "하루를 시작할 때 VC가 알려 줬으면 하는 것", "하루를 마칠 때 정리받고 싶은 것",
+    ],
     "기본": [
         "불리고 싶은 이름", "나이대", "사는 지역(대략)", "쓰는 언어", "시간대",
         "성격을 한 줄로", "MBTI 같은 자기 유형", "나를 세 낱말로",
@@ -26,6 +38,8 @@ QUESTIONS: dict[str, list[str]] = {
         "하는 일(직업)", "일하는 분야", "맡은 역할", "일하는 시간대", "주로 쓰는 도구·프로그램",
         "지금 하고 있는 일·프로젝트", "일에서 제일 중요하게 보는 것", "일하며 자주 막히는 것",
         "보고·문서 쓰는 방식 선호", "회의·연락 방식 선호",
+        "주로 다루는 자료 형식(문서·표·코드·사진)", "쓰는 프로그래밍 언어·프레임워크", "일하는 회사·조직 종류",
+        "마감이 잦은 일", "반복되는 귀찮은 일", "일 기록을 남기는 곳", "품질 기준·검사 방식", "배포·발행하는 곳",
     ],
     "하루": [
         "일어나는 시간", "자는 시간", "집중이 잘 되는 때", "하루에 꼭 하는 일", "쉬는 날 보내는 법",
@@ -67,6 +81,8 @@ QUESTIONS: dict[str, list[str]] = {
     "기기": [
         "쓰는 컴퓨터·운영체제", "쓰는 휴대폰", "쓰는 메모·일정 앱", "쓰는 메신저",
         "자주 쓰는 사이트", "집·일터 인터넷 환경",
+        "쓰는 클라우드·저장소(깃허브·구글 드라이브 등, 계정 이름 말고 서비스만)", "쓰는 AI 서비스", "쓰는 글래스·웨어러블",
+        "자료를 모아 두는 곳(옵시디언·노션 등)", "백업하는 곳",
     ],
     "장소": [
         "자주 가는 곳", "좋아하는 동네", "일하는 곳 종류(사무실·집·카페)", "가 보고 싶은 곳",
@@ -74,6 +90,42 @@ QUESTIONS: dict[str, list[str]] = {
 }
 
 _줄꼴 = re.compile(r"^- \*\*(.+?)\*\*:\s?(.*)$")
+지침칸 = "VC에게 바라는 지침"
+# ★★ 오너가 안 채워도 **쓰다 보면 채워지게**(오너 지시). VC 를 쓰는 AI 가 대화에서 알게 된 것을 여기 적는다.
+#   오너가 적은 답은 **절대 안 덮는다** — 짐작은 따로 두고, 질문 창에서 빈 칸에 흐리게 보여 오너가 확인한다.
+알아낸칸 = "VC가 알아낸 것"
+_짐작꼴 = re.compile(r"^- \*\*(.+?) / (.+?)\*\*:\s?(.*)$")
+
+
+def guesses(남: dict[str, list[str]]) -> dict[tuple[str, str], str]:
+    """「VC가 알아낸 것」 줄들을 (갈래, 질문) → 「답 (출처 · 날짜)」 로."""
+    out = {}
+    for 줄 in 남.get(알아낸칸, []):
+        if m := _짐작꼴.match(줄):
+            out[(m.group(1).strip(), m.group(2).strip())] = m.group(3).strip()
+    return out
+
+
+def learn(notes: Notes, 갈래: str, 질문: str, 답: str, 출처: str = "") -> str:
+    """AI 가 알게 된 것을 짐작으로 적는다. `"saved"` · `"owner"`(오너가 이미 답함 — 안 덮음)."""
+    import time as _t
+
+    with notes._글잠금(PROFILE_TITLE):
+        옛 = notes.read(PROFILE_TITLE)
+        오너답, 남 = from_body(옛.body if 옛 else "")
+        if 오너답.get(갈래, {}).get(질문, "").strip():
+            return "owner"
+        꼬리 = " · ".join(x for x in (출처.strip(), _t.strftime("%Y-%m-%d")) if x)
+        새줄 = f"- **{갈래} / {질문}**: {답.strip()} ({꼬리})"
+        남[알아낸칸] = [줄 for 줄 in 남.get(알아낸칸, [])
+                    if not ((m := _짐작꼴.match(줄)) and (m.group(1).strip(), m.group(2).strip()) == (갈래, 질문))]
+        남[알아낸칸].append(새줄)
+        notes.write(Note(title=PROFILE_TITLE, body=to_body(오너답, 남), kind="preference"))
+    return "saved"
+
+# 외부 계정 연결. **토큰은 운영체제 보관소에만** 둔다(설정 파일에는 연결 이름만). 보관소가 없으면 안 받는다 —
+# 남의 계정 열쇠를 평문으로 두느니 연결을 안 하는 쪽이 낫다.
+CONNECTIONS = {"github": "GitHub (개인 액세스 토큰)", "notion": "Notion (통합 토큰)"}
 
 
 def from_body(body: str) -> tuple[dict[str, dict[str, str]], dict[str, list[str]]]:
@@ -89,6 +141,10 @@ def from_body(body: str) -> tuple[dict[str, dict[str, str]], dict[str, list[str]
             continue
         if 칸 is None:
             continue          # 머리말은 다시 짓는다
+        if 칸 in (지침칸, 알아낸칸):
+            # 지침은 사람이 쓴 글 그대로, 짐작은 `- **갈래 / 질문**:` 꼴이라 질문·답 줄로 뜯으면 **답으로 섞인다** — 원문 줄로 둔다
+            남[칸].append(줄)
+            continue
         m = _줄꼴.match(줄)
         if m and m.group(2).strip():
             답[칸][m.group(1).strip()] = m.group(2).strip()
@@ -101,7 +157,10 @@ def to_body(답: dict[str, dict[str, str]], 남: dict[str, list[str]] | None = N
     남 = 남 or {}
     out = [f"# {PROFILE_TITLE}", "",
            "VC 설정의 「내 정보」에서 적는다. AI 가 나를 알고 답하게 하는 글이다. 여기서 고쳐도 된다.", ""]
-    for 칸 in [*QUESTIONS, *[k for k in [*답, *남] if k not in QUESTIONS]]:
+    지침 = "\n".join(남.get(지침칸, [])).strip()
+    if 지침:
+        out += [f"## {지침칸}", 지침, ""]       # 맨 앞 — AI 가 이 글을 펴면 지침부터 읽는다
+    for 칸 in [*QUESTIONS, *[k for k in [*답, *남] if k not in QUESTIONS and k != 지침칸]]:
         알려진 = QUESTIONS.get(칸, [])
         쌍 = 답.get(칸, {})
         차례 = [q for q in 알려진 if 쌍.get(q)] + [q for q in 쌍 if q not in 알려진 and 쌍[q]]
@@ -111,15 +170,45 @@ def to_body(답: dict[str, dict[str, str]], 남: dict[str, list[str]] | None = N
     return chr(10).join(out).rstrip() + chr(10)
 
 
-def save_profile(notes: Notes, 고친: dict[str, dict[str, str]]) -> None:
+def save_connection(name: str, token: str) -> str:
+    """외부 계정 토큰을 보관소에 넣고 설정에는 **연결 이름만** 적는다. 틀리면 까닭 글, 됐으면 빈 글."""
+    import keystore
+
+    if name not in CONNECTIONS:
+        return f"모르는 연결이다: {name}"
+    if not token.strip():
+        return "토큰을 적어 줘"
+    if not keystore.available():
+        return "이 운영체제에는 열쇠 보관소가 없어 연결을 안 받는다(평문으로 두지 않는다)"
+    if not keystore.put(f"connect:{name}", token.strip()) or keystore.get(f"connect:{name}") != token.strip():
+        return "보관소에 못 넣었다"
+    cfg = paths.load_config()
+    paths.save_config({**cfg, "connections": sorted({*(cfg.get("connections") or []), name})})
+    return ""
+
+
+def remove_connection(name: str) -> None:
+    import keystore
+
+    keystore.delete(f"connect:{name}")
+    cfg = paths.load_config()
+    paths.save_config({**cfg, "connections": [c for c in (cfg.get("connections") or []) if c != name]})
+
+
+def save_profile(notes: Notes, 고친: dict[str, dict[str, str]], 지침: str | None = None) -> None:
     """고친 칸만 덮는다. 잠금 안에서 다시 읽어, 그 사이 밖·AI 가 보탠 줄을 안 지운다."""
     with notes._글잠금(PROFILE_TITLE):
         옛 = notes.read(PROFILE_TITLE)
         답, 남 = from_body(옛.body if 옛 else "")
+        if 지침 is not None:
+            남[지침칸] = 지침.strip().splitlines()
         for 칸, 쌍 in 고친.items():
             for q, a in 쌍.items():
                 if a.strip():
                     답.setdefault(칸, {})[q] = a.strip()
+                    # 오너가 직접 답했으면 그 짐작은 치운다 — 확인된 것이다
+                    남[알아낸칸] = [줄 for 줄 in 남.get(알아낸칸, [])
+                                if not ((m := _짐작꼴.match(줄)) and (m.group(1).strip(), m.group(2).strip()) == (칸, q))]
                 else:
                     답.get(칸, {}).pop(q, None)
         notes.write(Note(title=PROFILE_TITLE, body=to_body(답, 남), kind="preference"))
@@ -206,7 +295,11 @@ def _dialog_css(theme) -> str:
                            border-bottom: 1px solid {css(T.ACCENT, 0.18)}; border-radius: 0;
                            padding: 5px 2px; color: {T.TEXT.name()}; font-size:{글자(12)}; }}
         QLineEdit#field:focus {{ background: {css(T.ACCENT, 0.07)}; border-bottom: 1px solid {T.ACCENT.name()}; }}
+        QPlainTextEdit#field {{ background: {css(T.ACCENT, 0.03)}; border: 1px solid {css(T.ACCENT, 0.18)};
+                                border-radius: 4px; padding: 6px; color: {T.TEXT.name()}; font-size:{글자(12)}; }}
+        QPlainTextEdit#field:focus {{ border-color: {T.ACCENT.name()}; background: {css(T.ACCENT, 0.06)}; }}
         QComboBox#pick {{ min-height: 22px; }}
+        QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}   /* 안 입히면 체크무늬로 그려졌다 */
         QLabel#note {{ color: {css(T.DIM, 0.45)}; font-size:{글자(10)}; }}
         QLabel#say {{ color: {T.TEXT.name()}; font-size:{글자(11)}; padding: 8px 12px;
                       background: {css(T.ACCENT, 0.05)}; border-left: 2px solid {T.ACCENT.name()}; }}
@@ -215,7 +308,7 @@ def _dialog_css(theme) -> str:
 
 def open_dialog(win, notes: Notes):
     from PyQt5.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                                 QListWidget, QPushButton, QScrollArea, QStackedWidget,
+                                 QListWidget, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
                                  QVBoxLayout, QWidget)
 
     import theme
@@ -287,9 +380,38 @@ def open_dialog(win, notes: Notes):
     바깥틀.addStretch(1)
     창.뒤처음 = (창.뒤종류.currentData(), 창.뒤주소.text(), 창.뒤모델.text())
 
+    # ── VC 에게 바라는 지침 — 여러 줄 그대로. 「나에 대해」 글 맨 앞에 남아 AI 가 먼저 읽는다.
+    지침틀, _ = 쪽("지침", "VC 가 늘 지켰으면 하는 것을 자유롭게 적는다. 줄 그대로 「나에 대해」 글 맨 앞에 남는다.")
+    _옛글 = notes.read(PROFILE_TITLE)
+    _, _옛남 = from_body(_옛글.body if _옛글 else "")
+    창.지침 = QPlainTextEdit("\n".join(_옛남.get(지침칸, [])).strip())
+    창.지침.setObjectName("field")
+    창.지침.setPlaceholderText("예) 결론부터 한 줄로 말해 줘 · 모르면 모른다고 해 · 내 파일은 묻고 지워")
+    창.지침.setMinimumHeight(260)
+    지침틀.addWidget(창.지침)
+    지침틀.addStretch(1)
+
+    # ── 외부 연결 — 토큰은 운영체제 보관소에만. 설정 파일·AI 에게는 연결 이름만 간다.
+    연결틀, _ = 쪽("외부 연결", "VC 가 바깥 자료를 읽을 계정. 토큰은 운영체제 보관소에만 넣고, AI 에게는 연결된 이름만 알린다.")
+    이어진 = set(paths.load_config().get("connections") or [])
+    창.연결칸: dict[str, QLineEdit] = {}
+    for 이름, 보일 in CONNECTIONS.items():
+        칸 = QLineEdit()
+        칸.setObjectName("field")
+        칸.setEchoMode(QLineEdit.Password)
+        칸.setPlaceholderText("연결됨 — 바꾸려면 새 토큰" if 이름 in 이어진 else "토큰을 붙여 넣는다")
+        창.연결칸[이름] = 칸
+        줄(연결틀, 보일 + ("  · 연결됨" if 이름 in 이어진 else ""), 칸)
+    구글 = QLabel("Google 계정 — 로그인 창 방식(OAuth)이라 앱 등록이 필요하다. 오너 결정을 기다린다.")
+    구글.setObjectName("note")
+    구글.setWordWrap(True)
+    연결틀.addWidget(구글)
+    연결틀.addStretch(1)
+
     # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
-    답, _ = from_body(옛.body if 옛 else "")
+    답, _옛남2 = from_body(옛.body if 옛 else "")
+    짐작 = guesses(_옛남2)
     창.칸들: dict[str, dict[str, QLineEdit]] = {}
 
     def 칸만들기(이름: str, 질문들: list[str]) -> None:
@@ -302,6 +424,8 @@ def open_dialog(win, notes: Notes):
                 return
             칸 = QLineEdit(답.get(이름, {}).get(q, ""))
             칸.setObjectName("field")
+            if (이름, q) in 짐작:
+                칸.setPlaceholderText(f"VC 짐작: {짐작[(이름, q)]} — 맞으면 그대로 적어 확인")
             창.칸들[이름][q] = 칸
             말 = QLabel(q)
             말.setObjectName("ask_label")
@@ -351,7 +475,7 @@ def open_dialog(win, notes: Notes):
         고친 = {칸: {q: w.text() for q, w in 쌍.items() if not q.startswith("__")}
                for 칸, 쌍 in 창.칸들.items()}
         try:
-            save_profile(notes, 고친)
+            save_profile(notes, 고친, 창.지침.toPlainText())
         except WriteBlocked:
             # ★ 막혔는데 말이 없으면 「저장」을 눌러도 창만 남고 왜인지 모른다 — 창을 닫지 않고 알린다.
             창.안내.setText("못 저장했어 — 기록 폴더가 잠겼거나 읽기 전용이야. 적은 것은 창에 그대로 있어.")
@@ -359,6 +483,14 @@ def open_dialog(win, notes: Notes):
         방식 = 창.방식.currentText()
         paths.save_config({**paths.load_config(), "화면방식": 방식})
         apply_screen(win, 방식)
+        for 이름, 칸 in 창.연결칸.items():
+            if 칸.text().strip():
+                틀림 = save_connection(이름, 칸.text())
+                칸.clear()                          # 친 토큰을 창에 남기지 않는다
+                if 틀림:
+                    창.안내.setText(f"{CONNECTIONS[이름]} 연결을 못 했어 — {틀림}")
+                    return
+                칸.setPlaceholderText("연결됨 — 바꾸려면 새 토큰")
         지금뒤 = (창.뒤종류.currentData(), 창.뒤주소.text(), 창.뒤모델.text())
         if 지금뒤 != 창.뒤처음 or 창.뒤키.text().strip():
             틀림 = save_backend(*지금뒤, 창.뒤키.text())
@@ -411,7 +543,7 @@ def open_dialog(win, notes: Notes):
     # 빈 칸 안내 글은 흐리게 — 스타일시트로는 못 바꿔서 팔레트로 준다. 안 하면 적은 값처럼 밝게 보였다.
     from PyQt5.QtGui import QPalette
 
-    for 칸 in 창.findChildren(QLineEdit):
+    for 칸 in [*창.findChildren(QLineEdit), *창.findChildren(QPlainTextEdit)]:
         색 = 칸.palette()
         색.setColor(QPalette.PlaceholderText, theme.rgba(theme.T.DIM, 90))
         칸.setPalette(색)
@@ -508,8 +640,46 @@ def _self_check() -> None:
                 assert paths.load_config()["backend"]["model"] == "claude-창에서"
                 뒤창.deleteLater()
                 assert save_backend("local") == "" and paths.load_config()["backend"]["kind"] == "local"
+                # ★ 외부 연결 — 토큰은 보관소에만, 설정에는 이름만
+                _옛지움 = keystore.delete
+                keystore.delete = lambda 이름: bool(_가짜보관.pop(이름, None))
+                try:
+                    assert save_connection("github", "") == "토큰을 적어 줘"
+                    assert save_connection("없는곳", "x").startswith("모르는 연결")
+                    assert save_connection("github", "ghp_시험토큰") == ""
+                    assert paths.load_config()["connections"] == ["github"]
+                    assert _가짜보관.get("connect:github") == "ghp_시험토큰"
+                    assert "ghp_시험토큰" not in json.dumps(paths.load_config(), ensure_ascii=False), "토큰이 설정에 남았다"
+                    remove_connection("github")
+                    assert paths.load_config()["connections"] == [] and "connect:github" not in _가짜보관
+                    keystore.available = lambda: False
+                    assert "보관소가 없어" in save_connection("github", "ghp_x"), "보관소 없는 OS 에서 토큰을 받는다"
+                    keystore.available = lambda: True
+                finally:
+                    keystore.delete = _옛지움
             finally:
                 keystore.available, keystore.put, keystore.get = _옛보관
+
+            # ★★ 지침 · VC가 알아낸 것(짐작) — 오너 답은 안 덮고, 오너가 답하면 짐작을 치운다
+            save_profile(n, {}, "결론부터 한 줄로\n모르면 모른다고")
+            _몸 = n.read(PROFILE_TITLE).body
+            assert _몸.split("## ", 1)[1].startswith("VC에게 바라는 지침"), f"지침이 맨 앞 소제목이 아니다: {_몸[:120]}"
+            assert "모르면 모른다고" in _몸
+            assert learn(n, "VC와 나", "VC가 나를 부를 호칭", "대표님", "대화") == "saved"
+            save_profile(n, {"음식": {"좋아하는 음식": "국수"}})    # 앞 검사에서 비웠다 — 오너 답을 다시 둔다
+            assert learn(n, "음식", "좋아하는 음식", "냉면", "대화") == "owner", "오너가 적은 답을 짐작이 덮는다"
+            assert "국수" in n.read(PROFILE_TITLE).body and "냉면" not in n.read(PROFILE_TITLE).body
+            _, _남3 = from_body(n.read(PROFILE_TITLE).body)
+            assert guesses(_남3).get(("VC와 나", "VC가 나를 부를 호칭"), "").startswith("대표님")
+            짐작창 = open_dialog(win, n)
+            assert "VC 짐작: 대표님" in 짐작창.칸들["VC와 나"]["VC가 나를 부를 호칭"].placeholderText()
+            assert "모르면 모른다고" in 짐작창.지침.toPlainText(), "다시 열면 지침이 안 보인다"
+            짐작창.칸들["VC와 나"]["VC가 나를 부를 호칭"].setText("대표님")
+            짐작창.저장()
+            _, _남4 = from_body(n.read(PROFILE_TITLE).body)
+            assert ("VC와 나", "VC가 나를 부를 호칭") not in guesses(_남4), "오너가 확인했는데 짐작이 남는다"
+            assert "모르면 모른다고" in n.read(PROFILE_TITLE).body, "저장하니 지침이 사라졌다"
+            짐작창.deleteLater()
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"
