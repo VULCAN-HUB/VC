@@ -1125,8 +1125,17 @@ class EBServer(ThreadingHTTPServer):
         model_dir = (self.cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
         if not models_config.choose(self.cfg, role, name, model_dir):
             return False
-        CONFIG_PATH.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2),
-                               encoding="utf-8")
+        # ★★ **들고 있던 사본으로 파일을 통째로 덮지 않는다.** 서버는 켤 때 읽은 설정을 들고 있는데,
+        #   그 사이 화면이 같은 파일에 글자 크기·화면 방식을 적는다 — 통째로 쓰면 그것들이 말없이 지워졌다.
+        #   지금 파일을 다시 읽어 **고른 모델 칸만** 바꿔 쓴다.
+        try:
+            지금 = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+            if not isinstance(지금, dict):
+                지금 = {}
+        except (OSError, ValueError):
+            지금 = {}
+        CONFIG_PATH.write_text(json.dumps({**지금, "models": self.cfg.get("models", {})},
+                                          ensure_ascii=False, indent=2), encoding="utf-8")
         self.picked = models_config.resolve(self.cfg, model_dir)
         if role in ("chat", "vision"):
             unload = getattr(self.backend, "unload", None)
@@ -1990,7 +1999,24 @@ def _self_check() -> None:
         같나 = (실제 == paths.models_dir()) if 자동.startswith("딸려 온 것") else (실제.name == 자동)
         assert 같나, f"화면은 「{자동}」 이라는데 실제로는 「{실제}」 를 쓴다"
     # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
-    assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
+    # ★★ 모델을 골라도 **화면이 같은 설정 파일에 적은 칸**(글자 크기 등)이 안 지워져야 한다 —
+    #   서버가 켤 때 들고 있던 사본으로 통째로 덮어 말없이 지웠다.
+    _설정원문 = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    try:
+        _지금 = json.loads(_설정원문) if _설정원문 else {}
+        CONFIG_PATH.write_text(json.dumps({**_지금, "글자배율": 1.3, "화면방식": "최대화"},
+                                          ensure_ascii=False), encoding="utf-8")
+        assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
+        _뒤 = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        assert _뒤.get("글자배율") == 1.3 and _뒤.get("화면방식") == "최대화", \
+            f"모델을 고르니 화면이 적은 설정이 지워졌다: {sorted(_뒤)}"
+        assert _뒤.get("models", {}).get("stt") == "medium", _뒤.get("models")
+    finally:
+        if _설정원문 is None:
+            CONFIG_PATH.unlink(missing_ok=True)
+        else:
+            CONFIG_PATH.write_text(_설정원문, encoding="utf-8")
+        assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
     assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"
     # 없는 것·없는 역할은 막는다.
     assert call("POST", "/eb/v1/models", {"role": "stt", "name": "huge-v9"})[0] == 400
