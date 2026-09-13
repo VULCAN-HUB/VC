@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 import paths
-from notes import Note, Notes
+from notes import Note, Notes, WriteBlocked
 
 MODES = ("창", "최대화", "전체화면")
 PROFILE_TITLE = "나에 대해"
@@ -204,7 +204,12 @@ def open_dialog(win, notes: Notes):
     def 저장() -> None:
         고친 = {칸: {q: w.text() for q, w in 쌍.items() if not q.startswith("__")}
                for 칸, 쌍 in 창.칸들.items()}
-        save_profile(notes, 고친)
+        try:
+            save_profile(notes, 고친)
+        except WriteBlocked:
+            # ★ 막혔는데 말이 없으면 「저장」을 눌러도 창만 남고 왜인지 모른다 — 창을 닫지 않고 알린다.
+            창.안내.setText("못 저장했어 — 기록 폴더가 잠겼거나 읽기 전용이야. 적은 것은 창에 그대로 있어.")
+            return
         방식 = 창.방식.currentText()
         paths.save_config({**paths.load_config(), "화면방식": 방식})
         apply_screen(win, 방식)
@@ -218,6 +223,7 @@ def open_dialog(win, notes: Notes):
     틀 = QVBoxLayout(창)
     안내 = QLabel("내 정보는 창고의 「나에 대해」 글로 남는다. AI 가 꺼내 쓰고, 옵시디언에서 고쳐도 된다.")
     안내.setWordWrap(True)
+    창.안내 = 안내
     틀.addWidget(안내)
     틀.addWidget(판, 1)
     틀.addWidget(단추)
@@ -272,6 +278,17 @@ def _self_check() -> None:
             다시.칸들["음식"]["좋아하는 음식"].setText("")
             다시.저장()
             assert "좋아하는 음식" not in n.read(PROFILE_TITLE).body, "비운 답이 남는다"
+            # 저장이 막히면 창을 안 닫고 알린다 — 적은 것이 사라지지 않게
+            막힘 = open_dialog(win, n)
+            막힘.칸들["음식"]["좋아하는 음식"].setText("라면")
+            _옛쓰기 = n.write
+            n.write = lambda *a, **k: (_ for _ in ()).throw(WriteBlocked("잠김"))
+            try:
+                막힘.저장()
+            finally:
+                n.write = _옛쓰기
+            assert "못 저장" in 막힘.안내.text() and 막힘.isVisible(), "저장이 막혔는데 말없이 넘어간다"
+            막힘.deleteLater()
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"
