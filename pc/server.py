@@ -58,7 +58,24 @@ MAX_NOTE_CHARS = 20000
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     """설정이 없으면 페어링 토큰을 만들어 저장한다. 이 토큰이 QR에 실린다(결정 16)."""
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        # ★★ **설정이 깨져도 켜져야 한다.** `json.loads` 가 그대로 터져 서버·창이 아예 안 켜졌다.
+        #   깨졌으면 지우지 않고 `.깨짐-<시각>` 으로 옆에 치우고 새로 만든다(열쇠가 새로 나오니
+        #   폰은 다시 짝지어야 한다 — 안 켜지는 것보다 낫다). 열쇠만 빠졌으면 열쇠만 채운다.
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(cfg, dict):
+                raise ValueError("설정이 사전이 아니다")
+        except (ValueError, OSError) as 깨짐:
+            try:
+                path.replace(path.with_name(f"{path.name}.깨짐-{time.strftime('%Y%m%d-%H%M%S')}"))
+            except OSError:
+                pass
+            print(f"[설정] 깨져서 옆에 치우고 새로 만든다 ({type(깨짐).__name__}) — 폰은 다시 짝지어야 한다")
+        else:
+            if not isinstance(cfg.get("pair_token"), str) or not cfg.get("pair_token"):
+                cfg["pair_token"] = secrets.token_urlsafe(32)
+                path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            return cfg
     cfg = {
         "pair_token": secrets.token_urlsafe(32),
         # 기본은 VC 자체 엔진(결정 36). 사용자는 Ollama를 따로 깔지 않는다.
@@ -1563,6 +1580,16 @@ def _self_check() -> None:
     for 나쁜갈래 in (["가", "나"], None, 123):
         상태, _ = call("POST", "/eb/v1/memory", {"title": "갈래 시험", "text": "몸", "kind": 나쁜갈래})
         assert 상태 == 400, f"글자 아닌 갈래를 받았다: {나쁜갈래!r} → {상태}"
+
+    # ★★ **깨진 설정에서도 켜져야 한다** — json.loads 가 터져 안 켜졌다.
+    with tempfile.TemporaryDirectory() as _설곳:
+        _설 = Path(_설곳) / "eb_config.json"
+        _설.write_text("{깨진", encoding="utf-8")
+        _새 = load_config(_설)
+        assert isinstance(_새.get("pair_token"), str) and _새["pair_token"], "깨진 설정에서 새 설정을 못 만든다"
+        assert list(Path(_설곳).glob("eb_config.json.깨짐-*")), "깨진 설정을 옆에 안 치웠다"
+        _설.write_text(json.dumps({"backend": {"kind": "local"}}), encoding="utf-8")
+        assert load_config(_설).get("pair_token"), "열쇠가 빠진 설정에 열쇠를 안 채운다"
 
     # ★ **못 쓰면 못 썼다고 말해야 한다.** 읽기 전용 파일에서 `WriteBlocked` 가 그대로
     #   새 나가 서버가 답도 없이 연결을 끊었다 — AI 는 성공인지 실패인지도 모른다.
