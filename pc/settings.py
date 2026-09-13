@@ -125,6 +125,47 @@ def save_profile(notes: Notes, 고친: dict[str, dict[str, str]]) -> None:
         notes.write(Note(title=PROFILE_TITLE, body=to_body(답, 남), kind="preference"))
 
 
+BACKENDS = {"local": "자체 엔진(이 PC)", "anthropic": "Anthropic(Claude)", "gemini": "Google Gemini",
+            "openai_compatible": "OpenAI 호환(주소 입력)"}
+
+
+def save_backend(kind: str, base_url: str = "", model: str = "", key: str = "") -> str:
+    """바깥 AI 제공자를 설정에 적는다(오너 결정 2 추천). 틀리면 까닭 글, 됐으면 빈 글.
+
+    ★ 키는 **운영체제 보관소**에 넣는다(오너 결정 1). 보관소가 없는 OS 에서만 설정 평문으로 둔다.
+    키 칸을 비우면 **쓰던 키를 그대로** 둔다 — 모델 이름만 바꾸려는데 키를 다시 치게 하면 안 된다.
+    서버는 켤 때 백엔드를 만들므로 **다시 켜야** 적용된다.
+    """
+    import keystore
+
+    if kind not in BACKENDS:
+        return f"모르는 종류다: {kind}"
+    cfg = paths.load_config()
+    옛 = cfg.get("backend") if isinstance(cfg.get("backend"), dict) else {}
+    if kind == "local":
+        새 = {**{k: v for k, v in 옛.items() if k == "model_dir"}, "kind": "local"}
+    else:
+        if not model.strip():
+            return "모델 이름을 적어 줘(예: claude-… · gemini-…)"
+        if kind == "openai_compatible" and not base_url.strip().startswith(("http://", "https://")):
+            return "주소는 http:// 나 https:// 로 시작해야 해"
+        새 = {"kind": kind, "model": model.strip()}
+        if kind == "openai_compatible":
+            새["base_url"] = base_url.strip()
+        if key.strip():
+            if keystore.available() and keystore.put(keystore.키이름(새), key.strip()) \
+                    and keystore.get(keystore.키이름(새)) == key.strip():
+                새["api_key_in"] = "keystore"
+            else:
+                새["api_key"] = key.strip()      # 보관소가 없으면 평문(키를 잃는 것보다 낫다)
+        elif 옛.get("kind") == kind:
+            새.update({k: 옛[k] for k in ("api_key", "api_key_in") if k in 옛})   # 쓰던 키 그대로
+        elif kind != "openai_compatible":
+            return "처음 쓰는 제공자는 API 키를 적어 줘"
+    paths.save_config({**cfg, "backend": 새})
+    return ""
+
+
 def apply_screen(win, mode: str) -> None:
     {"최대화": win.showMaximized, "전체화면": win.showFullScreen}.get(mode, win.showNormal)()
 
@@ -160,6 +201,29 @@ def open_dialog(win, notes: Notes):
     창.방식.setToolTip("F11 로 전체화면을 켜고 끈다")
     화면틀.addRow("화면 방식", 창.방식)
     판.addTab(화면, "화면")
+
+    # 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
+    바깥 = QWidget()
+    바깥틀 = QFormLayout(바깥)
+    쓰던 = paths.load_config().get("backend") or {}
+    창.뒤종류 = QComboBox()
+    for 이름, 보일 in BACKENDS.items():
+        창.뒤종류.addItem(보일, 이름)
+    창.뒤종류.setCurrentIndex(max(0, 창.뒤종류.findData(쓰던.get("kind", "local"))))
+    창.뒤주소 = QLineEdit(쓰던.get("base_url", ""))
+    창.뒤주소.setPlaceholderText("OpenAI 호환일 때만 — http://…/v1")
+    창.뒤모델 = QLineEdit(쓰던.get("model", ""))
+    창.뒤모델.setPlaceholderText("바깥 AI 일 때 — 제공자의 모델 이름")
+    창.뒤키 = QLineEdit()
+    창.뒤키.setEchoMode(QLineEdit.Password)
+    창.뒤키.setPlaceholderText("비워 두면 쓰던 키 그대로 · 운영체제 보관소에 넣는다")
+    바깥틀.addRow("종류", 창.뒤종류)
+    바깥틀.addRow("주소", 창.뒤주소)
+    바깥틀.addRow("모델", 창.뒤모델)
+    바깥틀.addRow("API 키", 창.뒤키)
+    바깥틀.addRow(QLabel("바깥 AI 를 바꾸면 VC 를 다시 켜야 적용된다."))
+    창.뒤처음 = (창.뒤종류.currentData(), 창.뒤주소.text(), 창.뒤모델.text())
+    판.addTab(바깥, "바깥 AI")
 
     옛 = notes.read(PROFILE_TITLE)
     답, _ = from_body(옛.body if 옛 else "")
@@ -213,6 +277,16 @@ def open_dialog(win, notes: Notes):
         방식 = 창.방식.currentText()
         paths.save_config({**paths.load_config(), "화면방식": 방식})
         apply_screen(win, 방식)
+        지금뒤 = (창.뒤종류.currentData(), 창.뒤주소.text(), 창.뒤모델.text())
+        if 지금뒤 != 창.뒤처음 or 창.뒤키.text().strip():
+            틀림 = save_backend(*지금뒤, 창.뒤키.text())
+            창.뒤키.clear()                     # 친 키를 창에 남기지 않는다
+            if 틀림:
+                창.안내.setText(f"바깥 AI 를 못 바꿨어 — {틀림}")
+                return
+            창.뒤처음 = 지금뒤
+            창.안내.setText("저장했어. 바깥 AI 는 VC 를 다시 켜면 적용돼.")
+            return                              # 다시 켜야 한다는 말을 보게 창을 둔다
         창.accept()
 
     단추 = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -289,6 +363,39 @@ def _self_check() -> None:
                 n.write = _옛쓰기
             assert "못 저장" in 막힘.안내.text() and 막힘.isVisible(), "저장이 막혔는데 말없이 넘어간다"
             막힘.deleteLater()
+            # ★★ 바깥 AI 제공자 — 키는 보관소로(진짜 보관소는 안 건드린다), 비우면 쓰던 키 그대로
+            import json
+
+            import keystore
+
+            _가짜보관: dict = {}
+            _옛보관 = (keystore.available, keystore.put, keystore.get)
+            keystore.available = lambda: True
+            keystore.put = lambda 이름, 값: (_가짜보관.__setitem__(이름, 값), True)[1]
+            keystore.get = lambda 이름: _가짜보관.get(이름)
+            try:
+                assert save_backend("anthropic", "", "", "sk-시험") == "모델 이름을 적어 줘(예: claude-… · gemini-…)"
+                assert save_backend("openai_compatible", "주소아님", "m", "") .startswith("주소는")
+                assert save_backend("gemini", "", "gemini-시험", "") == "처음 쓰는 제공자는 API 키를 적어 줘"
+                assert save_backend("anthropic", "", "claude-시험", "sk-시험키") == ""
+                _뒤 = paths.load_config()["backend"]
+                assert _뒤 == {"kind": "anthropic", "model": "claude-시험", "api_key_in": "keystore"}, _뒤
+                assert _가짜보관.get("backend:anthropic") == "sk-시험키", "키가 보관소에 안 갔다"
+                assert "sk-시험키" not in json.dumps(paths.load_config(), ensure_ascii=False), "키가 설정 평문에 남았다"
+                assert save_backend("anthropic", "", "claude-다른", "") == ""
+                assert paths.load_config()["backend"].get("api_key_in") == "keystore", "키 칸을 비웠더니 쓰던 키를 잃었다"
+                # 창에서도 — 바꾸면 창을 두고 다시 켜라고 말한다, 친 키는 창에 안 남는다
+                뒤창 = open_dialog(win, n)
+                뒤창.뒤종류.setCurrentIndex(뒤창.뒤종류.findData("anthropic"))
+                뒤창.뒤모델.setText("claude-창에서")
+                뒤창.뒤키.setText("sk-창키")
+                뒤창.저장()
+                assert "다시 켜면" in 뒤창.안내.text() and not 뒤창.뒤키.text(), 뒤창.안내.text()
+                assert paths.load_config()["backend"]["model"] == "claude-창에서"
+                뒤창.deleteLater()
+                assert save_backend("local") == "" and paths.load_config()["backend"]["kind"] == "local"
+            finally:
+                keystore.available, keystore.put, keystore.get = _옛보관
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"

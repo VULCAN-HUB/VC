@@ -1101,6 +1101,10 @@ class EBServer(ThreadingHTTPServer):
         # 무엇을 쓸지 여기서 정한다. 사용자 선택 > 사양 자동 (결정 42)
         model_dir = (cfg.get("backend") or {}).get("model_dir", str(paths.models_dir()))
         self.picked = models_config.resolve(cfg, model_dir)
+        # ★★ **바깥 AI 면 그 제공자의 모델 이름을 쓴다.** 고르는 목록은 이 PC 에 깐 gguf 뿐이라,
+        #   클라우드로 바꿔도 `llama-8b` 같은 파일 이름이 Anthropic·Gemini 에 그대로 나갔다.
+        if 뒤.get("kind") != "local" and isinstance(뒤.get("model"), str) and 뒤["model"].strip():
+            self.picked["using"]["chat"] = self.picked["using"]["vision"] = 뒤["model"].strip()
         self.downloader = model_store.Downloader(model_dir)
         if hasattr(self.backend, "n_gpu_layers"):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
@@ -1980,6 +1984,16 @@ def _self_check() -> None:
                             based_on=[], declaration={"name": "모르는 칸", "exec": "rm -rf"}))
     assert call("POST", "/eb/v1/proposals/odd/decision", {"decision": "approve"})[0] == 200, \
         "선언문에 모르는 칸이 섞이면 승인이 터진다"
+
+    # ★★ 바깥 AI 로 켜면 그 제공자의 모델 이름을 쓴다(깐 gguf 이름이 클라우드로 나가면 안 된다)
+    with tempfile.TemporaryDirectory() as _바깥곳:
+        _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"}},
+                        Store(":memory:"), Notes(Path(_바깥곳) / "n", index_now=False))
+        try:
+            assert _바깥.picked["using"]["chat"] == "claude-시험" == _바깥.picked["using"]["vision"], _바깥.picked["using"]
+        finally:
+            _바깥.server_close()
+            _바깥.notes.conn.close()
 
     # --- 모델 선택: 사용자가 고르고, 없는 건 못 고른다 (결정 42) ---
     status, out = call("GET", "/eb/v1/models")
