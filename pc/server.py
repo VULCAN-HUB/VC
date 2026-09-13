@@ -206,7 +206,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as 뜻밖:
             # ★ **예상 못 한 예외도 답은 한다.** 새로 넣은 조회에서 SQL 이 틀렸을 때 서버가
             #   답도 없이 연결을 끊었다 — 부르는 쪽은 무엇이 틀렸는지 모른다. 이름만 알려 준다.
-            print(f"[서버] GET {self.path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            # ★ 경로만 찍는다 — 브라우저 링크는 `?t=토큰` 을 달고 오므로 통째로 찍으면 열쇠가 샌다.
+            print(f"[서버] GET {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _get(self) -> None:
@@ -536,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "where": str(막힘),
                                     "hint": "읽기 전용이거나 잠겼거나 자리가 없다"})
         except Exception as 뜻밖:
-            print(f"[서버] POST {self.path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
+            print(f"[서버] POST {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
     def _post(self) -> None:
