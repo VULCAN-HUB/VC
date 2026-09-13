@@ -1292,8 +1292,12 @@ class Notes:
         with self._글잠금(title):
             try:
                 self.keep_history(path, read_text(path), always=True)
-            except (Vanished, OSError):
-                pass
+            except Vanished:
+                return False        # 되돌릴 글이 사라졌다
+            except OSError as e:
+                # ★★ 못 남기고 덮으면 **지금 글이 어디에도 없게 된다**(되돌리기가 그 자리다). 멈추고 알린다.
+                _알림(f"[되돌리기 멈춤] 지금 글을 못 남겨 안 덮었다: {path.name} — {type(e).__name__}: {e}")
+                raise WriteBlocked(str(path)) from e
             self.write(old)
         return True
 
@@ -1844,10 +1848,16 @@ class Notes:
         #   바로 이 자리다. 파일 한 장 값으로 실수를 되돌릴 수 있다.
         #   (`keep_history` 가 「확인창이 다시 돌아올 수 있다고 말해 놓고 못 돌아가면
         #    그건 거짓말이다」라고 적어 둔 그 뜻을 지우기에도 적용한다.)
+        # ★★ **못 남기면 안 지운다.** 전엔 「못 남겨도 지우기는 되어야 한다」로 그냥 지워서, 이력 폴더가
+        #   막힌 PC 에서는 **되돌릴 판 없이 글이 사라졌다** — 서버는 「되돌릴 수 있다」고 답하는데 거짓이 된다.
+        #   지우기는 급한 일이 아니다. 멈추고 왜 못 했는지 알린다(서버 507 · 화면 알림).
         try:
             self.keep_history(path, read_text(path), always=True)
-        except OSError:
-            pass        # 못 남겨도 지우기는 되어야 한다
+        except Vanished:
+            return False        # 남기려는 사이 남이 지웠다 — 지울 것이 없다
+        except OSError as e:
+            _알림(f"[지우기 멈춤] 지난 판을 못 남겨 안 지웠다: {path.name} — {type(e).__name__}: {e}")
+            raise WriteBlocked(str(path)) from e
         # 뒤에서 훑는 실이 방금 그 파일을 읽고 있을 수 있다. 윈도우는 **열려 있는
         # 파일을 못 지운다** — 잠깐 기다렸다 다시 하면 대개 통과한다. 검사에서 실제로
         # 났다(색인 중에 지우기).
@@ -2394,8 +2404,9 @@ class Notes:
                     was.rmdir()
                 else:
                     was.replace(now)
-            except OSError:
-                pass          # 못 옮겨도 이름 바꾸기 자체는 살린다
+            except OSError as e:
+                # 못 옮겨도 이름 바꾸기 자체는 살린다. 지난 판은 옛 이름 폴더에 그대로 있다 — 어디 있는지 남긴다.
+                _알림(f"[이름 바꾸기] 지난 판을 못 옮겼다(옛 자리에 남음): {was} — {type(e).__name__}: {e}")
         # ★★ **`[[옛것]]` 만 고치면 반만 고치는 것이다.** 링크에는 네 꼴이 있다:
         #   `[[옛것]]` · `[[옛것#소제목]]` · `[[옛것|보일 글]]` · `![[옛것]]`(끼워넣기).
         #   글자로만 바꿀 때는 첫 꼴만 걸려 **나머지가 허공을 가리켰다**(재 보고 찾았다).
@@ -3294,6 +3305,28 @@ def _self_check() -> None:
         assert n.read("지울 글") is None
         assert any("지우기 직전에 붙인 줄" in read_text(p) for _, p in n.history("지울 글")), \
             "지우기 직전에 붙인 줄이 이력에도 없다"
+
+        # ★★ 지난 판을 못 남기면 지우기·되돌리기는 멈추고 알린다 — 그냥 하면 되돌릴 판 없이 글이 사라진다.
+        n.write(Note(title="판 못 남길 글", body="살아야 할 몸"))
+        n.keep_history(n.path_of("판 못 남길 글"), "옛 몸", always=True)
+        _판자리 = n.history("판 못 남길 글")[0][1]
+        _옛남기기 = n.keep_history
+
+        def _못남김(*a, **k):
+            raise PermissionError("이력 폴더가 잠겼다")
+        n.keep_history = _못남김
+        try:
+            for _일 in (lambda: n.delete("판 못 남길 글"), lambda: n.restore("판 못 남길 글", _판자리)):
+                try:
+                    _일()
+                except WriteBlocked:
+                    pass
+                else:
+                    raise AssertionError("지난 판을 못 남겼는데 지우기·되돌리기를 그냥 했다")
+        finally:
+            n.keep_history = _옛남기기
+        assert n.read("판 못 남길 글") is not None and "살아야 할 몸" in n.read("판 못 남길 글").body, \
+            "판을 못 남겼는데 글이 사라지거나 덮였다"
 
         # 오늘 일지 만들기·지난 판 되돌리기도 읽고-쓰기라 글 잠금을 기다려야 한다.
         n.keep_history(n.path_of("가리키는 글"), read_text(n.path_of("가리키는 글")), always=True)

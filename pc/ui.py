@@ -1455,7 +1455,10 @@ class MainWindow(QWidget):
                 return done("무를 게 없어.")
             kind, first, second = undo
             if kind == "만들기":
-                self.notes.delete(first)
+                try:
+                    self.notes.delete(first)
+                except WriteBlocked:
+                    return done(f"'{first}' 못 물렀어 — 지난 판을 못 남겨서 멈췄어.", [first])
                 self.clear_detail()
                 self.refresh()
                 return done(f"'{first}' 만든 걸 물렀어.")
@@ -1610,7 +1613,10 @@ class MainWindow(QWidget):
                 if 가리키던 else "")
             if not self._agreed("지울까?", 물음, "지운다"):
                 return done("안 지웠어.")
-            self.notes.delete(hit)
+            try:
+                self.notes.delete(hit)
+            except WriteBlocked:
+                return done(f"'{hit}' 못 지웠어 — 지난 판을 못 남겨서 멈췄어(기록 폴더가 잠겼거나 읽기 전용).", [hit])
             self.clear_detail()
             self.refresh()
             return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어.")
@@ -1622,7 +1628,10 @@ class MainWindow(QWidget):
             if not self._agreed("되돌릴까?", f"'{hit}'을 {when} 판으로 되돌린다. "
                                             "지금 글도 한 판 남는다.", "되돌린다"):
                 return done("그대로 뒀어.")
-            self.notes.restore(hit, where)
+            try:
+                self.notes.restore(hit, where)
+            except WriteBlocked:
+                return done(f"'{hit}' 못 되돌렸어 — 지금 글을 못 남겨서 멈췄어(기록 폴더가 잠겼거나 읽기 전용).", [hit])
             self.show_note(hit)
             return done(f"{when} 판으로 되돌렸어.", [hit])
         return False
@@ -2282,6 +2291,7 @@ class MainWindow(QWidget):
         """
         self._later(lambda: self._do_restore_past(at))
 
+    @_쓰기막히면알림()
     def _do_restore_past(self, at: int) -> None:
         where = self.past.itemData(at)
         self.past.setCurrentIndex(0)
