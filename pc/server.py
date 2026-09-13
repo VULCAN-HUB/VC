@@ -302,8 +302,18 @@ class Handler(BaseHTTPRequestHandler):
     class TooBig(ValueError):
         """본문이 한도를 넘었다."""
 
+    class BadLength(ValueError):
+        """Content-Length 가 숫자가 아니거나 음수다."""
+
     def _body(self) -> Any:
-        length = int(self.headers.get("Content-Length") or 0)
+        # ★ 음수·글자 Content-Length 는 둘 다 500(까닭 없음)이었다 [잰 것]. 음수는 `rfile.read(-5)` 가
+        #   끝까지 읽으려 들 수 있는 자리라 믿지 않는다. 둘 다 400 으로 끊는다(같은 공유기 누구든 보낼 수 있다).
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise self.BadLength(self.headers.get("Content-Length"))
+        if length < 0:
+            raise self.BadLength(length)
         if length > self.MAX_BODY:
             raise self.TooBig(length)
         # 적어 낸 길이보다 적게 오는 경우도 있다 — read는 오는 만큼만 준다.
@@ -705,6 +715,10 @@ class Handler(BaseHTTPRequestHandler):
             # 크다고 읽어 비우지 않는다 — 그게 바로 상대가 노리는 것이다. 연결을 끊는다.
             self.close_connection = True
             self._send(413, {"error": "본문이 너무 크다"})
+            return self._비우고끊기()
+        except self.BadLength:
+            self.close_connection = True
+            self._send(400, {"error": "Content-Length 가 숫자가 아니거나 음수다"})
             return self._비우고끊기()
         except json.JSONDecodeError:
             body = None
@@ -1346,6 +1360,23 @@ def _self_check() -> None:
         assert time.time() - began < 2.0, "413을 늦게 주면 막은 게 아니다"
         conn.close()
     # 막고 나서도 멀쩡해야 한다
+    assert call("GET", "/eb/v1/hello")[0] == 200
+    # ★ Content-Length 가 음수면 상대가 닫을 때까지 읽어 실을 붙들었고, 글자면 500 이었다 — 둘 다 바로 400.
+    for _길이 in ("-5", "abc"):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
+        conn.putrequest("POST", "/eb/v1/memory")
+        conn.putheader("Authorization", "Bearer test-token")
+        conn.putheader("Content-Length", _길이)
+        conn.endheaders()
+        conn.send(b'{"text":"x"}')
+        began = time.time()
+        try:
+            _받음 = conn.getresponse().status
+        except OSError as e:
+            _받음 = type(e).__name__
+        assert _받음 == 400, f"Content-Length {_길이} 에 400 대신 {_받음}"
+        assert time.time() - began < 2.0, f"Content-Length {_길이} 에 늦게 답한다(실을 붙들었다)"
+        conn.close()
     assert call("GET", "/eb/v1/hello")[0] == 200
 
     status, hello = call("GET", "/eb/v1/hello")
