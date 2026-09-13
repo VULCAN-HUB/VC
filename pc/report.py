@@ -293,7 +293,7 @@ def facts() -> dict:
         elif 켠지 < 30:
             값 += "  ← **아직 다 안 올라왔다. 30초 뒤에 다시 봐라**"
         out["메모리"] = 값
-    except (OSError, KeyError, ValueError):
+    except (OSError, KeyError, ValueError, TypeError):   # 파일이 목록·글자로 망가져 있어도 진단은 돈다
         out["메모리"] = "창이 아직 안 적었다 (창이 떠 있어야 잰다)"
 
     # ★ **자전이 고르게 도는지.** 시험하는 쪽은 화면을 찍어서 보기 때문에 이걸
