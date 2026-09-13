@@ -791,6 +791,33 @@ _전각 = str.maketrans({"?": "？", ":": "：", "/": "／", "\\": "＼", "|": "
                       "*": "＊", '"': "＂", "<": "＜", ">": "＞"})
 
 
+def 훑어내림(뿌리, 끝: tuple[str, ...] | None = None, 폴더도: bool = False):
+    """뿌리 아래를 **안전하게** 내려간다. 연결 폴더(심볼릭·정션)와 점 폴더에는 안 들어간다.
+
+    ★★ `rglob` 은 정션을 따라간다. 볼트 안에 볼트 자신을 가리키는 정션이 있으면 끝없이 들어가
+    경로가 너무 길어져 터졌다 — 켤 때 `*.tmp` 치우기·첨부 찾기·화면 폴더 지켜보기·흡수가 다
+    `rglob` 이라 **켜기 자체가 매달릴 수 있었다.** 이 한 자리로 모은다.
+    `끝` 을 주면 그 확장자 파일만(소문자로 견준다), `폴더도` 면 폴더도 내준다.
+    """
+    import stat as _stat
+
+    def 연결인가(자리: str) -> bool:
+        try:
+            st = os.lstat(자리)
+        except OSError:
+            return True
+        return _stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
+
+    for 위, 폴더들, 파일들 in os.walk(뿌리, followlinks=False, onerror=lambda e: None):
+        폴더들[:] = [d for d in 폴더들 if not d.startswith(".") and not 연결인가(os.path.join(위, d))]
+        if 폴더도:
+            for d in 폴더들:
+                yield Path(위) / d
+        for 이름 in 파일들:
+            if 끝 is None or 이름.lower().endswith(끝):
+                yield Path(위) / 이름
+
+
 def 제목맞춤(title: str) -> str:
     """제목을 **한 꼴**로 모은다 — NFC(맥 한글) + 파일에 못 쓰는 글자는 전각으로.
 
@@ -984,8 +1011,11 @@ class Notes:
         # 도는 정리 단계가 지워, 링크·태그가 조용히 0이 된다(실제로 그랬다).
         self.root = (Path(root) if root else paths.notes_dir()).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        for junk in self.root.rglob("*.tmp"):
-            junk.unlink(missing_ok=True)  # 쓰다 죽으면 남는다. 항목으로 세면 안 된다
+        for junk in 훑어내림(self.root, (".tmp",)):
+            try:
+                junk.unlink(missing_ok=True)  # 쓰다 죽으면 남는다. 항목으로 세면 안 된다
+            except OSError:
+                pass
         self.index_path = index      # 딴 실이 제 연결을 열 때 쓴다
         self.conn = sqlite3.connect(index, check_same_thread=False)
         # WAL: 쓰는 놈 하나와 읽는 놈 여럿이 동시에 돈다. 기본(delete)에서는 쓰는 동안
@@ -1055,28 +1085,9 @@ class Notes:
         훑기가 멈춰 **뒤에 있는 글이 조용히 빠졌다**(재 봤다). 한 폴더씩 내려가며 연결 폴더·
         점 폴더(`.trash`·`.obsidian`·`.git`)·지난 판을 **들어가기 전에** 잘라 낸다.
         """
-        import stat as _stat
-
-        def 연결인가(자리: str) -> bool:
-            try:
-                st = os.lstat(자리)
-            except OSError:
-                return True        # 못 보는 자리는 들어가지 않는다
-            if _stat.S_ISLNK(st.st_mode):
-                return True
-            return bool(getattr(st, "st_file_attributes", 0) & 0x400)   # 윈도우 재분석 지점(정션)
-
-        def 못들어감(err: OSError) -> None:
-            pass                   # 사라진 폴더·권한 없는 폴더는 건너뛰고 나머지를 본다
-
-        for 위, 폴더들, 파일들 in os.walk(self.root, followlinks=False, onerror=못들어감):
-            폴더들[:] = [d for d in 폴더들
-                        if not d.startswith(".") and not 연결인가(os.path.join(위, d))]
-            for 이름 in 파일들:
-                if 이름.lower().endswith(".md"):
-                    path = Path(위) / 이름
-                    if not self._is_history(path):
-                        yield path
+        for path in 훑어내림(self.root, (".md",)):
+            if not self._is_history(path):
+                yield path
 
     # --- 지난 판 -------------------------------------------------------
 
@@ -1801,10 +1812,11 @@ class Notes:
         """이름으로 첨부 파일을 찾는다. 없으면 None."""
         if not is_attachment(name):
             return None
-        hit = next(self.attach_root().rglob(safe_title(name)), None)
+        want = safe_title(name).lower()
+        hit = next((p for p in 훑어내림(self.attach_root()) if p.name.lower() == want), None)
         if hit is None:                       # 사람이 다른 데 둔 경우까지 훑는다
-            hit = next((p for p in self.root.rglob(safe_title(name))
-                        if p.is_file() and not self._is_history(p)), None)
+            hit = next((p for p in 훑어내림(self.root)
+                        if p.name.lower() == want and not self._is_history(p)), None)
         return hit
 
     def duplicates(self) -> list[tuple[str, int]]:

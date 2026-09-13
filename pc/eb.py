@@ -157,7 +157,9 @@ def _사람이손댄것(뿌리) -> list[str]:
     from pathlib import Path as _P
 
     남 = []
-    for f in _P(뿌리).rglob("*.md"):
+    import notes as _notes
+
+    for f in _notes.훑어내림(_P(뿌리), (".md",)):   # 연결 폴더는 안 따라간다
         조각 = f.relative_to(뿌리).parts
         if ".이력" in 조각 or "_서식" in 조각:
             continue

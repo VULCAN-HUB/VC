@@ -1795,9 +1795,9 @@ class MainWindow(QWidget):
         """기록이 든 폴더를 모두 지켜본다. 뿌리만 보면 `연/월` 안의 변화를 놓친다."""
         want = {str(self.notes.root)}
         try:
-            for d in self.notes.root.rglob("*"):
-                if d.is_dir() and not d.name.startswith("."):
-                    want.add(str(d))
+            # 연결 폴더는 안 따라간다 — 볼트 자신을 가리키는 정션이면 끝없이 들어간다.
+            for d in notes_module.훑어내림(self.notes.root, (), 폴더도=True):
+                want.add(str(d))
         except OSError:
             pass                     # 훑는 사이 누가 지웠다 — 다음 바퀴에 다시 본다
         now = set(self._watch.directories())

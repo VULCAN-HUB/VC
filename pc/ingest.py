@@ -228,9 +228,11 @@ def 훑기(뿌리: str | Path, 끝: tuple[str, ...] = (".md", ".txt")) -> list[P
     뿌리 = Path(뿌리)
     if not 뿌리.is_dir():
         return []
-    return sorted(p for p in 뿌리.rglob("*")
-                  if p.is_file() and p.suffix.lower() in 끝
-                  and not 남의것.search(str(p.relative_to(뿌리))))
+    import notes as _notes
+
+    # 연결 폴더(정션)는 안 따라간다 — 흡수할 폴더 안에 자기 자신을 가리키는 정션이 있으면 끝없이 들어간다.
+    return sorted(p for p in _notes.훑어내림(뿌리, tuple(끝))
+                  if not 남의것.search(str(p.relative_to(뿌리))))
 
 
 def 읽기(p: Path) -> str:
