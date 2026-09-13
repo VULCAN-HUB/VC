@@ -1755,7 +1755,7 @@ class Notes:
         찍힌 = (row[0] if row else "") or ""
         return 찍힌 != _해시(지금글)
 
-    def append(self, title: str, text: str, kind: str = "note") -> Path:
+    def append(self, title: str, text: str, kind: str = "note", pinned: bool = False) -> Path:
         """있으면 뒤에 붙이고, 없으면 새로 만든다.
 
         AI가 관찰을 쌓는 기본 방식이다. 덮어쓰기를 기본으로 하면 어제 적은 것이
@@ -1766,7 +1766,7 @@ class Notes:
         with _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title)):
             old = self.read(title)
             if old is None:
-                return self.write(Note(title=title, body=text, kind=kind))
+                return self.write(Note(title=title, body=text, kind=kind, pinned=pinned))
             old.body = (old.body.rstrip() + chr(10) * 2 + text.strip()).strip()
             return self.write(old)
 

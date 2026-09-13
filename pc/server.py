@@ -712,8 +712,12 @@ class Handler(BaseHTTPRequestHandler):
                     "edited_by": old.edited_by or "(모름 — 밖에서 고쳤을 수 있다)",
                     "hint": "덧붙이려면 mode 를 빼라(기본 append). 정말 덮으려면 force: true"})
 
-            if mode == "append" and old is not None:
-                path = self.server.notes.append(title, text, body.get("kind", old.kind))
+            # ★★ **없는 글에 처음 덧붙이는 것도 `append` 로 보낸다.** 전에는 「없으면 새로 쓰기」로 갈라져
+            #   잠금 밖이었다 — 두 AI 가 같은 새 글에 동시에 쌓으면 서로 덮어 줄이 사라졌다(재 봤다).
+            if mode == "append":
+                path = self.server.notes.append(title, text,
+                                                body.get("kind", old.kind if old else "note"),
+                                                pinned=body.get("pinned") is True)
             else:
                 note = notes.Note(
                     title=title,
@@ -1646,6 +1650,20 @@ def _self_check() -> None:
     call("POST", "/eb/v1/memory", {"title": "카페 단골", "text": "한 줄 더"})
     assert note_store.read("카페 단골").created == first.created
     assert note_store.read("카페 단골").id == first.id
+
+    # ★★ 두 AI 가 **없던 글에 동시에** 덧붙여도 줄이 안 사라진다.
+    import threading as _th8
+
+    def _보내기(표):
+        for _i in range(15):
+            call("POST", "/eb/v1/memory", {"title": "동시에 새로 쌓는 글", "text": f"{표}줄{_i}"})
+    _실들 = [_th8.Thread(target=_보내기, args=(x,)) for x in "가나다"]
+    [t.start() for t in _실들]; [t.join() for t in _실들]
+    _몸 = note_store.read("동시에 새로 쌓는 글").body
+    _남 = sum(1 for x in "가나다" for _i in range(15) if f"{x}줄{_i}" in _몸)
+    assert _남 == 45, f"동시에 새로 쌓은 줄이 사라진다: 45 중 {_남}"
+    assert call("POST", "/eb/v1/memory", {"title": "처음부터 고정", "text": "가", "pinned": True})[0] == 201
+    assert note_store.read("처음부터 고정").pinned, "새 글 pinned 가 안 먹는다"
 
     # 사람이 고친 항목은 관찰이 덮지 못한다.
     fixed = note_store.read("카페 단골")
