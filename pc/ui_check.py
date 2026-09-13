@@ -1463,6 +1463,19 @@ def run() -> None:
     finally:
         win.report, win.notes.daily = _옛말2, _옛일지
     assert any("못 만들었어" in t for t in _일지말), f"오늘 일지가 막혔는데 까닭을 안 말한다: {_일지말}"
+    # ★ 제안 카드 승인이 스킬 저장 막힘에 죽지 않고, 제안은 결정 안 된 채 남는다.
+    win.store.add_proposal(dict(proposal_id="막힐승인", type="skill_proposal", title="막힐 승인", summary="",
+                                based_on=[], declaration={"name": "막힐 스킬"}))
+    _승인말: list = []
+    _옛말3, win.report = win.report, lambda t, who=None: _승인말.append(t)
+    _옛저장, win.skills.save = win.skills.save, lambda *a, **k: (_ for _ in ()).throw(
+        notes_module.WriteBlocked("잠김"))
+    try:
+        win.decide("막힐승인", "approve")
+    finally:
+        win.report, win.skills.save = _옛말3, _옛저장
+    assert any("못 저장했어" in t for t in _승인말), f"승인이 막혔는데 까닭을 안 말한다: {_승인말}"
+    assert win.store.proposal("막힐승인")["decision"] is None, "저장이 막혔는데 결정을 적었다(제안이 사라진다)"
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

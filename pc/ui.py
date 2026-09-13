@@ -2642,15 +2642,22 @@ class MainWindow(QWidget):
 
         applied = None
         decl = json.loads(row["declaration"] or "{}")
-        if decision.startswith("pick:"):
-            # 사용자가 고른 모듈에 그 말을 배운다. 후보 목록은 버린다.
-            chosen = decision.split(":", 1)[1]
-            applied = self.skills.save(
-                Skill(name=chosen, examples=decl.get("examples", []))
-            )
-        elif decision == "approve" and decl.get("name"):
-            applied = self.skills.save(Skill(**{k: v for k, v in decl.items()
-                                                if k in Skill.__dataclass_fields__}))
+        # ★ 카드 단추 신호에서 불린다 — 스킬 저장이 막혀 `WriteBlocked` 가 새면 PyQt 가 프로세스를 끝낸다.
+        #   막히면 결정을 안 적고(제안은 그대로 남아 다시 누를 수 있다) 까닭을 말한다.
+        try:
+            if decision.startswith("pick:"):
+                # 사용자가 고른 모듈에 그 말을 배운다. 후보 목록은 버린다.
+                chosen = decision.split(":", 1)[1]
+                applied = self.skills.save(
+                    Skill(name=chosen, examples=decl.get("examples", []))
+                )
+            elif decision == "approve" and decl.get("name"):
+                applied = self.skills.save(Skill(**{k: v for k, v in decl.items()
+                                                    if k in Skill.__dataclass_fields__}))
+        except WriteBlocked:
+            self.report("스킬을 못 저장했어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어. 제안은 그대로 둘게.",
+                        [ROOT])
+            return
         self.store.decide(pid, decision)
         self.refresh()
 
