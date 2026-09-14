@@ -470,6 +470,44 @@ def open_dialog(win, notes: Notes):
     연결틀.addLayout(구글줄)
     연결틀.addStretch(1)
 
+    # ── 폰 연결 — 폰 브라우저가 PC 서버의 /app 을 연다. 열쇠는 QR 주소의 # 뒤에만 실어 서버에 안 간다.
+    import phone_app
+    import phone_relay
+
+    폰틀, _ = 쪽("폰 연결", "같은 와이파이의 폰 카메라로 QR 을 찍으면 폰에서 PC 창고를 보고, 폰에서 적은 것이 PC 에 저장된다.")
+    폰주소 = QLabel(f"폰 주소: {phone_app.app_url(phone_relay.local_ip())}")
+    폰주소.setObjectName("ask_label")
+    from PyQt5.QtCore import Qt
+
+    폰주소.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    폰틀.addWidget(폰주소)
+    폰풀이 = QLabel("QR 에는 PC 열쇠가 들어 있다 — 남이 찍지 않게 2분 뒤 사라진다. "
+                  "안 열리면 폰이 같은 와이파이인지, 윈도우 방화벽이 VC 를 막지 않는지 본다.")
+    폰풀이.setObjectName("note")
+    폰풀이.setWordWrap(True)
+    폰틀.addWidget(폰풀이)
+    창.폰QR = QLabel()
+    창.폰QR.hide()
+    폰단추 = QPushButton("QR 보이기")
+    폰단추.setObjectName("primary")
+
+    def QR보이기() -> None:
+        from PyQt5.QtCore import QTimer
+        from PyQt5.QtGui import QPixmap
+
+        그림 = QPixmap()
+        그림.loadFromData(phone_app.qr_png(phone_app.pair_url(phone_relay.local_ip(),
+                                                              paths.load_config()["pair_token"])))
+        창.폰QR.setPixmap(그림)
+        창.폰QR.show()
+        QTimer.singleShot(120_000, lambda: (창.폰QR.clear(), 창.폰QR.hide()))
+
+    폰단추.clicked.connect(QR보이기)
+    창.폰단추 = 폰단추
+    폰틀.addWidget(폰단추)
+    폰틀.addWidget(창.폰QR)
+    폰틀.addStretch(1)
+
     # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
     답, _옛남2 = from_body(옛.body if 옛 else "")
@@ -764,6 +802,13 @@ def _self_check() -> None:
                 구글창.deleteLater()
             finally:
                 google_auth.login = _옛로그인
+            # ★ 폰 연결 — QR 은 단추를 눌러야 뜨고, 담긴 주소는 열쇠를 # 뒤에만 싣는다
+            paths.save_config({**paths.load_config(), "pair_token": "폰열쇠시험"})
+            폰창 = open_dialog(win, n)
+            assert "폰 연결" in 폰창.갈래이름 and 폰창.폰QR.isHidden(), "QR 이 단추 없이 떠 있다"
+            폰창.폰단추.click()
+            assert not 폰창.폰QR.isHidden() and not 폰창.폰QR.pixmap().isNull(), "QR 을 못 그렸다"
+            폰창.deleteLater()
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"

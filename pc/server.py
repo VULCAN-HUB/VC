@@ -367,6 +367,12 @@ class Handler(BaseHTTPRequestHandler):
             via_phone = (parse_qs(url.query).get("via") or [""])[0] == "phone"
             return self._send_html(remote.page(session, via_phone))
 
+        # 폰 앱 껍데기. 열쇠는 안 들어 있고 자료는 열쇠를 단 API 로만 온다(phone_app.py).
+        if url.path == "/app":
+            import phone_app
+
+            return self._send_html(phone_app.page())
+
         if url.path == "/eb/v1/remote/status":
             sid = (parse_qs(url.query).get("s") or [""])[0]
             return self._send(200, self.server.gate.status(sid))

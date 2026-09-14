@@ -112,7 +112,7 @@ a = Analysis(
         "sounddevice", "segno", "piper",
         # 우리 모듈이지만 eb.py 가 늦게 부르는 것들. 안 적으면 빌드는 되고
         # **실행할 때** 없다고 죽는다.
-        "paths", "report", "ui", "server", "voice", "brain", "notes", "panels", "theme",
+        "paths", "report", "ui", "server", "phone_app", "phone_relay", "voice", "brain", "notes", "panels", "theme",
         "graph3d", "logo", "store", "talklog", "orchestrator", "modules",
         "skills", "engine", "backends", "remote", "phone_relay",
         "product_search", "models_config", "model_store", "eb_protocol",
