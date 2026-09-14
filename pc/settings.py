@@ -474,7 +474,8 @@ def open_dialog(win, notes: Notes):
     import phone_app
     import phone_relay
 
-    폰틀, _ = 쪽("폰 연결", "같은 와이파이의 폰 카메라로 QR 을 찍으면 폰에서 PC 창고를 보고, 폰에서 적은 것이 PC 에 저장된다.")
+    폰틀, _ = 쪽("폰 연결", "같은 와이파이의 폰에서 VC 앱 「QR 찍기」(또는 폰 카메라 → 브라우저)로 QR 을 찍으면 "
+                         "폰에서 PC 창고를 보고, 폰에서 적은 것이 PC 에 저장된다.")
     폰주소 = QLabel(f"폰 주소: {phone_app.app_url(phone_relay.local_ip())}")
     폰주소.setObjectName("ask_label")
     from PyQt5.QtCore import Qt
