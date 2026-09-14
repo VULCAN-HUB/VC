@@ -335,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from PyQt5.QtWidgets import QApplication, QMessageBox
 
+            paths.pin_qt_plugins()      # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
             app = QApplication.instance() or QApplication(sys.argv)
             QMessageBox.information(
                 None, "VC", "VC가 이미 떠 있어. 작업표시줄을 봐.  "
@@ -346,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from PyQt5.QtWidgets import QApplication
 
+    paths.pin_qt_plugins()              # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
     import ui
 
     app = QApplication(sys.argv)

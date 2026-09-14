@@ -812,6 +812,25 @@ class _덧붙이기잠금:
             self.실잠금.release()
 
 
+def _덮거나곁에(path: Path, text: str) -> None:
+    """임시 파일 길이 막혔을 때 **마지막으로** 해 보는 것.
+
+    그냥 덮어써 본다 — 남이 잠깐 반쪽을 보는 것보다 글이 통째로 사라지는 쪽이 나쁘다.
+    그것마저 막히면 글을 버리지 않고 **곁에 남기고** `WriteBlocked` 를 올린다.
+    부르는 쪽(화면)이 그걸 받아 「못 썼어」 라고 말한다.
+    """
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        # 잠긴 파일이다. 글을 버리지 않고 곁에 둔다 — 이름으로 무슨 일인지 보인다.
+        beside = path.with_name(f"{path.stem}(못 쓴 글){path.suffix}")
+        try:
+            beside.write_text(text, encoding="utf-8")
+        except OSError:
+            pass   # 폴더째 잠겼다. 여기서 더 할 수 있는 게 없다
+        raise WriteBlocked(str(path))
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """옆에 다 쓴 뒤 자리를 바꾼다. 통째로 덮어쓰면 **읽는 쪽이 반쪽을 본다.**
 
@@ -834,7 +853,16 @@ def _atomic_write(path: Path, text: str) -> None:
     """
     with _lock_for(path):
         tmp = path.with_name(f"{path.name}.{os.getpid()}-{threading.get_ident()}.tmp")
-        tmp.write_text(text, encoding="utf-8")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+        except OSError:
+            # ★★ **폴더째 잠기면 임시 파일부터 못 만든다.** 맥·리눅스의 자리 바꾸기는
+            #   파일 권한이 아니라 **폴더** 권한만 본다 — 그래서 윈도우처럼
+            #   `os.replace` 에서 걸리지 않고 여기서 먼저 걸린다. 이 자리가 안 막혀
+            #   있어서 맥에서는 `PermissionError` 가 그대로 위로 올라갔고,
+            #   **화면은 「못 썼어」 를 한마디도 못 했다**(자체점검이 그걸 잡았다).
+            _덮거나곁에(path, text)
+            return
         for wait in (0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4):
             if wait:
                 time.sleep(wait)
@@ -844,15 +872,7 @@ def _atomic_write(path: Path, text: str) -> None:
             except PermissionError:
                 continue
         try:
-            path.write_text(text, encoding="utf-8")
-        except OSError:
-            # 잠긴 파일이다. 글을 버리지 않고 곁에 둔다 — 이름으로 무슨 일인지 보인다.
-            beside = path.with_name(f"{path.stem}(못 쓴 글){path.suffix}")
-            try:
-                beside.write_text(text, encoding="utf-8")
-            except OSError:
-                pass   # 폴더째 잠겼다. 여기서 더 할 수 있는 게 없다
-            raise WriteBlocked(str(path))
+            _덮거나곁에(path, text)
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -1254,10 +1274,24 @@ class Notes:
         if not always and past and time.time() - past[-1].stat().st_mtime < HISTORY_GAP_SEC:
             return
         folder.mkdir(parents=True, exist_ok=True)
-        # 밀리초까지 넣는다. 초까지만 쓰면 같은 초에 두 번 저장될 때 앞 판이 조용히
-        # 덮여 사라진다.
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
-        _atomic_write(folder / f"{stamp}.md", old)
+        # ★★ **이름이 겹치면 앞 판이 조용히 사라진다.** 초까지만 쓰다 겹쳐서 밀리초를
+        #   넣었는데, **맥에서는 밀리초도 겹쳤다** — 빠른 기계에서는 두 번 쓰기가 같은
+        #   1밀리초 안에 끝난다. 스무 번 재서 **아홉 번** 지난 판 하나가 덮여 없어졌다
+        #   (자체점검이 「같은 내용은 안 남는다」에서 걸렸다).
+        #   마이크로초까지 내리고, 그래도 겹치면 **빈 자리를 찾을 때까지** 민다.
+        #   ※ 한 번 잰 시각으로 날짜와 아래 자릿수를 같이 만든다 — 따로 부르면
+        #     그 사이에 초가 넘어가 엉뚱한 이름이 나올 수 있다.
+        #   ※ 자릿수를 고정으로 둔다. 이름순이 곧 시간순이라, 길이가 들쑥날쑥하면
+        #     가장 최근 판(`past[-1]`)을 잘못 고른다.
+        지금 = time.time()
+        while True:
+            stamp = (time.strftime("%Y%m%d-%H%M%S", time.localtime(지금))
+                     + f"-{int(지금 * 1_000_000) % 1_000_000:06d}")
+            대상 = folder / f"{stamp}.md"
+            if not 대상.exists():
+                break
+            지금 += 0.000001
+        _atomic_write(대상, old)
         for gone in sorted(folder.glob("*.md"))[:-HISTORY_KEEP]:
             gone.unlink(missing_ok=True)
 
@@ -2115,8 +2149,10 @@ class Notes:
         "태그": lambda v: v.lstrip("#") + "%",
         # ★★ **윈도우 경로는 `\` 인데 사람은 `/` 로 적는다.** `path:2026/09` 가 영영
         #   안 걸렸다 — 0장이 나오는데 왜인지도 안 보였다. 적는 대로 걸리게 바꿔 준다.
-        #   (맥·리눅스에서는 `/` 그대로라 아무 일도 안 일어난다.)
-        "경로": lambda v: "%" + v.replace("/", chr(92)) + "%",
+        #   ※ 전에는 `chr(92)` 로 **늘** 바꿔서, 「맥·리눅스에서는 아무 일도 안 일어난다」는
+        #     주석과 달리 맥에서는 `2026/09` 가 `2026\09` 가 되어 되레 0장이 됐다.
+        #     `os.sep` 를 쓰면 윈도우에서만 바뀌고 맥은 적은 그대로 간다.
+        "경로": lambda v: "%" + v.replace("/", os.sep) + "%",
         "종류": lambda v: v,
         "해": lambda v: v,
         "제목": lambda v: "%" + 제목맞춤(v) + "%",
@@ -3141,12 +3177,22 @@ def _self_check() -> None:
 
         # ★★ **자기 자신을 가리키는 연결 폴더**가 있으면 훑기가 끝없이 따라 들어가다 멈추고
         #   뒤 글이 조용히 빠졌다. 정션을 만들 수 있는 자리에서만 잰다.
+        import os as _os0                  # 이 함수 뒤쪽의 `import os` 보다 앞이라 딴 이름을 쓴다
         import subprocess as _sp
 
         (n.root / "고리 앞").mkdir(exist_ok=True)
         (n.root / "고리 앞" / "고리 뒤 글.md").write_text("고리 뒤에도 있다", encoding="utf-8")
         고리 = n.root / "고리 앞" / "되돌이"
-        _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+        # ★ **맥·리눅스에는 `cmd` 가 없다.** 그냥 부르면 `FileNotFoundError: 'cmd'` 로
+        #   검사가 통째로 터진다(맥에서 실제로 그랬다). 되돌이를 만드는 방법만 다르고
+        #   재려는 것은 같다 — 윈도우는 정션, 그 밖은 심볼릭 링크.
+        if _os0.name == "nt":
+            _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+        else:
+            try:
+                _os0.symlink(n.root, 고리, target_is_directory=True)
+            except OSError:
+                pass                  # 링크를 못 만드는 자리면 이 검사만 건너뛴다
         if 고리.exists():
             try:
                 import time as _t2
@@ -3157,7 +3203,8 @@ def _self_check() -> None:
                 assert n.conn.execute(
                     "SELECT count(*) FROM notes WHERE title = '고리 뒤 글'").fetchone()[0] == 1,                     "연결 폴더를 따라가 같은 글을 여러 번 셌다"
             finally:
-                고리.rmdir()          # 정션만 지운다(가리키는 곳은 그대로)
+                # 고리만 지운다(가리키는 곳은 그대로). 정션은 `rmdir`, 심볼릭 링크는 `unlink`.
+                고리.rmdir() if _os0.name == "nt" else 고리.unlink()
 
         # ★★ **260자 넘는 경로의 글도 세어야 한다.** 윈도우 긴 경로가 꺼진 PC 에서 조용히 빠졌다.
         import os as _os                    # 이 함수 뒤쪽에 `import os` 가 있어 `os` 가 지역 이름이다
@@ -4060,7 +4107,14 @@ def _self_check() -> None:
         locked = root / "잠김.md"
         locked.write_text("건드리지 마", encoding="utf-8")
         n = Notes(root)
+        # ★★ **「잠근다」가 운영체제마다 다르다.** 윈도우는 읽기 전용이면 자리 바꾸기가
+        #   막히는데, **맥·리눅스는 안 막힌다** — 원자적 쓰기는 `os.replace` 라 파일이
+        #   아니라 **폴더** 권한만 보기 때문이다. 맥에서 그대로 재니 잠근 글이 그냥
+        #   덮여 썼다. 맥에서 사람이 실제로 잠그는 길(Finder 「잠금」)은 `uchg` 플래그라,
+        #   그걸 쓴다 — 덮어쓰기도 바꿔치기도 막히면서 **폴더는 그대로라 곁에는 남는다.**
         os.chmod(locked, stat.S_IREAD)
+        if os.name != "nt":
+            os.chflags(locked, stat.UF_IMMUTABLE)
         try:
             try:
                 n.write(Note(title="잠김", body="바꿔보기"))
@@ -4071,6 +4125,8 @@ def _self_check() -> None:
             beside = list(root.rglob("*못 쓴 글*"))
             assert beside and "바꿔보기" in beside[0].read_text(encoding="utf-8"),                 "쓰던 글을 잃었다"
         finally:
+            if os.name != "nt":
+                os.chflags(locked, 0)
             os.chmod(locked, stat.S_IWRITE)
 
     # --- 동시에 만지기 ---

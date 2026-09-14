@@ -21,11 +21,22 @@ from PyQt5.QtCore import QPointF, QRectF, Qt
 from PyQt5.QtGui import QBrush, QColor, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+# ★ **창을 만들기 전에 Qt 플러그인 자리를 박는다.** 경로에 한글이 있으면 Qt 가 제
+#   플러그인 폴더를 스스로 못 찾아 `cocoa`·`offscreen` 둘 다 없다며 죽는다.
+#   이 파일은 창을 그리는 모듈이 다 불러 가므로 여기서 한 번 박으면 같이 산다.
+#   (창을 띄우는 자리에서도 따로 부른다 — 여러 번 불러도 된다.)
+paths.pin_qt_plugins()
+
 THEME_FILE = paths.data_dir() / "theme.json"  # 고른 테마를 여기 남긴다. 다시 켜도 그대로다
 
 # 글꼴: 한글은 JetBrains Mono·Consolas에 글리프가 없어 대체 폰트로 떨어지며 자간이
 # 흐트러진다. 한글 폰트를 앞에 둬야 계기판처럼 읽히면서도 안 깨진다.
-MONO = '"Malgun Gothic", "Consolas", monospace'
+#
+# ★ **맥에는 「Malgun Gothic」 이 없다**(윈도우 한글 글꼴이다). 그냥 두면 Qt 가
+#   아무 글꼴로나 떨어져 글자 너비가 달라진다 — 그래프 이름표 겹침 정리가 그 너비로
+#   재기 때문에 **이름표가 깜박이는 것으로 나타났다**(자체점검이 「9개 갈림」으로 잡음).
+#   맥 글꼴을 뒤에 붙인다: 윈도우는 앞엣것을 먼저 찾으므로 그대로고, 맥만 이쪽을 쓴다.
+MONO = '"Malgun Gothic", "Apple SD Gothic Neo", "Consolas", "Menlo", monospace'
 
 # ★★ **글자 크기를 키울 길이 없었다.** 화면 곳곳에 크기가 픽셀로 **서른다섯 군데**
 # 박혀 있어서, 4K 화면이나 눈이 불편한 사람은 쓸 수가 없다 — 옵시디언은 `Ctrl +/-` 로 된다.
@@ -48,7 +59,7 @@ def 배율() -> float:
 def 글자(px: float) -> str:
     """`font-size` 에 넣을 글자. 배율을 곱한다."""
     return f"{max(7, round(px * _배율))}px"
-SANS = '"Malgun Gothic", "Segoe UI", sans-serif'
+SANS = '"Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif'
 
 THEMES: dict[str, dict] = {
     "vulcan": {

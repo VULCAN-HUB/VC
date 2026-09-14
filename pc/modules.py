@@ -42,6 +42,26 @@ def build_modules(backend: Any = None, model: str = "") -> list[ModuleSpec]:
         if full:
             word = word.replace("볼륨 ", "볼륨 끝까지 ")
 
+        if platform.system() == "Darwin":
+            # 맥에는 미디어 키를 두드릴 길이 없다(보내려면 접근성 권한이 있어야 한다).
+            # `osascript` 의 `set volume` 은 권한 없이 바로 되고 0~100 을 쓴다.
+            # 윈도우 미디어 키 한 번이 2% 라, 같은 체감이 되게 `step` 에 2를 곱한다.
+            import subprocess
+
+            간격 = step * 2
+            if key == 0xAD:
+                문 = "set volume output muted true"
+            elif key == 0xAE:
+                문 = ("set volume output volume 0" if full else
+                      f"set volume output volume (output volume of (get volume settings)) - {간격}")
+            else:
+                문 = ("set volume output volume 100" if full else
+                      f"set volume output volume (output volume of (get volume settings)) + {간격}")
+            난것 = subprocess.run(["osascript", "-e", 문], capture_output=True, text=True)
+            if 난것.returncode != 0:
+                raise ModuleFailed("volume", f"소리를 못 바꿨다: {난것.stderr.strip()[:120]}")
+            return word
+
         if platform.system() != "Windows":
             raise ModuleFailed("platform", "이 OS에서는 아직 소리를 못 바꾼다")
         import ctypes

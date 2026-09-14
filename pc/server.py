@@ -1907,14 +1907,24 @@ def _self_check() -> None:
 
     assert call("POST", "/eb/v1/memory", {"title": "막힌 글", "text": "첫 판"})[0] == 201
     막힌파일 = note_store.path_of("막힌 글")
+    # ★ **막는 방법이 운영체제마다 다르다.** 윈도우는 파일만 읽기 전용이면 자리 바꾸기가
+    #   막히는데, **맥·리눅스는 `os.replace` 가 폴더 권한만 봐서 그냥 써진다** —
+    #   맥에서 그대로 재니 201(썼다)이 나와 이 검사가 터졌다. 폴더도 같이 잠근다.
+    막힌폴더 = 막힌파일.parent
+    _옛파일 = _stat.S_IMODE(_os.stat(막힌파일).st_mode)
+    _옛폴더 = _stat.S_IMODE(_os.stat(막힌폴더).st_mode)
     _os.chmod(막힌파일, _stat.S_IREAD)
+    if _os.name != "nt":
+        _os.chmod(막힌폴더, 0o500)
     try:
         상태, 못씀 = call("POST", "/eb/v1/memory",
                         {"title": "막힌 글", "text": "둘째 판", "mode": "replace", "force": True})
         assert 상태 == 507, f"못 쓰고도 그렇게 말하지 않는다: {상태} {못씀}"
         assert 못씀.get("hint"), 못씀
     finally:
-        _os.chmod(막힌파일, _stat.S_IWRITE)
+        if _os.name != "nt":
+            _os.chmod(막힌폴더, _옛폴더)
+        _os.chmod(막힌파일, _옛파일 | _stat.S_IWRITE)
 
     # ★★ **쓴 자리에서 이을 곳을 알려 준다.** 오너 창고는 2820장 중 2700장(95%)이 아무 데도
     #   안 이어져 있다 — AI 가 글을 붓기만 하고 잇지 않기 때문이다. 이어지지 않은 글은

@@ -620,6 +620,15 @@ def run() -> None:
         eb_screen = screen_r(win.graph.nodes[ROOT])
         assert all(screen_r(n) < eb_screen for n in win.graph.nodes.values() if n.title != ROOT)
 
+        # ★★ **이름표가 자리를 옮길 때는 미끄러져 간다**(`graph3d.LABEL_GLIDE`) —
+        #   순간이동하면 눈에 움찔거림으로 보여서 그렇게 바꿨다. 그래서 **미끄러지는
+        #   동안에는 잠깐 서로를 지나간다.** 위에서 한 번에 0.9라디안(50도 넘게)을
+        #   돌려 놓고 한 프레임만 그린 뒤 재면, 아직 반도 못 간 자리를 재는 셈이다
+        #   (실제로 「2쌍 겹친다」로 터졌다). **겹치지 않는다는 것은 자리를 잡은 뒤의
+        #   약속**이다 — 다 갈 때까지 그려 놓고 잰다. 화면에서는 0.25초쯤이다.
+        for _ in range(40):
+            win.graph.project()
+
         # 이름표가 서로 겹치지 않고, 남의 원도 덮지 않는다.
         shown = [n for n in win.graph.nodes.values() if n.label.isVisible()]
         boxes = [n.label.sceneBoundingRect() for n in shown]
@@ -659,6 +668,18 @@ def run() -> None:
         win.ask("없는말")
         assert "어느 쪽이야" in win.say.text()
         win.link = real_link
+
+        # ★★ **커서가 깜빡여도 말하는 칸이 안 흔들려야 한다.** 꼬리를 켜짐 `"  ▍"` ·
+        #   꺼짐 `"   "` 로 바꿔 찍던 때는 두 꼬리의 폭이 11.3px 달라 칸 높이가
+        #   40 ↔ 46px 로 오갔다 — 이 칸이 세로로 쌓여 있어 **0.6초마다 위의 그래프까지
+        #   통째로 밀렸다**(오너가 창을 보고 짚었다). 색만 바꾸는 지금은 폭이 안 변한다.
+        #   되돌리면 이 줄이 터진다.
+        잰것 = set()
+        for _ in range(4):                      # 네 번 = 켜짐·꺼짐을 두 바퀴, 제자리로 돌아온다
+            win._blink()
+            잰것.add((win.say.sizeHint().height(), win.say.heightForWidth(420)))
+        assert len(잰것) == 1, f"커서가 깜빡일 때 말하는 칸 높이가 바뀐다: {sorted(잰것)}"
+
         win.graph.clear_focus()
         win.clear_detail()  # 다음 검사가 깨끗한 상태에서 시작하게
 
@@ -1427,13 +1448,27 @@ def run() -> None:
 
     notes.write(Note(title="잠긴 글 시험", body="몸"))
     _잠긴 = notes.path_of("잠긴 글 시험")
+    # ★ **막는 방법이 운영체제마다 다르다.** 윈도우는 읽기 전용 파일이면 바꿔치기가
+    #   막히지만, **맥·리눅스는 안 막힌다** — 원자적 쓰기는 `os.replace` 라 파일이 아니라
+    #   **폴더** 쓰기 권한만 본다. 맥에서 파일만 잠그고 재니 글이 그대로 덮여 썼고,
+    #   검사는 「말하지 않는다」로 터졌다. 여기서는 폴더를 잠근다.
+    #   (사람이 Finder 에서 누르는 「잠금」은 `uchg` 플래그라 바꿔치기가 진짜로 막힌다.)
+    _폴더 = _잠긴.parent
+    _옛파일권한 = _stat6.S_IMODE(_os6.stat(_잠긴).st_mode)
+    _옛폴더권한 = _stat6.S_IMODE(_os6.stat(_폴더).st_mode)
     _os6.chmod(_잠긴, _stat6.S_IREAD)
+    if _os6.name != "nt":
+        # 파일만 잠가서는 안 막힌다. **폴더도** 잠가야 임시 파일 만들기와
+        # 덮어쓰기가 둘 다 막혀 진짜 「못 쓰는 상태」가 된다.
+        _os6.chmod(_폴더, 0o500)
     try:
         _한것 = win.do_order(_orders6.read_order("잠긴 글 시험에 덧붙일 줄 적어줘"))
         assert _한것 is True, "쓰기가 막혔는데 검색으로 흘러갔다"
         assert "못 썼어" in win.say.text(), f"쓰기가 막혔는데 말하지 않는다: {win.say.text()!r}"
     finally:
-        _os6.chmod(_잠긴, _stat6.S_IWRITE)
+        if _os6.name != "nt":
+            _os6.chmod(_폴더, _옛폴더권한)
+        _os6.chmod(_잠긴, _옛파일권한 | _stat6.S_IWRITE)
 
     # ★ 메뉴 신호는 `checked` 를 덧붙여 부른다 — 장식 씌운 슬롯이 그걸 받아도 안 터져야 한다.
     win.clear_detail()

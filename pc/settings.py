@@ -15,6 +15,25 @@ import paths
 from notes import Note, Notes, WriteBlocked
 
 MODES = ("창", "최대화", "전체화면")
+
+# 손을 안 댄 채 이만큼 지나면 VC 표식이 저절로 화면 한가운데로 돌아온다.
+# 화면 가운데는 항목들을 감싸는 네모의 중심이라, 항목이 한쪽으로 몰리면 표식이
+# 구석으로 밀린다 — 두 번 눌러 되돌릴 수는 있지만 **가운데가 아닌 줄도 모르고**
+# 그냥 쓰게 된다(오너 지시 2026-09-15). 기본은 30초.
+되돌리기때 = (("끔", 0), ("10초", 10), ("30초", 30), ("1분", 60), ("3분", 180), ("10분", 600))
+되돌리기기본 = 30
+
+
+def 되돌리기초() -> int:
+    """설정에 적힌 「표식 되돌리기」 초. 값이 없거나 깨졌으면 기본값. 0이면 끔.
+
+    설정 한 줄이 깨졌다고 창이 안 뜨면 안 된다 — 아는 값만 받고 나머지는 기본으로 돌린다.
+    """
+    try:
+        값 = int(paths.load_config().get("표식되돌리기초", 되돌리기기본))
+    except (TypeError, ValueError):
+        return 되돌리기기본
+    return 값 if 값 in [초 for _, 초 in 되돌리기때] else 되돌리기기본
 PROFILE_TITLE = "나에 대해"
 
 QUESTIONS: dict[str, list[str]] = {
@@ -356,6 +375,14 @@ def open_dialog(win, notes: Notes):
     지금 = "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
     창.방식.setCurrentText(paths.load_config().get("화면방식", 지금) if 지금 == "창" else 지금)
     줄(화면틀, "화면 방식", 창.방식)
+
+    # 표식이 가운데에서 밀렸을 때 저절로 돌아오기까지의 시간. 표식을 두 번 누르면 바로 온다.
+    창.되돌리기 = QComboBox()
+    창.되돌리기.setObjectName("pick")
+    for 보일, 초 in 되돌리기때:
+        창.되돌리기.addItem(보일, 초)
+    창.되돌리기.setCurrentIndex(max(0, 창.되돌리기.findData(되돌리기초())))
+    줄(화면틀, "표식이 가운데로 돌아오기까지 (손 안 댄 시간)", 창.되돌리기)
     화면틀.addStretch(1)
 
     # ── 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
@@ -582,8 +609,14 @@ def open_dialog(win, notes: Notes):
             창.안내.setText("못 저장했어 — 기록 폴더가 잠겼거나 읽기 전용이야. 적은 것은 창에 그대로 있어.")
             return
         방식 = 창.방식.currentText()
-        paths.save_config({**paths.load_config(), "화면방식": 방식})
+        되돌림 = int(창.되돌리기.currentData())
+        paths.save_config({**paths.load_config(),
+                           "화면방식": 방식, "표식되돌리기초": 되돌림})
         apply_screen(win, 방식)
+        # **바로 먹게 한다.** 다시 켜야 적용되면 골라 놓고도 그대로인 줄 안다.
+        그래프 = getattr(win, "graph", None)
+        if 그래프 is not None:
+            그래프.자동제자리초 = float(되돌림)
         for 이름, 칸 in 창.연결칸.items():
             if 칸.text().strip():
                 틀림 = save_connection(이름, 칸.text())
@@ -673,6 +706,7 @@ def _self_check() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt5.QtWidgets import QApplication, QWidget
 
+    paths.pin_qt_plugins()      # 한글 경로면 `offscreen` 조차 못 찾는다
     app = QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory() as tmp:
         옛자리 = os.environ.get("VC_DATA")
@@ -686,6 +720,10 @@ def _self_check() -> None:
             창.칸들["AI에게"]["__줄더하기"]("부를 때 붙일 말")
             창.칸들["AI에게"]["부를 때 붙일 말"].setText("없음")
             창.방식.setCurrentText("전체화면")
+            # ★ 표식이 저절로 가운데로 돌아오기까지의 시간도 여기서 고른다.
+            창.되돌리기.setCurrentIndex(창.되돌리기.findData(60))
+            # 값이 바로 먹는지 보려고 그래프인 척하는 것을 하나 달아 둔다.
+            win.graph = type("가짜그래프", (), {"자동제자리초": 0.0})()
             창.저장()
             글 = n.read(PROFILE_TITLE)
             assert not 글.pinned and 글.kind == "preference", (글.pinned, 글.kind)
@@ -693,6 +731,17 @@ def _self_check() -> None:
             assert "옵시디언에서 적은 줄" in 글.body, "밖에서 적은 칸을 지웠다"
             assert paths.load_config().get("화면방식") == "전체화면"
             assert win.isFullScreen(), "저장한 화면 방식이 안 먹는다"
+
+            # ★★ **고른 시간이 저장되고 곧바로 먹어야 한다.** 다시 켜야 적용되면
+            #   골라 놓고도 그대로인 줄 안다.
+            assert paths.load_config().get("표식되돌리기초") == 60, paths.load_config()
+            assert 되돌리기초() == 60, 되돌리기초()
+            assert win.graph.자동제자리초 == 60.0, "고른 시간이 그래프에 바로 안 먹는다"
+            # 설정 한 줄이 깨져도 창이 죽으면 안 된다 — 아는 값만 받고 나머지는 기본으로.
+            for 엉뚱 in ("스물", None, -5, 7):
+                paths.save_config({**paths.load_config(), "표식되돌리기초": 엉뚱})
+                assert 되돌리기초() == 되돌리기기본, f"{엉뚱!r} 를 그대로 받는다"
+            paths.save_config({**paths.load_config(), "표식되돌리기초": 60})
             다시 = open_dialog(win, n)
             assert 다시.칸들["음식"]["좋아하는 음식"].text() == "국수", "다시 열면 답이 안 보인다"
             assert "부를 때 붙일 말" in 다시.칸들["AI에게"], "더한 질문이 다시 열면 사라진다"

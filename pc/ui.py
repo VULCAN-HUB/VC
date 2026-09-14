@@ -18,6 +18,7 @@ UI는 PC 프로그램의 곁가지다. 본체는 폰이고(결정 25) 여기서�
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import functools
@@ -242,6 +243,8 @@ class MainWindow(QWidget):
         self.graph = GraphView()
         self.graph.empty_clicked.connect(lambda: self._later(self.clear_detail))
         self.graph.node_clicked.connect(self.show_note)
+        # 표식이 가운데에서 밀렸을 때 저절로 돌아오기까지의 시간(설정 → 화면). 0이면 끔.
+        self.graph.자동제자리초 = float(settings.되돌리기초())
 
         wordmark = QLabel("VC")
         wordmark.setStyleSheet(
@@ -2564,7 +2567,23 @@ class MainWindow(QWidget):
         self.mentions.hide()
 
     def _paint_say(self) -> None:
-        self.say.setText(self._say_text + ("  ▍" if self._caret_on else "   "))
+        """말하는 칸을 다시 그린다. **커서는 색만 껐다 켠다.**
+
+        ★★ 전에는 꼬리를 켜짐 `"  ▍"` · 꺼짐 `"   "` 로 **바꿔 찍었다.** 두 꼬리의
+        폭이 11.3px 다르다 — 줄바꿈이 켜진 칸이라 그 차이가 **높이 40 ↔ 46px** 로
+        번지고, 이 칸이 세로로 쌓여 있어 **0.6초마다 위의 그래프까지 통째로 밀렸다.**
+        오너가 창을 보고 「깜박일 때마다 움찔거린다」고 두 번 짚은 자리다.
+
+        같은 폭의 안 보이는 글자를 찾아봤지만 없다(정확히 같은 폭은 블록 글자뿐인데
+        그건 보인다). 그래서 **글자는 늘 그 자리에 두고 색만 바꾼다** — 폭이 안 변하니
+        높이도 안 변하고, 아무것도 안 흔들린다.
+
+        ※ 서식 글이라 `<`·`&` 는 감싸 주고, 줄바꿈은 `<br>` 로 바꾼다. 빈칸 둘은
+          서식 글에서 하나로 줄어들어 `&nbsp;` 로 적는다.
+        """
+        빛 = theme.T.TEXT.name() if self._caret_on else "transparent"
+        몸 = html.escape(self._say_text).replace("\n", "<br>")
+        self.say.setText(f'{몸}&nbsp;&nbsp;<span style="color:{빛}">▍</span>')
 
     def _blink(self) -> None:
         self._caret_on = not self._caret_on

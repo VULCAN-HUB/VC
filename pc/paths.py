@@ -88,6 +88,63 @@ _PINNED = False
 _PINNED = pin_runtime()
 
 
+def qt_plugins_dir() -> Path | None:
+    """PyQt5 가 들고 온 플러그인 폴더(`PyQt5/Qt5/plugins`). 없으면 None.
+
+    **PyQt5 를 여기서 불러오지 않는다.** `pin_runtime()` 이 「Qt 가 먼저 올라왔는가」로
+    판단하므로, 이 파일을 불러오는 것만으로 Qt 가 올라오면 윈도우의 런타임 붙들기가
+    통째로 망가진다. 이미 올라와 있을 때만 그 자리를 알려 준다.
+    """
+    mod = sys.modules.get("PyQt5")
+    if mod is None or not getattr(mod, "__file__", None):
+        return None
+    곳 = Path(mod.__file__).parent / "Qt5" / "plugins"
+    return 곳 if 곳.is_dir() else None
+
+
+_QT_PINNED = False
+
+
+def pin_qt_plugins() -> bool:
+    """Qt 플러그인 자리를 **파이썬 글자 그대로** 박는다. 창을 만들기 전에 부른다.
+
+    ★★ **경로에 한글이 있으면 Qt 가 제 플러그인 자리를 스스로 못 찾는다.**
+    맥에서 `~/프로젝트/VC` 로 풀고 돌리자 창 띄우는 모듈 일곱이 통째로 죽었다:
+
+        PluginsPath: /Users/…/????/VC/pc/…/PyQt5/Qt5/plugins
+        qt.qpa.plugin: Could not find the Qt platform plugin "cocoa" in ""
+
+    Qt 가 제 설치 자리를 **8비트 글자로 되돌리면서** 한글을 `?` 로 버린다. 그런 폴더는
+    없으니 `cocoa` 도 `offscreen` 도 못 찾고, 자체점검까지 다 터진다. `LANG` 을 UTF-8 로
+    줘도 안 고쳐진다 — 되돌리는 자리가 로캘보다 앞이다.
+
+    `addLibraryPath()` 에는 **파이썬 글자를 그대로** 넘길 수 있어 8비트를 거치지 않는다.
+    그래서 한글 자리가 살아서 들어간다. 환경 변수(`QT_QPA_PLATFORM_PLUGIN_PATH`)로는
+    같은 병을 다시 밟는다 — 그쪽도 8비트로 읽힌다.
+
+    여러 번 불러도 된다. 참을 주면 자리를 박았거나 이미 박혀 있다는 뜻이다.
+    """
+    global _QT_PINNED
+    if _QT_PINNED:
+        return True
+    # ★ **PyQt5 를 여기서 직접 올린다.** 「이미 올라와 있으면」으로 두었더니, 부르는
+    #   자리가 `import PyQt5` 보다 한 줄 앞이면 **아무 말 없이 아무것도 안 했다** —
+    #   그리고 창은 그대로 안 떴다. 부르는 쪽은 어차피 곧 Qt 를 쓴다.
+    #   (`pin_runtime()` 은 이 파일을 불러오는 순간 이미 끝났으므로 늦지 않는다.)
+    import PyQt5        # noqa: F401
+    from PyQt5.QtCore import QCoreApplication
+
+    곳 = qt_plugins_dir()
+    if 곳 is None:
+        return False        # 구운 판은 PyInstaller 가 제 길로 넣는다
+
+    자리 = str(곳)
+    if 자리 not in QCoreApplication.libraryPaths():
+        QCoreApplication.addLibraryPath(자리)
+    _QT_PINNED = 자리 in QCoreApplication.libraryPaths()
+    return _QT_PINNED
+
+
 def frozen() -> bool:
     """설치본으로 도는 중인가."""
     return getattr(sys, "frozen", False)
@@ -484,10 +541,14 @@ def _self_check() -> None:
         곁.mkdir()
         # 구운 것과 같은 모양으로 꾸민다 — 딸려 온 것은 `_internal` 에 풀린다.
         (Path(tmp) / "_internal" / "models").mkdir(parents=True)
-        옛프로즌, 옛실행 = globals()["frozen"], sys.executable
+        옛프로즌, 옛실행, 첫판 = globals()["frozen"], sys.executable, sys.platform
         globals()["frozen"] = lambda: True
         sys.executable = str(Path(tmp) / "VC.exe")
         sys._MEIPASS = str(Path(tmp) / "_internal")
+        # ★ **「exe 옆」을 재는 동안은 윈도우인 척한다.** 맥에서 돌리면 `fetched_dir()`
+        #   이 맥 분기(`Application Support`)로 빠져 이 아래가 통째로 터진다 —
+        #   검사가 윈도우에서만 맞는 모양이었다. 맥 분기는 바로 밑에서 따로 잰다.
+        sys.platform = "win32"
         try:
             속 = Path(tmp) / "_internal" / "models"
             assert fetched_dir() == 곁, fetched_dir()
@@ -503,15 +564,12 @@ def _self_check() -> None:
                 (곳 / "tokenizer.json").write_bytes(b"x")
             assert meaning_dir("e5-base") == 곁 / "e5-base", f"exe 옆에 받은 큰 모델을 못 찾는다: {meaning_dir('e5-base')}"
             assert meaning_dir("딸려 온 것 (e5-small)") == 속, "딸려 온 것을 못 찾는다"
-            옛판 = sys.platform
             sys.platform = "darwin"
-            try:
-                assert "Application Support" in str(fetched_dir()) and "VC.exe" not in str(fetched_dir()), \
-                    f"맥은 받은 모델이 앱 속(VC.app/Contents/MacOS)에 들어간다: {fetched_dir()}"
-            finally:
-                sys.platform = 옛판
+            assert "Application Support" in str(fetched_dir()) and "VC.exe" not in str(fetched_dir()), \
+                f"맥은 받은 모델이 앱 속(VC.app/Contents/MacOS)에 들어간다: {fetched_dir()}"
         finally:
             globals()["frozen"], sys.executable = 옛프로즌, 옛실행
+            sys.platform = 첫판
             del sys._MEIPASS
 
     # **문서 폴더는 윈도우한테 물어야 한다.** 한글 윈도우면 `문서`, 옮겨 놨으면 옮긴 자리.
@@ -678,6 +736,23 @@ def _self_check() -> None:
         있는태그 = ""
     assert not 있는태그, (
         f"v{VERSION} 태그가 이미 있다 — 이 판은 나갔다. paths.VERSION 을 올려라")
+
+    # ★ **Qt 플러그인 자리 박기** — 경로에 한글이 있으면 Qt 가 제 자리를 못 찾는다.
+    #   `pin_qt_plugins()` 를 되돌리면 여기서 터져야 한다.
+    assert qt_plugins_dir() is None, "PyQt5 가 벌써 올라왔다 — 런타임 붙들기가 늦는다"
+    import PyQt5                                          # noqa: F401  (여기서 처음 올린다)
+    from PyQt5.QtCore import QCoreApplication, QLibraryInfo
+
+    곳 = qt_plugins_dir()
+    assert 곳 is not None and (곳 / "platforms").is_dir(), f"Qt 플러그인 폴더가 없다: {곳}"
+    assert pin_qt_plugins() and pin_qt_plugins(), "Qt 플러그인 자리를 못 박는다(두 번 불러도 돼야 한다)"
+    assert str(곳) in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
+    # Qt 가 스스로 말하는 자리는 **한글이 깨져 있을 수 있다** — 그래서 박는 것이다.
+    # 깨지지 않는 자리(영문 경로)에서는 둘이 같다. 어느 쪽이든 박은 자리는 살아 있어야 한다.
+    스스로 = QLibraryInfo.location(QLibraryInfo.PluginsPath)
+    assert "?" not in str(곳), f"우리가 박는 자리부터 깨졌다: {곳}"
+    if "?" in 스스로:
+        print(f"  (Qt 가 스스로 말하는 자리는 깨져 있다: {스스로} — 박아서 넘겼다)")
 
     print("paths self-check 통과")
 

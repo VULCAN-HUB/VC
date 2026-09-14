@@ -243,8 +243,16 @@ def _self_check() -> None:
                 AUDIO_DIR = old_audio
 
             # 못 쓰는 곳이어도 조용히 넘어간다 — 기록 때문에 대화가 멈추면 안 된다.
-            LOG_PATH = Path("Z:/없는드라이브/talk.jsonl")
+            # ★★ 전에는 `Z:/없는드라이브` 였다. 윈도우에서는 없는 드라이브라 못 쓰지만
+            #   **맥·리눅스에서는 그냥 상대 경로**다 — 검사가 소스 폴더 안에
+            #   `pc/Z:/없는드라이브/talk.jsonl` 을 **진짜로 만들어 놓고** 통과했다.
+            #   아무것도 안 재면서 쓰레기만 남긴 것이다. 어느 운영체제에서나 확실히
+            #   못 쓰는 자리로 바꾼다 — **파일 밑에는 폴더를 못 만든다.**
+            막힌곳 = Path(tmp) / "이건 폴더가 아니라 파일이다"
+            막힌곳.write_text("x", encoding="utf-8")
+            LOG_PATH = 막힌곳 / "없는폴더" / "talk.jsonl"
             record(heard="아무거나")  # 터지면 안 된다
+            assert not LOG_PATH.exists(), f"못 쓰는 자리인데 썼다: {LOG_PATH}"
     finally:
         LOG_PATH = old
 
