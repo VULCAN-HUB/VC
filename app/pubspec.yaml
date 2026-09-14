@@ -63,6 +63,7 @@ flutter:
   # PC 표식(logo.VulcanMark)을 구운 그림 — app/tools/make_assets.py
   assets:
     - assets/vc_mark.png
+    - assets/vc_mark_solid.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

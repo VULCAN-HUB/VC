@@ -81,4 +81,5 @@ for name, px in (("LaunchImage.png", 240), ("LaunchImage@2x.png", 480), ("Launch
     save(render(px, ring=True, bg=False), launch / name)
 
 save(render(720, ring=True, bg=False), APP / "assets/vc_mark.png")
+save(render(256, ring=False, bg=False, mark_scale=0.92), APP / "assets/vc_mark_solid.png")
 print("끝")

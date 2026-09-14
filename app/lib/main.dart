@@ -22,12 +22,19 @@ const _accent = Color(0xFFFF3D1F);
 const _muted = Color(0xFF8B7F7A);
 const _warn = Color(0xFFFFB454);
 const _markAsset = 'assets/vc_mark.png';
+const _markSolid = 'assets/vc_mark_solid.png'; // 불티 링 없이 표식만 — 작은 자리용
 
 const _store = FlutterSecureStorage();
 const _pairKey = 'vc_pair';
 
-TextStyle _mono(double size, Color color, {FontWeight weight = FontWeight.w500}) =>
-    TextStyle(fontFamily: 'monospace', fontSize: size, color: color, letterSpacing: 1.2, fontWeight: weight);
+// 계기판 글씨. ★ 'monospace' 글꼴은 한글을 한 칸씩 벌려 「창 고 앞 머 리」가 됐다(에뮬레이터로 봄) —
+//   기본 글꼴 + 숫자 폭 고정으로 같은 느낌만 낸다.
+TextStyle _mono(double size, Color color, {FontWeight weight = FontWeight.w500}) => TextStyle(
+    fontSize: size,
+    color: color,
+    letterSpacing: .6,
+    fontWeight: weight,
+    fontFeatures: const [FontFeature.tabularFigures()]);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -574,12 +581,15 @@ class _HomeState extends State<Home> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(10, 8, 4, 2),
                 child: Row(children: [
-                  const VcMark(size: 52, breathe: false),
-                  const SizedBox(width: 4),
+                  const Padding(
+                    padding: EdgeInsets.all(6),
+                    child: Image(image: AssetImage(_markSolid), width: 34, height: 34),
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       const Text('VC',
-                          style: TextStyle(fontSize: 21, letterSpacing: 6, fontWeight: FontWeight.w600, color: _text)),
+                          style: TextStyle(fontSize: 21, letterSpacing: 3, fontWeight: FontWeight.w600, color: _text)),
                       const SizedBox(height: 2),
                       Row(children: [
                         Container(
@@ -701,7 +711,7 @@ class _BrowseTabState extends State<BrowseTab> {
                 Padding(
                   padding: const EdgeInsets.only(top: 40),
                   child: Column(children: [
-                    const Opacity(opacity: .35, child: VcMark(size: 110, breathe: false)),
+                    const Opacity(opacity: .3, child: Image(image: AssetImage(_markSolid), width: 72, height: 72)),
                     const SizedBox(height: 8),
                     Text(_empty!, style: const TextStyle(color: _muted)),
                   ]),
