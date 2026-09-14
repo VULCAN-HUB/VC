@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 안드로이드 12+ 는 시스템 시작 화면을 쓴다: 바탕색 + 가운데 아이콘 -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">@color/vc_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
+        <item name="android:windowBackground">@color/vc_bg</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/vc_bg</item>
+    </style>
+</resources>
