@@ -84,6 +84,10 @@ ort_datas, ort_bins, ort_hidden = collect_all("onnxruntime")
 #
 #   (한 줄로 이어서 친다. PyPI 에는 미리 구운 휠이 없어 `--extra-index-url` 이 있어야
 #    받아진다 — 없으면 「No matching distribution found」 로 끝난다.)
+MAC = sys.platform == "darwin"
+# 맥: CUDA 가 없어 그 사슬 문제가 없다. pip 로 깐 llama-cpp-python(Metal)을 그대로 담는다 — build_mac.sh
+if MAC and not (ENGINE / "llama_cpp").is_dir():
+    ENGINE = Path(__import__("site").getsitepackages()[0])
 if not (ENGINE / "llama_cpp").is_dir():
     raise SystemExit(chr(10).join([
         f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'}",
@@ -162,8 +166,9 @@ exe = EXE(
     strip=False,
     upx=False,          # 압축은 오탐을 부른다
     console=False,      # 창 프로그램이다. 검은 콘솔이 같이 뜨면 안 된다
-    icon=str(HERE / "vc.ico"),
-    version=str(HERE / "version.txt"),
+    # 맥은 .ico·버전 파일을 안 쓴다 — 아이콘은 BUNDLE 이 .png 를 .icns 로 바꿔 담는다(Pillow)
+    icon=None if MAC else str(HERE / "vc.ico"),
+    version=None if MAC else str(HERE / "version.txt"),
 )
 
 coll = COLLECT(
@@ -174,3 +179,25 @@ coll = COLLECT(
     upx=False,
     name="VC",
 )
+
+if MAC:
+    sys.path.insert(0, str(HERE))
+    import paths as _paths
+
+    app = BUNDLE(
+        coll,
+        name="VC.app",
+        icon=str(HERE / "vc_mac.png") if (HERE / "vc_mac.png").is_file() else None,
+        bundle_identifier="com.unknown8563.vc",
+        version=_paths.VERSION,
+        info_plist={
+            "CFBundleDisplayName": "VC",
+            "CFBundleShortVersionString": _paths.VERSION,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+            # 말로 시키기(받아쓰기). 문구가 없으면 맥이 마이크를 묻지도 않고 막는다
+            "NSMicrophoneUsageDescription": "VC 에게 말로 시키려고 마이크를 쓴다",
+            # 폰 앱·같은 공유기 기기가 붙는 서버(8765)
+            "NSLocalNetworkUsageDescription": "같은 와이파이의 폰 앱이 VC 창고에 붙는다",
+        },
+    )

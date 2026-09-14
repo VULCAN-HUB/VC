@@ -179,6 +179,8 @@ def 이프로세스메모리() -> tuple[int, int]:
     이건 자기 프로세스를 잰다. 그래서 facts() 는 이걸 직접 안 쓰고, 창이
     메모리찍기() 로 적어 둔 파일을 읽는다 — --report 는 창이 아니기 때문이다.
     """
+    if os.name != "nt":
+        return _유닉스메모리()
     import ctypes
     from ctypes import wintypes
 
@@ -218,6 +220,27 @@ def 이프로세스메모리() -> tuple[int, int]:
         # 0 은 「안 쓴다」가 아니라 「못 쟀다」다. 구별이 안 되니 터뜨린다.
         raise OSError(f"메모리를 못 쟀다 (돌려준 값 {됨})")
     return m.WorkingSetSize // 1048576, m.PeakWorkingSetSize // 1048576
+
+
+def _유닉스메모리() -> tuple[int, int]:
+    """맥·리눅스. 최고는 `getrusage`(맥은 바이트, 리눅스는 KB), 지금은 `ps` 의 RSS(KB).
+
+    ★ 전엔 `ctypes.windll` 을 바로 불러 맥에서는 늘 터졌다 — 창은 삼키고 넘어가 메모리가 한 번도 안 적혔다.
+    """
+    import resource
+    import subprocess
+    import sys
+
+    최고 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    최고 //= 1048576 if sys.platform == "darwin" else 1024
+    try:
+        지금 = int(subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
+                                text=True, timeout=5).stdout.strip()) // 1024
+    except (OSError, ValueError, subprocess.SubprocessError):
+        지금 = 최고
+    if not 최고:
+        raise OSError("메모리를 못 쟀다")
+    return 지금 or 최고, 최고
 
 
 def 메모리찍기() -> None:

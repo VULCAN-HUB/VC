@@ -1,0 +1,13 @@
+# 맥에서 VC 를 굽고 돌리는 데 필요한 것 (윈도우 개발 자리와 같은 판)
+# pywin32 는 윈도우 전용이라 뺀다 — 맥 목소리는 `say` 를 쓴다
+PyQt5==5.15.11
+onnxruntime==1.27.0
+tokenizers==0.23.1
+faster-whisper==1.2.1
+sounddevice==0.5.5
+segno==1.6.6
+piper-tts==1.6.0
+llama-cpp-python==0.3.34
+numpy==2.4.6
+Pillow==12.2.0
+pyinstaller==6.21.0
