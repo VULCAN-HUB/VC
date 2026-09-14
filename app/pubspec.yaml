@@ -37,6 +37,7 @@ dependencies:
   http: ^1.6.0
   mobile_scanner: ^7.4.1
   flutter_secure_storage: ^11.1.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

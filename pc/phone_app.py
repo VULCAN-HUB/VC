@@ -288,6 +288,58 @@ def _self_check() -> None:
         pc.shutdown()
         pc.server_close()
         pc.notes.conn.close()
+
+    # ★★ 폰 전송 대기함 — 같은 client_id 는 한 번만 받는다. 서버를 다시 켜도, 쓰는 사이 꺼졌어도.
+    기록 = Path(tmp.name) / "재시작"
+    노트 = Notes(기록 / "notes")
+
+    def 켜기():
+        s = EBServer(("127.0.0.1", 0), cfg, Store(str(기록 / "eb.db")), 노트)
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+        return s
+
+    def 보내기(s, 몸글):
+        req = urllib.request.Request(f"http://127.0.0.1:{s.server_address[1]}/eb/v1/memory", method="POST",
+                                     data=json.dumps(몸글).encode(),
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer phone-token"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def 끄기(s):
+        s.shutdown()
+        s.server_close()
+        s.store.conn.close()
+
+    가 = 켜기()
+    글 = {"title": "폰글", "text": "응답이 끊겨도 한 줄", "client_id": "a1b2c3d4e5f6a7b8"}
+    assert 보내기(가, 글)[0] == 201
+    상태, 답 = 보내기(가, 글)                                  # 응답을 못 받아 다시 보냈다
+    assert 상태 == 200 and 답.get("duplicate") is True, (상태, 답)
+    끄기(가)
+    나 = 켜기()                                                # 서버 재시작
+    상태, 답 = 보내기(나, 글)
+    assert 상태 == 200 and 답.get("duplicate") is True, f"서버를 다시 켜니 같은 글을 또 받았다: {상태} {답}"
+    assert 노트.read("폰글").body.count("응답이 끊겨도 한 줄") == 1, 노트.read("폰글").body
+    # 쓰기 시작 표시만 남기고 꺼진 경우 — 글에 이미 들어갔으면 다시 붙이지 않는다
+    나.store.client_write_begin("crash-00000001", "폰글")
+    노트.append("폰글", "쓰다가 꺼진 줄")
+    상태, 답 = 보내기(나, {"title": "폰글", "text": "쓰다가 꺼진 줄", "client_id": "crash-00000001"})
+    assert 상태 == 200 and 답.get("duplicate") is True, (상태, 답)
+    assert 노트.read("폰글").body.count("쓰다가 꺼진 줄") == 1, "쓰는 사이 꺼진 글이 두 번 붙었다"
+    # 쓰기 시작 표시만 있고 글엔 없으면 — 이제 쓴다
+    나.store.client_write_begin("crash-00000002", "새폰글")
+    assert 보내기(나, {"title": "새폰글", "text": "못 쓰고 꺼졌던 줄", "client_id": "crash-00000002"})[0] == 201
+    assert "못 쓰고 꺼졌던 줄" in 노트.read("새폰글").body
+    # 같은 제목에 다른 글(다른 id)은 따로 붙는다 — 중복 막이가 정상 글을 삼키면 안 된다
+    assert 보내기(나, {**글, "client_id": "b1b2c3d4e5f6a7b8"})[0] == 201
+    assert 노트.read("폰글").body.count("응답이 끊겨도 한 줄") == 2
+    assert 보내기(나, {**글, "client_id": "짧"})[0] == 400
+    assert 보내기(나, {**글, "client_id": 12345678})[0] == 400
+    끄기(나)
+    노트.conn.close()
     print("phone_app self-check 통과")
 
 

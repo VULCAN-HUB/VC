@@ -6,8 +6,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'dart:io';
 
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'outbox.dart';
 import 'vc_api.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
@@ -218,6 +222,7 @@ class Root extends StatefulWidget {
 
 class _RootState extends State<Root> {
   Pairing? _pairing;
+  Outbox? _outbox;
   bool _ready = false;
 
   @override
@@ -235,10 +240,19 @@ class _RootState extends State<Root> {
     } catch (_) {
       saved = null; // 보안 저장소를 못 읽으면 다시 짝짓게 한다
     }
+    // 전송 대기함은 짝과 따로 산다 — 연결을 지워도 안 보낸 글은 남는다
+    Directory where;
+    try {
+      where = await getApplicationSupportDirectory();
+    } catch (_) {
+      where = await getApplicationDocumentsDirectory();
+    }
+    final outbox = await Outbox.open(File('${where.path}/vc_outbox.json'));
     await atLeast;
     if (!mounted) return;
     setState(() {
       _pairing = saved == null ? null : Pairing.parse(saved);
+      _outbox = outbox;
       _ready = true;
     });
   }
@@ -286,6 +300,7 @@ class _RootState extends State<Root> {
             : Home(
                 key: ValueKey(p.label),
                 api: VcApi(p),
+                outbox: _outbox!,
                 onUnauthorized: () => _unpair('열쇠가 안 맞아 — QR 을 다시 찍어 줘'),
                 onUnpair: () => _unpair('연결을 지웠어'),
               );
@@ -522,9 +537,11 @@ class _FramePainter extends CustomPainter {
 typedef OnFail = void Function(Object error);
 
 class Home extends StatefulWidget {
-  const Home({super.key, required this.api, required this.onUnauthorized, required this.onUnpair});
+  const Home(
+      {super.key, required this.api, required this.outbox, required this.onUnauthorized, required this.onUnpair});
 
   final VcApi api;
+  final Outbox outbox;
   final VoidCallback onUnauthorized;
   final VoidCallback onUnpair;
 
@@ -532,7 +549,7 @@ class Home extends StatefulWidget {
   State<Home> createState() => _HomeState();
 }
 
-class _HomeState extends State<Home> {
+class _HomeState extends State<Home> with WidgetsBindingObserver {
   int _tab = 0;
   String _state = 'PC 에 잇는 중…';
   Color _dot = _muted;
@@ -540,15 +557,49 @@ class _HomeState extends State<Home> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _hello();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // 앱으로 돌아오면 다시 잇고, 안 보낸 글을 보낸다
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _hello();
   }
 
   Future<void> _hello() async {
     try {
       final n = await widget.api.notes();
       _show(n == null ? '${widget.api.pairing.label} 에 이어짐' : '이어짐 · 창고 $n장', _accent);
+      await _send();
     } catch (e) {
       _fail(e);
+    }
+  }
+
+  /// 전송 대기함을 비운다. 못 닿으면 글은 폰에 남고 다음에 보낸다.
+  Future<void> _send() async {
+    final before = widget.outbox.pending;
+    final r = await widget.outbox.flush(widget.api);
+    // 보낸 게 있으면 창고 장수를 다시 센다(보내기 전에 센 「창고 0장」이 남아 있었다 — 에뮬레이터로 봄)
+    if (r == FlushResult.done && widget.outbox.pending < before) {
+      try {
+        final n = await widget.api.notes();
+        if (n != null) _show('이어짐 · 창고 $n장', _accent);
+      } catch (_) {
+        // 세기만 실패 — 글은 이미 보냈다
+      }
+    }
+    if (r == FlushResult.unauthorized) {
+      widget.onUnauthorized();
+    } else if (r == FlushResult.offline) {
+      _show('PC 에 못 닿았어 — 쓴 글은 폰에 두고 연결되면 보낸다', _warn);
     }
   }
 
@@ -617,8 +668,8 @@ class _HomeState extends State<Home> {
               ),
               Expanded(
                 child: IndexedStack(index: _tab, children: [
-                  BrowseTab(api: widget.api, onFail: _fail),
-                  WriteTab(api: widget.api, onFail: _fail),
+                  BrowseTab(api: widget.api, onFail: _fail, outbox: widget.outbox),
+                  WriteTab(outbox: widget.outbox, onSend: _send),
                 ]),
               ),
             ]),
@@ -636,10 +687,11 @@ class _HomeState extends State<Home> {
 }
 
 class BrowseTab extends StatefulWidget {
-  const BrowseTab({super.key, required this.api, required this.onFail});
+  const BrowseTab({super.key, required this.api, required this.onFail, this.outbox});
 
   final VcApi api;
   final OnFail onFail;
+  final Outbox? outbox; // 폰 글을 보내면 목록을 다시 부른다
 
   @override
   State<BrowseTab> createState() => _BrowseTabState();
@@ -652,16 +704,32 @@ class _BrowseTabState extends State<BrowseTab> {
   String? _empty;
   bool _busy = false;
 
+  int _sentSeen = 0;
+
   @override
   void initState() {
     super.initState();
+    _sentSeen = _sentCount();
+    widget.outbox?.addListener(_onOutbox);
     _find();
   }
 
   @override
   void dispose() {
+    widget.outbox?.removeListener(_onOutbox);
     _q.dispose();
     super.dispose();
+  }
+
+  int _sentCount() => widget.outbox?.items.where((i) => i.sent).length ?? 0;
+
+  // ★ 목록은 켤 때 한 번 불렀다 — 그 뒤 대기함이 글을 보내도 「0장 · 안 나왔어」가 남았다(에뮬레이터로 봄)
+  void _onOutbox() {
+    final n = _sentCount();
+    if (n != _sentSeen) {
+      _sentSeen = n;
+      if (!_busy) _find();
+    }
   }
 
   Future<void> _find() async {
@@ -845,10 +913,10 @@ class _NotePageState extends State<NotePage> {
 }
 
 class WriteTab extends StatefulWidget {
-  const WriteTab({super.key, required this.api, required this.onFail});
+  const WriteTab({super.key, required this.outbox, required this.onSend});
 
-  final VcApi api;
-  final OnFail onFail;
+  final Outbox outbox;
+  final Future<void> Function() onSend;
 
   @override
   State<WriteTab> createState() => _WriteTabState();
@@ -889,24 +957,67 @@ class _WriteTabState extends State<WriteTab> {
     final title = _title.text.trim().isEmpty ? _today() : _title.text.trim();
     setState(() => _busy = true);
     try {
-      final saved = await widget.api.write(title, text);
-      _body.clear(); // 저장된 뒤에만 비운다
-      _tell('PC 의 「$saved」에 적었어', true);
-    } on VcOffline {
-      _tell('PC 에 못 닿아서 못 적었어 — 적은 글은 칸에 그대로 있어', false);
-    } catch (e) {
-      _tell('못 적었어 — $e', false);
-      widget.onFail(e);
+      final OutboxItem item;
+      try {
+        item = await widget.outbox.add(title, text); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
+      } catch (e) {
+        _tell('폰에 저장 못 했어 — 적은 글은 칸에 그대로 있어 ($e)', false);
+        return;
+      }
+      _body.clear();
+      _tell('폰에 저장됨 — 보내는 중…', true);
+      await widget.onSend(); // ② 닿으면 보낸다
+      _tell(item.sent ? '서버 저장 완료 — 「${item.savedAs ?? item.title}」' : '폰에 저장됨 · 전송 대기 — 연결되면 보낸다', true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  static Color _stateColor(SendState s) => switch (s) {
+        SendState.saved => _dim,
+        SendState.waiting => _warn,
+        SendState.sent => _accent,
+      };
+
+  Widget _item(OutboxItem it) {
+    final c = _stateColor(it.state);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _card.withValues(alpha: .9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.withValues(alpha: .25)),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(it.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _text, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(it.error ?? it.text.replaceAll('\n', ' '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: it.error != null ? _warn : _muted, fontSize: 12.5)),
+          ]),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(color: c.withValues(alpha: .12), borderRadius: BorderRadius.circular(20)),
+          child: Text(it.state.label, style: _mono(11, c, weight: FontWeight.w700)),
+        ),
+      ]),
+    );
   }
 
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         child: Column(children: [
-          const SectionLabel('PC 에 남기기'),
+          const SectionLabel('새 글'),
           TextField(
             controller: _title,
             decoration: const InputDecoration(
@@ -914,19 +1025,20 @@ class _WriteTabState extends State<WriteTab> {
           ),
           const SizedBox(height: 10),
           Expanded(
+            flex: 3,
             child: TextField(
               controller: _body,
               maxLines: null,
               expands: true,
               textAlignVertical: TextAlignVertical.top,
               style: const TextStyle(fontSize: 15.5, height: 1.6),
-              decoration: const InputDecoration(hintText: '적을 것 — 같은 제목이 있으면 뒤에 덧붙는다'),
+              decoration: const InputDecoration(hintText: '적을 것 — 폰에 먼저 저장하고, 연결되면 PC·맥에 보낸다'),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           if (_say.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.only(bottom: 8),
               child: Row(children: [
                 Icon(_sayOk ? Icons.check_circle_outline : Icons.error_outline,
                     size: 16, color: _sayOk ? _accent : _warn),
@@ -936,14 +1048,40 @@ class _WriteTabState extends State<WriteTab> {
             ),
           SizedBox(
             width: double.infinity,
-            height: 54,
+            height: 52,
             child: FilledButton.icon(
               onPressed: _busy ? null : _save,
               icon: _busy
                   ? const SizedBox(
                       width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
                   : const Icon(Icons.north_east),
-              label: const Text('PC 에 적기', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              label: const Text('저장', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: ListenableBuilder(
+              listenable: widget.outbox,
+              builder: (context, _) {
+                final n = widget.outbox.pending;
+                return Column(children: [
+                  SectionLabel('보낸 기록', trailing: n == 0 ? '대기 없음' : '전송 대기 $n'),
+                  if (n > 0)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: _busy ? null : () => widget.onSend(),
+                        icon: const Icon(Icons.sync, size: 16, color: _accent),
+                        label: Text('지금 보내기', style: _mono(12, _accent)),
+                      ),
+                    ),
+                  Expanded(
+                    child: widget.outbox.items.isEmpty
+                        ? Center(child: Text('아직 쓴 글이 없다', style: _mono(12, _muted)))
+                        : ListView(children: [for (final it in widget.outbox.items) _item(it)]),
+                  ),
+                ]);
+              },
             ),
           ),
         ]),

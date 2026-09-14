@@ -100,8 +100,10 @@ class VcApi {
       query: {'title': title, if (q.isNotEmpty) 'q': q, 'folder': ?folder});
 
   /// 적기 — 같은 제목이 있으면 뒤에 덧붙는다. 실제로 저장된 제목을 준다.
-  Future<String> write(String title, String text) async {
-    final j = await _call('POST', '/eb/v1/memory', body: {'title': title, 'text': text});
+  /// `clientId` 가 같으면 서버는 한 번만 받는다(다시 보내도 안 겹친다).
+  Future<String> write(String title, String text, {String? clientId}) async {
+    final j = await _call('POST', '/eb/v1/memory',
+        body: {'title': title, 'text': text, 'client_id': ?clientId});
     return '${j['saved_as'] ?? j['title'] ?? title}';
   }
 }

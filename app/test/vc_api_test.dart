@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:vc_app/main.dart';
+import 'package:vc_app/outbox.dart';
 import 'package:vc_app/vc_api.dart';
 
 http.Response _json(Object body, [int status = 200]) =>
@@ -60,15 +62,22 @@ void main() {
     );
   });
 
-  testWidgets('못 닿아 못 적으면 적은 글이 칸에 남는다', (tester) async {
-    Object? failed;
+  testWidgets('맥이 꺼져 있어도 저장 — 폰에 남고 「전송 대기」로 보인다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_write');
+    addTearDown(() => dir.deleteSync(recursive: true));
     final api = _api((_) async => throw http.ClientException('끊김'));
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: WriteTab(api: api, onFail: (e) => failed = e))));
-    await tester.enterText(find.byType(TextField).last, '잃으면 안 되는 글');
-    await tester.tap(find.text('PC 에 적기'));
-    await tester.pumpAndSettle();
-    expect(find.text('잃으면 안 되는 글'), findsOneWidget);
-    expect(find.textContaining('못 닿아서'), findsOneWidget);
-    expect(failed, isNull, reason: '못 닿은 것은 짝 풀기로 넘기지 않는다');
+    final outbox = await tester.runAsync(() => Outbox.open(File('${dir.path}/o.json')));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: WriteTab(outbox: outbox!, onSend: () => outbox.flush(api).then((_) {})))));
+    await tester.enterText(find.byType(TextField).at(1), '잃으면 안 되는 글');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('저장'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pump();
+    expect(find.textContaining('전송 대기'), findsWidgets);
+    expect(find.text('잃으면 안 되는 글'), findsOneWidget, reason: '대기함 목록에 보여야 한다');
+    final again = await tester.runAsync(() => Outbox.open(File('${dir.path}/o.json')));
+    expect(again!.items.single.text, '잃으면 안 되는 글', reason: '폰 파일에 안 남았다');
   });
 }

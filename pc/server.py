@@ -16,6 +16,7 @@ import base64
 import hmac
 import json
 import queue
+import re
 import time
 from dataclasses import asdict
 import secrets
@@ -277,6 +278,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(201, 답)
 
     def _send(self, code: int, payload: Any = None) -> None:
+        self._보낸코드 = code          # 쓰기가 성공했는지 부른 쪽이 본다(폰 새 글 한 번만 받기)
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -850,8 +852,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "mode must be append or replace"})
             # ★★ **읽고-막고-쓰기를 한 잠금 안에서.** 밖이면 없던 글을 두 AI 가 동시에 덮거나,
             #   읽은 뒤 남이 덧붙인 줄을 `force` 없이 통째로 지웠다(막이가 본 `old` 가 낡았다).
+            # ★★ **폰의 전송 대기함은 같은 글을 다시 보낸다** — 서버엔 써졌는데 응답이 끊기면 폰은 실패로 안다.
+            #   덧붙이기라 그대로 받으면 같은 줄이 두 번 붙는다. `client_id`(글마다 하나)로 한 번만 받는다.
+            #   받은 표시는 eb.db 에 남아 서버를 다시 켜도 산다.
+            cid = body.get("client_id")
+            if cid is not None and (not isinstance(cid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", cid)):
+                return self._send(400, {"error": "client_id 는 영문·숫자·-_ 8~80자다"})
             with self.server.notes._글잠금(title):
-                return self._memory_write(title, text, mode, body)
+                if cid:
+                    store = self.server.store
+                    전 = store.client_write(cid)
+                    if 전 is not None:
+                        # 쓰기 시작 표시만 있고 끝 표시가 없으면, 글을 쓰는 사이 꺼졌을 수 있다 — 글에 그 몸이 있으면 받은 것이다
+                        있던글 = self.server.notes.read(전["title"])
+                        몸 = (lambda s: s.replace(chr(13) + chr(10), chr(10)).strip())
+                        if 전["done"] or (있던글 is not None and 몸(text) in 몸(있던글.body)):
+                            store.client_write_done(cid)
+                            답 = {"title": 전["title"], "mode": mode, "duplicate": True}
+                            if (저장제목 := notes.제목맞춤(전["title"])) != 전["title"]:
+                                답["saved_as"] = 저장제목
+                            return self._send(200, 답)
+                    else:
+                        store.client_write_begin(cid, title)
+                self._memory_write(title, text, mode, body)
+                if cid and getattr(self, "_보낸코드", 0) in (200, 201):
+                    self.server.store.client_write_done(cid)
+                return
 
         # ★★ **AI 가 제가 잘못 쓴 글을 못 지우고, 제목도 못 고쳤다.** 화면에서는 둘 다 되는데
         #   문이 없었다 — 옵시디언에서는 당연한 일이고, 창고가 AI 의 바깥 기억이라면
