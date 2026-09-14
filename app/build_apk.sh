@@ -8,13 +8,13 @@
 # 도구 자리: C:\dev\flutter · C:\dev\android-sdk · C:\dev\jdk-17.* (시스템 PATH 는 안 건드린다)
 set -euo pipefail
 
-앱자리="$(cd "$(dirname "$0")" && pwd -W)"
+APPDIR="$(cd "$(dirname "$0")" && pwd -W)"      # 변수 이름은 영문 — bash 는 한글 이름을 변수로 못 읽는다
 export JAVA_HOME="$(ls -d /c/dev/jdk-17* | head -1 | sed 's#^/c#C:#')"
 export ANDROID_HOME="C:\\dev\\android-sdk"
 F=/c/dev/flutter/bin/flutter.bat
 
 cmd //c "subst V: /D" >/dev/null 2>&1 || true
-cmd //c "subst V: ${앱자리//\//\\}"
+cmd //c "subst V: ${APPDIR//\//\\}"
 trap 'cmd //c "subst V: /D" >/dev/null 2>&1 || true' EXIT
 cd /v/
 

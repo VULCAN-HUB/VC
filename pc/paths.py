@@ -139,7 +139,12 @@ def fetched_dir() -> Path:
     """
     if env := os.environ.get("VC_MODELS"):
         return Path(env)
-    return Path(sys.executable).parent / "models" if frozen() else models_dir()
+    if not frozen():
+        return models_dir()
+    if sys.platform == "darwin":
+        # ★ 맥에서 「exe 옆」은 `VC.app/Contents/MacOS` — **앱 속**이라 앱을 바꾸면 같이 지워진다.
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "models"
+    return Path(sys.executable).parent / "models"
 
 
 # 뜻 검색에 쓸 모델을 고르는 차례. **받은 것이 딸린 것보다 먼저다.**
@@ -301,6 +306,25 @@ def only_one(data: Path | None = None) -> bool:
     if _LOCK is not None:
         return True
     where = (data or data_dir()) / "vc-혼자.lock"
+    if os.name != "nt":
+        # ★ 맥·리눅스는 **열린 파일도 지워진다** — 아래 윈도우 방식이면 둘째가 앞엣것의 잠금을 지우고 같이 떴다.
+        #   flock 은 여는 것마다 따로라 같은 프로세스 안에서도 둘째를 막는다(자체점검과 같은 뜻).
+        import fcntl
+
+        try:
+            f = where.open("a+", encoding="utf-8")
+        except OSError:
+            return True        # 못 잠그면 막지는 않는다. 안 켜지는 것이 더 나쁘다
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return False
+        f.truncate(0)
+        f.write(str(os.getpid()))
+        f.flush()
+        _LOCK = f
+        return True
     try:
         # 이미 열려 있으면 윈도우가 못 지운다 — 그것으로 남이 쓰는지 안다.
         if where.exists():
@@ -479,6 +503,13 @@ def _self_check() -> None:
                 (곳 / "tokenizer.json").write_bytes(b"x")
             assert meaning_dir("e5-base") == 곁 / "e5-base", f"exe 옆에 받은 큰 모델을 못 찾는다: {meaning_dir('e5-base')}"
             assert meaning_dir("딸려 온 것 (e5-small)") == 속, "딸려 온 것을 못 찾는다"
+            옛판 = sys.platform
+            sys.platform = "darwin"
+            try:
+                assert "Application Support" in str(fetched_dir()) and "VC.exe" not in str(fetched_dir()), \
+                    f"맥은 받은 모델이 앱 속(VC.app/Contents/MacOS)에 들어간다: {fetched_dir()}"
+            finally:
+                sys.platform = 옛판
         finally:
             globals()["frozen"], sys.executable = 옛프로즌, 옛실행
             del sys._MEIPASS
