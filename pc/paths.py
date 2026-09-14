@@ -120,15 +120,26 @@ def gguf_dir() -> Path:
     - 그렇다고 `models_dir()` 을 exe 옆으로 옮기면 **딸려 온 뜻 벡터 모델이
       안 보이게 된다.** 실제로 한 번 그렇게 고쳤다가 되돌렸다.
 
-    그래서 여기만 **exe 옆 `models` 를 먼저 보고**, 없으면 딸려 온 자리로 내려간다.
+    그래서 여기는 **exe 옆 `models`**(`fetched_dir()`) 를 쓴다. 딸려 온 뜻·목소리 모델은
+    `models_config.installed` · `meaning_dir` 가 두 자리를 다 보므로 안 사라진다.
+    같은 판에서 전에 프로그램 속에 받아 둔 gguf 만 있으면 그리로 내려간다.
+    """
+    곁 = fetched_dir()
+    if frozen() and not (곁.is_dir() and any(곁.glob("*.gguf"))) and any(models_dir().glob("*.gguf")):
+        return models_dir()
+    return 곁
+
+
+def fetched_dir() -> Path:
+    """**내려받은 모델**이 들어가는 자리 — 새 판을 덮어 풀어도 남아야 한다.
+
+    ★★ 전엔 받은 것이 `_internal/models`(프로그램 속)에 들어가 **판을 올리면 지워졌다** —
+    v0.5.18 을 실무 폴더에 풀자 받아 둔 e5-base(296MB)가 사라지고 뜻 벡터가 작은 모델 폭으로
+    통째로 다시 만들어졌다(찾음 12 → 4/20). 설치본은 exe 옆 `models`, 소스로 돌 때는 `models_dir()`.
     """
     if env := os.environ.get("VC_MODELS"):
         return Path(env)
-    if frozen():
-        곁 = Path(sys.executable).parent / "models"
-        if any(곁.glob("*.gguf")) if 곁.is_dir() else False:
-            return 곁
-    return models_dir()
+    return Path(sys.executable).parent / "models" if frozen() else models_dir()
 
 
 # 뜻 검색에 쓸 모델을 고르는 차례. **받은 것이 딸린 것보다 먼저다.**
@@ -160,9 +171,10 @@ def meaning_dir(고른것: str = "") -> Path:
         # 「딸려 온 것 (e5-small)」 처럼 꾸민 이름이면 뿌리를 가리킨다.
         차례.insert(0, "" if 고른것.startswith("딸려 온 것") else 고른것)
     for name in 차례:
-        here = root / name if name else root
-        if (here / "model.onnx").is_file() and (here / "tokenizer.json").is_file():
-            return here
+        # 받은 것(이름 폴더)은 받은 자리 먼저 — 같은 판에서 전에 프로그램 속에 받은 것도 본다. 딸려 온 것은 뿌리.
+        for here in ([fetched_dir() / name, root / name] if name else [root]):
+            if (here / "model.onnx").is_file() and (here / "tokenizer.json").is_file():
+                return here
     return root
 
 
@@ -453,9 +465,20 @@ def _self_check() -> None:
         sys.executable = str(Path(tmp) / "VC.exe")
         sys._MEIPASS = str(Path(tmp) / "_internal")
         try:
-            assert gguf_dir() != 곁, "빈 폴더인데 exe 옆을 골랐다"
+            속 = Path(tmp) / "_internal" / "models"
+            assert fetched_dir() == 곁, fetched_dir()
+            assert gguf_dir() == 곁, "받을 자리가 프로그램 속이다 — 판을 올리면 지워진다"
+            (속 / "옛.gguf").write_bytes(b"x")
+            assert gguf_dir() == 속, "같은 판에서 프로그램 속에 받아 둔 gguf 를 못 찾는다"
             (곁 / "아무.gguf").write_bytes(b"x")
             assert gguf_dir() == 곁, gguf_dir()
+            # 뜻 모델: 받은 큰 것은 exe 옆에서, 딸려 온 작은 것은 프로그램 속 뿌리에서 찾는다
+            for 곳 in (속, 곁 / "e5-base"):
+                곳.mkdir(exist_ok=True)
+                (곳 / "model.onnx").write_bytes(b"x")
+                (곳 / "tokenizer.json").write_bytes(b"x")
+            assert meaning_dir("e5-base") == 곁 / "e5-base", f"exe 옆에 받은 큰 모델을 못 찾는다: {meaning_dir('e5-base')}"
+            assert meaning_dir("딸려 온 것 (e5-small)") == 속, "딸려 온 것을 못 찾는다"
         finally:
             globals()["frozen"], sys.executable = 옛프로즌, 옛실행
             del sys._MEIPASS

@@ -204,7 +204,9 @@ class Mouth:
     def _load_piper(self) -> bool:
         if Mouth._piper is not None:
             return True
-        models = sorted(self.piper_dir.glob("*.onnx")) if self.piper_dir.is_dir() else []
+        # 받은 목소리는 exe 옆(`paths.fetched_dir()`)에 들어간다 — 딸려 온 자리와 둘 다 본다
+        곳들 = dict.fromkeys((self.piper_dir, paths.fetched_dir() / "piper"))
+        models = sorted(m for 곳 in 곳들 if 곳.is_dir() for m in 곳.glob("*.onnx"))
         if self.model_name:
             # 고른 게 사라졌으면 조용히 첫 번째로 되돌아간다 — 그것 때문에 벙어리가 되면 안 된다.
             models = [m for m in models if m.stem == self.model_name] or models

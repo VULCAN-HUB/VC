@@ -243,13 +243,14 @@ class Downloader:
             raise OSError(f"덜 받았다: {got}/{expected} 바이트")
 
 
-def listing(model_dir: str | Path = "../models", vram_mb: int = 0) -> list[dict]:
+def listing(model_dir: str | Path = "../models", vram_mb: int = 0,
+            also: str | Path | None = None) -> list[dict]:
     """화면에 뿌릴 목록. 이미 있는지, 이 PC에 버거운지 함께 준다."""
     out = []
     for e in CATALOG:
         out.append({
             "key": e.key, "role": e.role, "label": e.label, "size_mb": e.total_mb,
-            "note": e.note, "installed": have(e, model_dir),
+            "note": e.note, "installed": have(e, model_dir) or (also is not None and have(e, also)),   # also: 딸려 온 자리
             # 막지 않고 알려만 준다 — CPU로 돌리는 선택은 사용자 것이다.
             "heavy": bool(e.needs_vram and vram_mb and vram_mb < e.needs_vram),
         })

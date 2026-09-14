@@ -403,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
                 # ★ **더 잘 찾는 길이 있으면 AI 도 알아야 한다.** 큰 뜻 모델을 받으면
                 #   같은 창고에서 찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개).
                 #   AI 가 이걸 보면 오너에게 알려 줄 수 있다 — 안 알려 주면 있는 줄도 모른다.
-                큰모델있나 = (paths.models_dir() / "e5-base" / "model.onnx").is_file()
+                큰모델있나 = paths.meaning_dir("e5-base").name == "e5-base"      # exe 옆에 받은 것까지 본다
                 몸["store"] = {
                     "notes": c.execute("SELECT count(*) FROM notes").fetchone()[0],
                     "kinds": 갈래,
@@ -677,7 +677,7 @@ class Handler(BaseHTTPRequestHandler):
             pr = self.server.downloader.progress
             return self._send(200, {
                 "catalog": model_store.listing(self.server.downloader.model_dir,
-                                               self.server.picked["hardware"]["vram_mb"]),
+                                               self.server.picked["hardware"]["vram_mb"], also=paths.models_dir()),
                 "state": pr.state, "key": pr.key, "label": pr.label,
                 "percent": pr.percent, "done_mb": round(pr.done_mb),
                 "total_mb": round(pr.total_mb), "error": pr.error,
@@ -1150,7 +1150,8 @@ class EBServer(ThreadingHTTPServer):
         #   클라우드로 바꿔도 `llama-8b` 같은 파일 이름이 Anthropic·Gemini 에 그대로 나갔다.
         if 뒤.get("kind") != "local" and isinstance(뒤.get("model"), str) and 뒤["model"].strip():
             self.picked["using"]["chat"] = self.picked["using"]["vision"] = 뒤["model"].strip()
-        self.downloader = model_store.Downloader(model_dir)
+        # ★ 받는 자리는 **판을 올려도 남는 곳**(설치본은 exe 옆 models) — 프로그램 속에 받으면 새 판을 풀 때 지워졌다
+        self.downloader = model_store.Downloader(paths.fetched_dir())
         if hasattr(self.backend, "n_gpu_layers"):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
         self.gate = remote.RemoteGate()
@@ -1541,7 +1542,7 @@ def _self_check() -> None:
     else:
         os.environ["VC_MODELS"] = 옛모델자리
     _, 큰것있을때 = call("GET", "/eb/v1/hello")
-    assert "e5-base" not in (큰것있을때.get("store") or {}).get("how", "")         or not (paths.models_dir() / "e5-base" / "model.onnx").is_file(),         "이미 받았는데 또 받으라고 한다"
+    assert "e5-base" not in (큰것있을때.get("store") or {}).get("how", "")         or paths.meaning_dir("e5-base").name != "e5-base",         "이미 받았는데 또 받으라고 한다"
     st_b, _ = call("GET", "/eb/v1/memory/search?brief=1&q=" + urllib.parse.quote("VC"))
     assert st_b == 200, f"안내가 brief=1 을 말하는데 안 돈다: {st_b}"
     assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
