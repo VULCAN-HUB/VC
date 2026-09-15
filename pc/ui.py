@@ -279,6 +279,14 @@ class MainWindow(QWidget):
         engine_timer = QTimer(self)
         engine_timer.timeout.connect(self.refresh_engine)
         engine_timer.start(4000)
+        # 폰 길(테일스케일). "모름" = 아직 안 봤다 · None = 꺼짐.
+        self._테일: str | None = "모름"
+        self._띠경고 = ""
+        테일_timer = QTimer(self)
+        # ★ lambda 로 감싼다 — PyQt 는 한글 이름 메서드를 바로 이으면 UnicodeEncodeError 로 터진다.
+        테일_timer.timeout.connect(lambda: self._테일보기())
+        테일_timer.start(30000)
+        self._테일보기()
 
         # 밖에서 고친 것을 받아들인다.
         #
@@ -704,6 +712,11 @@ class MainWindow(QWidget):
         # 1366 짜리 노트북에는 안 들어간다. **아래 띠는 잘려도 되지만 창은 들어가야 한다.**
         self.footer.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.footer.setMinimumWidth(0)
+        # 세는 값(적은 것 · 보임 · 연결)은 늘 볼 것이 아니다 — 「상태·기록」을 펴야 보인다(결정 17).
+        self.상태글 = QLabel()
+        self.상태글.setStyleSheet(theme.small(theme.T.DIM, 0.3, 9))
+        self.상태글.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.상태글.setMinimumWidth(0)
 
         self.feed = ActivityFeed()
         # 쓸 모델을 고르는 칸. 사양이 다른 PC에서도 각자 맞게 쓴다(결정 42).
@@ -743,6 +756,8 @@ class MainWindow(QWidget):
         side.addWidget(self.proposals_fold)
         side.addWidget(self.feed_fold)
         side.addWidget(self.models_fold)
+        self.status_fold = Folded("상태·기록", "센 값 — 적은 것 · 보임 · 연결", self.상태글)
+        side.addWidget(self.status_fold)
         side.addStretch(1)
         side.addWidget(self.footer)
 
@@ -1022,7 +1037,10 @@ class MainWindow(QWidget):
         # 「⚠ 를 띄웠으면 무엇이 이상한지 볼 길이 하나는 있어야 한다」고 짚었는데,
         # 길은 이미 있었고 **그 길이 잘리고 있었던 것**이다.
         # 값진 것을 앞에 두는 규칙을 아래 띠 가운데에만 쓰고 경고에는 안 썼다.
-        self.footer.setText(f"{warn}적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+        self.상태글.setText(f"적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+        # ★ 늘 보이는 한 줄(결정 17)에는 오류 · 준비 중 · 폰 길만 둔다. 센 값은 「상태·기록」을 펴야 보인다.
+        self._띠경고 = warn.removesuffix("  /  ")
+        self._그리띠()
 
     # --- 말로 부르기 -----------------------------------------------------
 
@@ -1294,11 +1312,29 @@ class MainWindow(QWidget):
         self.gate_card.refresh()
         self.models.refresh()
 
+    def _테일보기(self) -> None:
+        """테일스케일 주소를 딴 실에서 본다 — 명령이 늦으면 창이 굳으므로. 결과는 4초 타이머가 줄에 그린다."""
+        import threading
+        import tailnet
+
+        def 일() -> None:
+            self._테일 = tailnet.tailscale_ip()
+        threading.Thread(target=일, daemon=True).start()
+
+    def _그리띠(self) -> None:
+        """늘 보이는 한 줄(결정 17) — 오류 · 준비 중 · 폰 길. **아무 일 없으면 비운다.**"""
+        말 = [self._띠경고] if self._띠경고 else []
+        # 밖에서 닿게 열렸는데 테일스케일이 꺼졌으면 폰은 집 밖에서 못 닿는다(결정 18·21).
+        if not self.열린자리.isHidden() and self._테일 is None:
+            말.append("⚠ 테일스케일 꺼짐 — 폰이 밖에서 못 닿는다")
+        self.footer.setText("  /  ".join(말))
+
     def refresh_engine(self) -> None:
         """엔진이 뭘 올려놨는지. 서버가 꺼져 있으면 그 사실을 그대로 보여준다."""
         # 창이 제 메모리를 파일에 적어 둔다. --report 는 창이 아니라 새 프로세스라
         # 자기를 재면 안 되기 때문이다(시험 25-1). 4초 타이머라 여기서 같이 한다.
         report.메모리찍기()
+        self._그리띠()
         out = self.link.call("GET", "/eb/v1/engine")
         if out is None:
             # ★ 「서버 꺼짐」이 원격 줄과 나란히 떠서 **어느 서버가 꺼진 것인지**

@@ -529,8 +529,20 @@ def run() -> None:
         # 헷갈렸다 — 둘이 다른 것을 세는데 이름이 같으면 사람이 못 가린다.
         win.refresh()
         win.settle()
-        적힘 = win.footer.text()
+        적힘 = win.상태글.text()
         assert "연결" in 적힘 and "적은 것" in 적힘, 적힘
+        # ★ 3단 틀(결정 17): 센 값은 「상태·기록」을 펴야 보이고, 늘 보이는 한 줄에는 없다.
+        assert "적은 것" not in win.footer.text(), "센 값이 늘 보이는 한 줄에 남았다"
+        # 밖에서 닿게 열렸는데 테일스케일이 꺼졌으면 한 줄이 말한다. 닫혀 있으면 아무 말도 안 한다.
+        win._테일 = None
+        win._그리띠()
+        assert "테일스케일" not in win.footer.text(), "안 열렸는데 폰 길 경고를 한다"
+        win.열린자리.show()
+        win._그리띠()
+        assert "테일스케일 꺼짐" in win.footer.text(), win.footer.text()
+        win.열린자리.hide()
+        win._테일 = "모름"
+        win._그리띠()
 
         # ★★ **밖에서 닿는 자리로 열렸으면 창이 그걸 말해야 한다.**
         # 자국과 `--doctor` 에만 적혀 있었는데, 오너는 아이콘을 눌러 켜고 창만 본다.
@@ -1073,7 +1085,7 @@ def run() -> None:
         shown = [n for n in win.graph.nodes.values() if n.isVisible()]
         assert len(shown) <= GRAPH_LIMIT, len(shown)
         assert win._total_notes > GRAPH_LIMIT
-        assert "보임" in win.footer.text(), win.footer.text()
+        assert "보임" in win.상태글.text(), win.상태글.text()
 
         # 잘려 나간 항목을 열면 그래프에 올라온다.
         far = "쌓인 것 0"
