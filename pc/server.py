@@ -331,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log")
@@ -384,6 +384,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        # 「상태·기록」(결정 17 ③) — 폰 ⋮ 메뉴가 부른다. 기록 내용·글 이름·집 경로는 가린다.
+        if url.path == "/eb/v1/status":
+            import report
+
+            return self._send(200, report.상태요약())
 
         if url.path == "/eb/v1/hello":
             cfg = self.server.cfg
@@ -1482,6 +1488,11 @@ def _self_check() -> None:
         assert time.time() - began < 2.0, f"Content-Length {_길이} 에 늦게 답한다(실을 붙들었다)"
         conn.close()
     assert call("GET", "/eb/v1/hello")[0] == 200
+    # 「상태·기록」 문: 열쇠가 있어야 열리고, 집 경로가 안 샌다.
+    assert call("GET", "/eb/v1/status", token="wrong-token")[0] == 401
+    _상, _몸 = call("GET", "/eb/v1/status")
+    assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
+    assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을

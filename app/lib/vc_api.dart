@@ -111,6 +111,9 @@ class VcApi {
     return store is Map ? store['notes'] as int? : null;
   }
 
+  /// 「상태·기록」(결정 17 ③) — 자국 끝줄 · 죽음 줄 수 · 켠 지(초). 글 이름·집 경로는 서버가 가린다.
+  Future<Map<String, dynamic>> status() => _call('GET', '/eb/v1/status');
+
   /// 찾기 1단 — 몸은 안 온다. 빈 말이면 창고 앞머리.
   Future<List<Map<String, dynamic>>> search(String q, {int k = 20}) async {
     final results = (await _call('GET', '/eb/v1/memory/search', query: {'q': q, 'k': '$k'}))['results'];

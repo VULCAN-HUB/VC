@@ -676,8 +676,18 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   ),
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.more_vert, color: _muted),
-                    onSelected: (_) => widget.onUnpair(),
-                    itemBuilder: (_) => const [PopupMenuItem(value: 'unpair', child: Text('연결 지우기'))],
+                    onSelected: (v) {
+                      if (v == 'status') {
+                        Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox)));
+                      } else {
+                        widget.onUnpair();
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'status', child: Text('상태·기록')),
+                      PopupMenuItem(value: 'unpair', child: Text('연결 지우기')),
+                    ],
                   ),
                 ]),
               ),
@@ -699,6 +709,78 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           ),
         ),
       );
+}
+
+/// 눌러야 펴지는 「상태·기록」(결정 17 ③). 늘 보이는 한 줄에 못 담는 자세한 것 —
+/// 보낼 글과 그 까닭, 컴퓨터가 켜진 지, 죽음 기록, 최근 자국. 컴퓨터 쪽 글 이름·집 경로는 서버가 가려서 준다.
+class StatusPage extends StatefulWidget {
+  const StatusPage({super.key, required this.api, required this.outbox});
+
+  final VcApi api;
+  final Outbox outbox;
+
+  @override
+  State<StatusPage> createState() => _StatusPageState();
+}
+
+class _StatusPageState extends State<StatusPage> {
+  Map<String, dynamic>? _s;
+  String? _why;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final s = await widget.api.status();
+      if (mounted) {
+        setState(() {
+          _s = s;
+          _why = null;
+        });
+      }
+    } on VcOffline catch (e) {
+      if (mounted) setState(() => _why = '컴퓨터에 못 닿았어${e.reason.isEmpty ? '' : ' (${e.reason})'}');
+    } on VcUnauthorized {
+      if (mounted) setState(() => _why = '열쇠가 안 맞아 — 다시 짝지어 줘');
+    } on VcError catch (e) {
+      if (mounted) setState(() => _why = e.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _s;
+    final waiting = widget.outbox.items.where((i) => !i.sent).toList();
+    final trail = (s?['trail'] as List?) ?? const [];
+    final deaths = (s?['deaths'] as num?)?.toInt() ?? 0;
+    final up = (s?['uptime_s'] as num?)?.toInt();
+    return Backdrop(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(backgroundColor: Colors.transparent, title: const Text('상태·기록')),
+        body: RefreshIndicator(
+          color: _accent,
+          backgroundColor: _card,
+          onRefresh: _load,
+          child: ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
+            SectionLabel('보낼 것', trailing: '${waiting.length}개'),
+            for (final w in waiting)
+              Text('${w.title.isEmpty ? '(제목 없음)' : w.title} · 시도 ${w.attempts}${w.error == null ? '' : ' · ${w.error}'}',
+                  style: _mono(11, _muted)),
+            SectionLabel('컴퓨터', trailing: up == null ? '—' : '켠 지 ${up ~/ 60}분'),
+            if (_why != null) Text(_why!, style: _mono(11, _warn)),
+            if (deaths > 0) Text('⚠ 죽음 기록 $deaths줄 — 컴퓨터 VC 에서 「문제 알리기」', style: _mono(11, _warn)),
+            SectionLabel('최근 기록', trailing: '${trail.length}줄'),
+            for (final t in trail.reversed) Text('$t', style: _mono(10, _muted)),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 class BrowseTab extends StatefulWidget {

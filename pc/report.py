@@ -413,6 +413,23 @@ def bundle(out_dir: str | Path = "") -> Path:
     return zip_path
 
 
+def 상태요약(줄수: int = 30) -> dict:
+    """「상태·기록」에 보일 것(결정 17 ③ — 폰 ⋮ 메뉴 · 창 접힌 칸).
+
+    자국 끝줄과 죽음 기록 끝줄. **기록 내용·글 파일 이름·집 경로는 가린다** — 묶음과 같은 규칙이다.
+    """
+    def 끝줄(이름: str) -> list[str]:
+        try:
+            글 = paths.기계자리(이름).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        return [_hide_names(_hide_home(z)) for z in 글.splitlines() if z.strip()][-줄수:]
+
+    죽음 = 끝줄(DEATH)
+    return {"trail": 끝줄(TRAIL), "deaths": len(죽음), "death_tail": 죽음[-5:],
+            "uptime_s": int(time.time() - _시작한때)}
+
+
 def _self_check() -> None:
     import tempfile
 
@@ -423,6 +440,11 @@ def _self_check() -> None:
             trail("두 번째 줄")
             said = (Path(tmp) / TRAIL).read_text(encoding="utf-8")
             assert "검사 시작" in said and "두 번째 줄" in said
+            # 「상태·기록」 요약은 글 제목·집 경로를 가린다(폰으로 나간다).
+            trail(f"열었다 {Path.home()}/문서/회의록.md")
+            요약글 = json.dumps(상태요약(), ensure_ascii=False)
+            assert "검사 시작" in 요약글, 요약글
+            assert "회의록" not in 요약글 and str(Path.home()) not in 요약글, 요약글
 
             # ★★ **메모리는 「켠 지」와 같이 적힌다.** 시험하는 쪽이 뜬 직후에 재서
             # 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다(모델이 아직 안
