@@ -386,7 +386,7 @@ class _PairPageState extends State<PairPage> {
               const SectionLabel('순서'),
               const _Panel(
                 child: Column(children: [
-                  _Step('01', 'PC·맥에서 VC 를 켠다', '폰과 같은 와이파이여야 한다'),
+                  _Step('01', 'PC·맥에서 VC 를 켠다', '폰과 컴퓨터 둘 다 테일스케일을 켠다'),
                   _Step('02', '설정 → 폰 연결 → 「QR 보이기」', 'QR 은 2분 뒤 사라진다'),
                   _Step('03', '아래 「QR 찍기」로 찍는다', '붙을 컴퓨터 주소를 한 번 확인한다', last: true),
                 ]),
@@ -619,7 +619,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (e is VcUnauthorized) {
       widget.onUnauthorized();
     } else if (e is VcOffline) {
-      _show('컴퓨터에 못 닿았어 — 같은 와이파이·VC 켜짐을 봐 줘', _warn);
+      final why = e.reason.isEmpty ? '' : ' (${e.reason})';
+      _show('컴퓨터에 못 닿았어$why — 테일스케일·VC 켜짐을 봐 줘', _warn);
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }

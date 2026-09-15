@@ -1,3 +1,4 @@
+import 'dart:async';
 // VC PC 서버에 붙는 길 — 화면과 떼어 두어 테스트로 잰다.
 //
 // 짝짓기 QR 은 PC 설정 「폰 연결」이 띄우는 `http://내부주소:8765/app#t=열쇠` 그대로다(웹앱과 같은 QR).
@@ -31,8 +32,30 @@ class Pairing {
   String get label => '${base.host}:${base.port}';
 }
 
-/// PC 에 못 닿았다(와이파이·VC 꺼짐·시간 초과).
-class VcOffline implements Exception {}
+/// 컴퓨터에 못 닿았다. **왜 못 닿았는지**를 싣는다.
+///
+/// ★ 전에는 무슨 오류든 한 문구로 뭉쳐, 폰이 다른 와이파이였는지 · VC 가 꺼졌는지 · 느린지를 가를 수 없었다
+///   (2026-09-15 아이폰 실기에서 원인 찾는 데 오래 걸렸다). 비어 있으면 까닭을 모르는 것이다.
+class VcOffline implements Exception {
+  VcOffline([this.reason = '']);
+
+  final String reason;
+}
+
+/// 연결 오류 글을 사람 말 까닭으로. 모르면 빈 글.
+String offlineReason(Object e) {
+  final m = e.toString().toLowerCase();
+  if (e is TimeoutException) return '시간 초과';
+  if (m.contains('connection refused')) return 'VC 가 꺼져 있다';
+  if (m.contains('no route') || m.contains('network is unreachable') || m.contains('host is down') ||
+      m.contains('failed host lookup')) {
+    return '망이 달라 닿지 않는다';
+  }
+  if (m.contains('connection reset') || m.contains('connection abort') || m.contains('connection closed')) {
+    return '연결이 끊겼다';
+  }
+  return '';
+}
 
 /// 열쇠가 안 맞는다 — 다시 짝지어야 한다.
 class VcUnauthorized implements Exception {}
@@ -66,8 +89,8 @@ class VcApi {
               ? _client.post(uri, headers: headers, body: jsonEncode(body))
               : _client.get(uri, headers: headers))
           .timeout(timeout);
-    } on Exception {
-      throw VcOffline();
+    } on Exception catch (e) {
+      throw VcOffline(offlineReason(e));
     }
     if (r.statusCode == 401) throw VcUnauthorized();
     var j = <String, dynamic>{};

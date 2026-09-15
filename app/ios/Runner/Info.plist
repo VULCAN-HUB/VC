@@ -11,7 +11,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>PC·맥 VC 설정에 뜬 QR 을 찍어 연결한다</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>같은 와이파이의 PC·맥에서 VC 창고를 보고 적는다</string>
+	<string>테일스케일이나 같은 와이파이로 PC·맥의 VC 창고를 보고 적는다</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
