@@ -1413,20 +1413,26 @@ class Notes:
     def write_rules(self) -> Path | None:
         """규칙 파일을 **한 번만** 만든다. 이미 있으면 안 건드린다.
 
-        기본 서식도 **이때 한 번만** 넣는다 — 규칙 파일이 이미 있으면(창고를 전에 연 적이 있으면) 안 넣으므로,
-        사람이 기본 서식을 지워도 다시 안 생긴다. 같은 이름 서식이 있으면 덮지 않는다.
+        기본 서식은 **서식마다 한 번만** 넣는다. 넣은 이름을 `_서식/.기본서식넣음` 에 적어 두어
+        ① 전부터 쓰던 창고에도 새 기본 서식이 한 번은 들어가고 ② 사람이 지우면 다시 안 생긴다.
+        ★ 규칙 파일이 있을 때 건너뛰게 두었더니 **이미 쓰던 창고에는 「제품」이 영영 안 생겼다.**
+        같은 이름 서식이 있으면 덮지 않는다.
         """
         where = self.template_root() / self.RULE_FILE
         try:
-            if where.exists():
-                return where
             where.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write(where, self.RULES)
-            for 이름, 몸 in self.DEFAULT_TEMPLATES.items():
+            if not where.exists():
+                _atomic_write(where, self.RULES)
+            표 = self.template_root() / ".기본서식넣음"
+            넣은것 = set(read_text(표).split()) if 표.exists() else set()
+            새로 = [이름 for 이름 in self.DEFAULT_TEMPLATES if 이름 not in 넣은것]
+            for 이름 in 새로:
                 틀 = self.template_root() / f"{이름}.md"
                 if not 틀.exists():
-                    _atomic_write(틀, 몸)
-        except (OSError, WriteBlocked):
+                    _atomic_write(틀, self.DEFAULT_TEMPLATES[이름])
+            if 새로:
+                _atomic_write(표, chr(10).join(sorted(넣은것 | set(새로))) + chr(10))
+        except (OSError, WriteBlocked, Vanished):
             return None      # 못 써도 프로그램이 멈출 이유가 없다
         return where
 
@@ -3783,6 +3789,13 @@ def _self_check() -> None:
             (처음.template_root() / "제품.md").unlink()   # 사람이 지웠다
             처음.write_rules()
             assert "제품" not in 처음.templates(), "지운 기본 서식이 다시 생긴다"
+            # ★ 전부터 쓰던 창고(규칙 파일은 있고 표시가 없음)에도 한 번은 들어간다
+            옛창고 = Path(새) / "옛창고"
+            (옛창고 / TEMPLATE_DIR).mkdir(parents=True)
+            (옛창고 / TEMPLATE_DIR / Notes.RULE_FILE).write_text("# 옛 규칙\n", encoding="utf-8")
+            옛 = Notes(옛창고)
+            assert "제품" in 옛.templates(), "이미 쓰던 창고에는 기본 서식이 영영 안 생긴다"
+            assert read_text(옛창고 / TEMPLATE_DIR / Notes.RULE_FILE) == "# 옛 규칙\n", "사람이 고친 규칙을 덮었다"
 
     # --- 뜻으로 찾기 ---
     # **모델 없이 검사한다.** 자체점검이 모델 파일에 매이면, 모델이 없는 PC에서는
