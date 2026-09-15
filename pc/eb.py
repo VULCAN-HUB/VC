@@ -308,9 +308,9 @@ def main(argv: list[str] | None = None) -> int:
         # 알았다 — 「모르는 새 열린다」가 문제였다. 막이는 있지만(토큰 없으면 401)
         # **같은 공유기의 다른 기기에서 닿는다는 사실 자체**를 쓰는 사람이 알아야 한다.
         if HOST == "0.0.0.0":
-            print("  ★ 같은 공유기의 다른 기기에서도 이 자리에 닿는다"
+            print("  ★ 같은 공유기와 테일스케일로 이은 다른 기기에서도 이 자리에 닿는다"
                   " (토큰 없으면 401로 막힌다).")
-            print("  원격이 필요 없으면  VC.exe --no-server  로 켜라.")
+            print("  원격이 필요 없으면  --no-server  를 붙여 켜라.")
         report.trail(f"서버 열었다 {HOST}:{PORT}")
     elif want_server:
         print(f"서버가 이미 떠 있어 그쪽에 붙는다 (:{PORT})")

@@ -1283,9 +1283,9 @@ class MainWindow(QWidget):
             return
         self.열린자리.setText(f"★ 원격 열림 :{port}")
         self.열린자리.setToolTip(
-            f"{host}:{port} 로 듣는다 — 같은 공유기의 다른 기기에서 닿는다. "
+            f"{host}:{port} 로 듣는다 — 같은 공유기와 테일스케일로 이은 다른 기기에서 닿는다. "
             "토큰 없이 들어오면 401로 막힌다. "
-            "원격이 필요 없으면 VC.exe --no-server 로 켜라.")
+            "원격이 필요 없으면 --no-server 를 붙여 켜라.")
         self.열린자리.show()
 
     def _greet_server(self) -> None:
