@@ -331,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates","/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach")
@@ -384,6 +384,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        # 서식을 폰까지(5단계 · 결정 19) — 폰 적기 탭이 부른다. `{{날짜}}` 같은 자리는 폰이 **적는 순간** 채운다.
+        if url.path == "/eb/v1/templates":
+            n = self.server.notes
+            return self._send(200, {"templates": [{"name": t, "body": n.template(t)} for t in n.templates()]})
 
         # 「상태·기록」(결정 17 ③) — 폰 ⋮ 메뉴가 부른다. 기록 내용·글 이름·집 경로는 가린다.
         if url.path == "/eb/v1/status":
@@ -1548,6 +1553,16 @@ def _self_check() -> None:
     _상, _몸 = call("GET", "/eb/v1/status")
     assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
     assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
+
+    # --- 서식을 폰까지(5단계): 창고 `_서식/` 의 틀을 열쇠 단 문으로 준다. 자리는 채우지 않고 그대로 ---
+    server.notes.template_root().mkdir(parents=True, exist_ok=True)
+    (server.notes.template_root() / "시험서식.md").write_text(
+        "제품명 : \n받은날 : {{날짜}}\n", encoding="utf-8")
+    assert call("GET", "/eb/v1/templates", token="wrong-token")[0] == 401
+    _상, _틀 = call("GET", "/eb/v1/templates")
+    _시험틀 = [t for t in (_틀 or {}).get("templates", []) if t["name"] == "시험서식"]
+    assert _상 == 200 and _시험틀, _틀
+    assert "{{날짜}}" in _시험틀[0]["body"], "서식 자리를 서버가 미리 채웠다 — 폰이 적는 날짜가 아니게 된다"
 
     # --- 첨부 올리기(4단계): 폰이 찍은 사진을 바이트 그대로 올리고, 받은 이름으로 글을 쓴다 ---
     def 올리기(name, data, title="사진 시험", cid=None, token="test-token"):

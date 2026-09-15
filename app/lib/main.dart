@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'outbox.dart';
 import 'vc_api.dart';
 import 'pick.dart';
+import 'templates.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -555,6 +556,8 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> with WidgetsBindingObserver {
   int _tab = 0;
+  // 서식(5단계) — 못 닿아도 지난번 받은 틀로 적게, 대기함 옆에 받아 둔다.
+  late final _book = TemplateBook(File('${widget.outbox.file.parent.path}/vc_templates.json'));
   String _state = '컴퓨터에 잇는 중…';
   Color _dot = _muted;
 
@@ -695,7 +698,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               Expanded(
                 child: IndexedStack(index: _tab, children: [
                   BrowseTab(api: widget.api, onFail: _fail, outbox: widget.outbox),
-                  WriteTab(outbox: widget.outbox, onSend: _send),
+                  WriteTab(outbox: widget.outbox, onSend: _send, templates: () => _book.load(widget.api)),
                 ]),
               ),
             ]),
@@ -1021,11 +1024,12 @@ class _NotePageState extends State<NotePage> {
 }
 
 class WriteTab extends StatefulWidget {
-  const WriteTab({super.key, required this.outbox, required this.onSend, this.pick = pickMedia});
+  const WriteTab({super.key, required this.outbox, required this.onSend, this.pick = pickMedia, this.templates});
 
   final Outbox outbox;
   final Future<void> Function() onSend;
   final Picker pick; // 사진·영상 고르기(4단계). 시험에서는 가짜로 갈아 끼운다
+  final Future<(List<Tpl>, bool)> Function()? templates; // 서식(5단계) — (틀 목록, 못 닿음)
 
   @override
   State<WriteTab> createState() => _WriteTabState();
@@ -1048,6 +1052,50 @@ class _WriteTabState extends State<WriteTab> {
   void initState() {
     super.initState();
     widget.outbox.addListener(_onOutbox);
+  }
+
+  /// 서식 넣기(5단계 · 결정 19). 쓰던 글은 안 지우고 **끝에** 붙인다 — PC 「서식 넣기」와 같은 규칙.
+  Future<void> _pickTemplate() async {
+    final load = widget.templates;
+    if (load == null) return;
+    final (List<Tpl>, bool) got;
+    try {
+      got = await load();
+    } catch (_) {
+      _tell('서식을 못 불렀어 — 컴퓨터 연결을 봐 줘', false);
+      return;
+    }
+    if (!mounted) return;
+    if (got.$1.isEmpty) {
+      _tell(got.$2 ? '컴퓨터에 못 닿고, 받아 둔 서식도 없어' : '서식이 없어 — 컴퓨터 VC 창고 _서식/ 에 md 로 만든다', false);
+      return;
+    }
+    final chosen = await showModalBottomSheet<Tpl>(
+      context: context,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          if (got.$2)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Text('컴퓨터에 못 닿아 지난번 받은 서식이야', style: _mono(11, _warn)),
+            ),
+          for (final t in got.$1)
+            ListTile(
+              title: Text(t.name, style: const TextStyle(color: _text)),
+              subtitle: Text(t.body.replaceAll('\n', ' '),
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted)),
+              onTap: () => Navigator.pop(c, t),
+            ),
+        ]),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final title = _title.text.trim().isEmpty ? _today() : _title.text.trim();
+    final filled = fillSlots(chosen.body, title: title);
+    final cur = _body.text;
+    _body.text = cur.trim().isEmpty ? filled : '$cur\n\n$filled';
+    _body.selection = TextSelection.collapsed(offset: _body.text.length);
   }
 
   Future<void> _pick(PickHow how) async {
@@ -1185,6 +1233,11 @@ class _WriteTabState extends State<WriteTab> {
                 tooltip: '사진첩에서 고르기',
                 onPressed: _busy ? null : () => _pick(PickHow.library),
                 icon: const Icon(Icons.photo_library_outlined, color: _accent)),
+            if (widget.templates != null)
+              IconButton(
+                  tooltip: '서식 넣기',
+                  onPressed: _busy ? null : _pickTemplate,
+                  icon: const Icon(Icons.dashboard_customize_outlined, color: _accent)),
             const SizedBox(width: 4),
             Expanded(
               child: SingleChildScrollView(

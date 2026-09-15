@@ -1389,6 +1389,7 @@ class Notes:
 - `.이력/` — 지난 판. VC 가 관리한다
 - `_첨부/` — 붙임 파일
 - `_서식/` — 서식과 이 규칙. **항목으로 안 센다**
+- `_VC기록/` — 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 적는 상태 요약. **항목으로 안 센다**
 
 ## 4. 색인은 언제나 버려도 된다
 
@@ -1396,14 +1397,35 @@ class Notes:
 어긋난 것 같으면 `VC.exe --색인다시`. 기록은 안 건드린다.
 """
 
+    # 기본 서식(결정 19) — 받고 보낸 제품을 대충 적어도 틀이 잡히게. 폰 적기 탭에서도 고른다.
+    DEFAULT_TEMPLATES = {
+        "제품": ("# {{제목}}\n\n"
+               "- 제품명 : \n"
+               "- 종류 : \n"
+               "- 받은날 : {{날짜}}\n"
+               "- 보낸 곳(업체·담당) : \n"
+               "- 보낸날 : \n"
+               "- 상태 : 보유중\n\n"
+               "## 사진\n\n"
+               "## 메모\n"),
+    }
+
     def write_rules(self) -> Path | None:
-        """규칙 파일을 **한 번만** 만든다. 이미 있으면 안 건드린다."""
+        """규칙 파일을 **한 번만** 만든다. 이미 있으면 안 건드린다.
+
+        기본 서식도 **이때 한 번만** 넣는다 — 규칙 파일이 이미 있으면(창고를 전에 연 적이 있으면) 안 넣으므로,
+        사람이 기본 서식을 지워도 다시 안 생긴다. 같은 이름 서식이 있으면 덮지 않는다.
+        """
         where = self.template_root() / self.RULE_FILE
         try:
             if where.exists():
                 return where
             where.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(where, self.RULES)
+            for 이름, 몸 in self.DEFAULT_TEMPLATES.items():
+                틀 = self.template_root() / f"{이름}.md"
+                if not 틀.exists():
+                    _atomic_write(틀, 몸)
         except (OSError, WriteBlocked):
             return None      # 못 써도 프로그램이 멈출 이유가 없다
         return where
@@ -1417,7 +1439,8 @@ class Notes:
         if not folder.exists():
             return []
         try:
-            return sorted(f.stem for f in folder.glob("*.md"))
+            # ★ 규칙 파일도 `_서식/` 에 산다 — 빼지 않으면 폰 서식 목록에 「이 폴더를 만지는 규칙」이 틀로 뜬다(5단계).
+            return sorted(f.stem for f in folder.glob("*.md") if f.name != self.RULE_FILE)
         except OSError:
             return []
 
@@ -3729,7 +3752,7 @@ def _self_check() -> None:
         (forms / "일지.md").write_text("# {{날짜}}" + chr(10) * 2 + "- [ ] ", encoding="utf-8")
         (forms / "회의록.md").write_text("# {{제목}} / {{시각}} / {{모르는것}}", encoding="utf-8")
         # 규칙 파일도 그 폴더에 있다. 서식 목록에서 빼고 본다.
-        assert [t for t in n.templates() if t != Path(n.RULE_FILE).stem]             == ["일지", "회의록"], n.templates()
+        assert [t for t in n.templates() if t != Path(n.RULE_FILE).stem]             == ["일지", "제품", "회의록"], n.templates()
         today = time.strftime("%Y-%m-%d")
         first = n.daily()
         assert first.title == today
@@ -3751,6 +3774,15 @@ def _self_check() -> None:
         (n.root / VC_LOG_DIR / "상태.md").write_text("# VC 상태\n\n- 서버 열었다\n", encoding="utf-8")
         n.reindex()
         assert n.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == 1, "기계 기록 요약을 항목으로 센다"
+        # 5단계 — 규칙 파일은 서식 목록에 안 뜨고, 기본 「제품」 서식은 처음 한 번만 생긴다.
+        assert Notes.RULE_FILE[:-3] not in n.templates(), n.templates()
+        with tempfile.TemporaryDirectory() as 새:
+            처음 = Notes(Path(새) / "창고")
+            assert "제품" in 처음.templates(), 처음.templates()
+            assert "{{날짜}}" in 처음.template("제품") and "받은날" in 처음.template("제품"), 처음.template("제품")
+            (처음.template_root() / "제품.md").unlink()   # 사람이 지웠다
+            처음.write_rules()
+            assert "제품" not in 처음.templates(), "지운 기본 서식이 다시 생긴다"
 
     # --- 뜻으로 찾기 ---
     # **모델 없이 검사한다.** 자체점검이 모델 파일에 매이면, 모델이 없는 PC에서는

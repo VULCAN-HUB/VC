@@ -111,6 +111,17 @@ class VcApi {
     return store is Map ? store['notes'] as int? : null;
   }
 
+  /// 서식(5단계) — 창고 `_서식/` 의 틀. 자리(`{{날짜}}`)는 안 채운 채로 온다.
+  Future<List<({String name, String body})>> templates() async {
+    final list = (await _call('GET', '/eb/v1/templates'))['templates'];
+    return [
+      if (list is List)
+        for (final e in list)
+          if (e is Map && e['name'] is String && e['body'] is String)
+            (name: e['name'] as String, body: e['body'] as String),
+    ];
+  }
+
   /// 첨부 올리기(4단계) — 사진·영상·녹음을 바이트 그대로. 서버가 **본문에 쓸 이름**을 준다.
   /// 같은 `clientId` 로 다시 보내면 서버는 몸을 안 받고 같은 이름을 준다(대기함 재전송).
   Future<String> attach(String name, List<int> bytes, {String title = '', String? clientId}) async {
