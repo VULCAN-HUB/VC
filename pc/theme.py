@@ -42,7 +42,12 @@ def _theme_file() -> Path:
 #   아무 글꼴로나 떨어져 글자 너비가 달라진다 — 그래프 이름표 겹침 정리가 그 너비로
 #   재기 때문에 **이름표가 깜박이는 것으로 나타났다**(자체점검이 「9개 갈림」으로 잡음).
 #   맥 글꼴을 뒤에 붙인다: 윈도우는 앞엣것을 먼저 찾으므로 그대로고, 맥만 이쪽을 쓴다.
-MONO = '"Malgun Gothic", "Apple SD Gothic Neo", "Consolas", "Menlo", monospace'
+#   ★ 맥에서는 맥 글꼴을 **맨 앞에** 둔다 — 없는 글꼴이 앞에 있으면 Qt 가 켤 때마다
+#   글꼴 목록을 뒤지느라 0.2초를 쓰고 「Malgun Gothic 없음」 경고를 찍는다.
+import sys as _sys
+_맥 = _sys.platform == "darwin"
+MONO = ('"Apple SD Gothic Neo", "Menlo", monospace' if _맥 else
+        '"Malgun Gothic", "Apple SD Gothic Neo", "Consolas", "Menlo", monospace')
 
 # ★★ **글자 크기를 키울 길이 없었다.** 화면 곳곳에 크기가 픽셀로 **서른다섯 군데**
 # 박혀 있어서, 4K 화면이나 눈이 불편한 사람은 쓸 수가 없다 — 옵시디언은 `Ctrl +/-` 로 된다.
@@ -65,7 +70,8 @@ def 배율() -> float:
 def 글자(px: float) -> str:
     """`font-size` 에 넣을 글자. 배율을 곱한다."""
     return f"{max(7, round(px * _배율))}px"
-SANS = '"Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif'
+SANS = ('"Apple SD Gothic Neo", sans-serif' if _맥 else
+        '"Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif')
 
 THEMES: dict[str, dict] = {
     "vulcan": {

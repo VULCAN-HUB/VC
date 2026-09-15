@@ -540,6 +540,9 @@ def run() -> None:
         win.열린자리.show()
         win._그리띠()
         assert "테일스케일 꺼짐" in win.footer.text(), win.footer.text()
+        # 경고는 흐린 글자로 두면 안 보인다 — 경고색이어야 한다.
+        assert theme.T.WARN.name() in win.footer.styleSheet() or \
+            theme.css(theme.T.WARN, 0.8) in win.footer.styleSheet(), win.footer.styleSheet()
         win.열린자리.hide()
         win._테일 = "모름"
         win._그리띠()

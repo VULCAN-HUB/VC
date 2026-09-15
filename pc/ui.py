@@ -1328,6 +1328,9 @@ class MainWindow(QWidget):
         if not self.열린자리.isHidden() and self._테일 is None:
             말.append("⚠ 테일스케일 꺼짐 — 폰이 밖에서 못 닿는다")
         self.footer.setText("  /  ".join(말))
+        # ★ 경고를 흐린 글자로 두면 안 보인다(맥 창을 그려 보고 잡음) — ⚠ 가 있으면 경고색으로.
+        경고 = any("⚠" in m for m in 말)
+        self.footer.setStyleSheet(theme.small(theme.T.WARN, 0.8, 9) if 경고 else theme.small(theme.T.DIM, 0.3, 9))
 
     def refresh_engine(self) -> None:
         """엔진이 뭘 올려놨는지. 서버가 꺼져 있으면 그 사실을 그대로 보여준다."""
