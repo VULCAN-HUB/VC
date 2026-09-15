@@ -101,7 +101,7 @@ llama_bins = [b for b in llama_bins if not b[0].lower().endswith(".lib")]
 큰것 = [d[0] for d in llama_datas + llama_bins if "cuda" in d[0].lower()]
 if 큰것:
     raise SystemExit(f"[VC.spec] CUDA 판을 집었다: {큰것[:3]}")
-print(f"[VC.spec] 대화 엔진 CPU 판 담음 — 자료 {len(llama_datas)}개 "
+print(f"[VC.spec] 대화 엔진 {'Metal' if MAC else 'CPU'} 판 담음 — 자료 {len(llama_datas)}개 "
       f"· 이진 {len(llama_bins)}개")
 
 

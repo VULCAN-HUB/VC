@@ -20,12 +20,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-LOG_PATH = paths.기계자리("data/talk.jsonl")
+# 대화 기록·녹음 자리. 시험이 바꿔 끼운다 — **비어 있으면 부를 때 앱 자리를 본다.**
+# 불러올 때 정하면 옛 창고 옮기기 전 자리에 박혀, 옮긴 뒤에도 기록 폴더에 다시 쌓는다.
+LOG_PATH: Path | None = None
 MAX_LINES = 5000  # 넘으면 오래된 것부터 버린다. 무한히 쌓이면 여는 것부터 느려진다
 
 # 실제 소리도 남긴다. 받아쓰기가 틀렸을 때 **글자만 봐서는** 마이크가 작아서인지
 # 모델이 약해서인지 못 가른다 — 원본을 다시 돌려봐야 안다.
-AUDIO_DIR = paths.기계자리("data/recordings")   # 작업 폴더가 아니라 VC 자리 기준 — 진단용 녹음이라 기계 파일이다
+AUDIO_DIR: Path | None = None   # 진단용 녹음이라 기계 파일이다
+
+
+def _log() -> Path:
+    return LOG_PATH or paths.기계자리("data/talk.jsonl")
+
+
+def _audio() -> Path:
+    return AUDIO_DIR or paths.기계자리("data/recordings")
 MAX_AUDIO_FILES = 300  # 넘으면 오래된 것부터 지운다. 목소리를 무한정 쌓아두지 않는다
 
 _lock = threading.Lock()
@@ -43,9 +53,9 @@ def save_audio(audio: Any, rate: int = 16000) -> str:
 
         if audio is None or getattr(audio, "size", 0) == 0:
             return ""
-        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        _audio().mkdir(parents=True, exist_ok=True)
         name = f"{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}.wav"
-        with wave.open(str(AUDIO_DIR / name), "wb") as w:
+        with wave.open(str(_audio() / name), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(rate)
@@ -57,7 +67,7 @@ def save_audio(audio: Any, rate: int = 16000) -> str:
 
 
 def _trim_audio() -> None:
-    files = sorted(AUDIO_DIR.glob("*.wav"))
+    files = sorted(_audio().glob("*.wav"))
     for old in files[:-MAX_AUDIO_FILES]:
         try:
             old.unlink()
@@ -68,7 +78,7 @@ def _trim_audio() -> None:
 def clear_audio() -> int:
     """녹음을 전부 지운다. 목소리는 사용자 것이라 지우는 길이 늘 있어야 한다."""
     gone = 0
-    for f in AUDIO_DIR.glob("*.wav"):
+    for f in _audio().glob("*.wav"):
         try:
             f.unlink()
             gone += 1
@@ -81,8 +91,8 @@ def record(**fields: Any) -> None:
     """한 번의 주고받음을 남긴다. 실패해도 VC가 멈추면 안 된다."""
     row = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), **fields}
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _lock, LOG_PATH.open("a", encoding="utf-8") as f:
+        _log().parent.mkdir(parents=True, exist_ok=True)
+        with _lock, _log().open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass  # 기록이 안 남는다고 대화를 못 하면 본말이 뒤집힌다
@@ -91,7 +101,7 @@ def record(**fields: Any) -> None:
 def read(limit: int = 50) -> list[dict]:
     """최근 것부터. 깨진 줄은 건너뛴다 — 한 줄 깨졌다고 전부 못 읽으면 안 된다."""
     try:
-        lines = LOG_PATH.read_text(encoding="utf-8").splitlines()
+        lines = _log().read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
     out = []
@@ -107,12 +117,12 @@ def read(limit: int = 50) -> list[dict]:
 
 def trim() -> None:
     try:
-        lines = LOG_PATH.read_text(encoding="utf-8").splitlines()
+        lines = _log().read_text(encoding="utf-8").splitlines()
     except OSError:
         return
     if len(lines) > MAX_LINES:
         with _lock:
-            LOG_PATH.write_text("\n".join(lines[-MAX_LINES:]) + "\n", encoding="utf-8")
+            _log().write_text("\n".join(lines[-MAX_LINES:]) + "\n", encoding="utf-8")
 
 
 def show(limit: int = 30) -> str:
@@ -154,7 +164,7 @@ def audit() -> str:
         return "numpy가 없어 못 잰다"
 
     rows = {r["audio"]: r for r in read(500) if r.get("audio")}
-    files = sorted(AUDIO_DIR.glob("*.wav"))
+    files = sorted(_audio().glob("*.wav"))
     if not files:
         return "녹음 없음"
 
@@ -181,7 +191,7 @@ def _self_check() -> None:
 
     global LOG_PATH, AUDIO_DIR
     # 녹음은 기록 자리 아래다 — 작업 폴더를 따르면 딴 폴더에서 켤 때 엉뚱한 데 쌓이거나 못 만든다
-    assert paths.data_dir() in AUDIO_DIR.parents, f"녹음 폴더가 작업 폴더를 따른다: {AUDIO_DIR}"
+    assert paths.data_dir() in _audio().parents, f"녹음 폴더가 작업 폴더를 따른다: {AUDIO_DIR}"
 
     old = LOG_PATH
     try:
@@ -203,7 +213,7 @@ def _self_check() -> None:
             assert "받아쓰기 0.41s" in text
 
             # 깨진 줄이 있어도 나머지는 읽힌다.
-            with LOG_PATH.open("a", encoding="utf-8") as f:
+            with _log().open("a", encoding="utf-8") as f:
                 f.write("깨진 줄\n")
             assert len(read()) == 2, "깨진 줄 하나에 전부 못 읽는다"
 
@@ -215,7 +225,7 @@ def _self_check() -> None:
 
                 tone = (np.sin(np.linspace(0, 400, 16000)) * 0.3).astype(np.float32)
                 name = save_audio(tone)
-                assert name.endswith(".wav") and (AUDIO_DIR / name).exists()
+                assert name.endswith(".wav") and (_audio() / name).exists()
                 record(heard="VC 볼륨 올려", woke=True, order="볼륨 올려",
                        reply="볼륨 올렸어", kind="result", audio=name)
                 assert name in show(), "기록에 녹음 이름이 안 붙었다"
@@ -230,12 +240,12 @@ def _self_check() -> None:
                 try:
                     for _ in range(4):
                         save_audio(tone)
-                    assert len(list(AUDIO_DIR.glob("*.wav"))) <= 2
+                    assert len(list(_audio().glob("*.wav"))) <= 2
                 finally:
                     MAX_AUDIO_FILES = keep
 
                 # 지우는 길이 늘 있어야 한다.
-                assert clear_audio() >= 1 and not list(AUDIO_DIR.glob("*.wav"))
+                assert clear_audio() >= 1 and not list(_audio().glob("*.wav"))
 
                 # 소리가 없으면 파일을 안 만든다.
                 assert save_audio(np.zeros(0, dtype=np.float32)) == ""
@@ -252,7 +262,7 @@ def _self_check() -> None:
             막힌곳.write_text("x", encoding="utf-8")
             LOG_PATH = 막힌곳 / "없는폴더" / "talk.jsonl"
             record(heard="아무거나")  # 터지면 안 된다
-            assert not LOG_PATH.exists(), f"못 쓰는 자리인데 썼다: {LOG_PATH}"
+            assert not _log().exists(), f"못 쓰는 자리인데 썼다: {LOG_PATH}"
     finally:
         LOG_PATH = old
 

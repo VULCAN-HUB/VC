@@ -27,7 +27,13 @@ from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 #   (창을 띄우는 자리에서도 따로 부른다 — 여러 번 불러도 된다.)
 paths.pin_qt_plugins()
 
-THEME_FILE = paths.기계자리("theme.json")  # 고른 테마를 여기 남긴다. 다시 켜도 그대로다
+# 고른 테마를 남기는 자리. 시험이 바꿔 끼운다 — **비어 있으면 부를 때 앱 자리를 본다.**
+# 불러올 때 정하면 옛 창고 옮기기 전 자리에 박혀, 옮긴 뒤에도 기록 폴더에 테마 파일을 다시 만든다.
+THEME_FILE: Path | None = None
+
+
+def _theme_file() -> Path:
+    return THEME_FILE or paths.기계자리("theme.json")
 
 # 글꼴: 한글은 JetBrains Mono·Consolas에 글리프가 없어 대체 폰트로 떨어지며 자간이
 # 흐트러진다. 한글 폰트를 앞에 둬야 계기판처럼 읽히면서도 안 깨진다.
@@ -140,7 +146,7 @@ def use(theme_name: str, save: bool = False) -> bool:
     )
     if save:
         try:
-            THEME_FILE.write_text(json.dumps({"theme": theme_name}), encoding="utf-8")
+            _theme_file().write_text(json.dumps({"theme": theme_name}), encoding="utf-8")
         except OSError:
             pass  # 저장 못 해도 이번 판은 바뀐 채로 돈다
     return True
@@ -149,7 +155,7 @@ def use(theme_name: str, save: bool = False) -> bool:
 def load() -> None:
     """저장해 둔 테마가 있으면 그걸로 시작한다. 없거나 깨졌으면 기본값."""
     try:
-        use(json.loads(THEME_FILE.read_text(encoding="utf-8")).get("theme", "vulcan"))
+        use(json.loads(_theme_file().read_text(encoding="utf-8")).get("theme", "vulcan"))
     except (OSError, ValueError, AttributeError):
         use("vulcan")
 

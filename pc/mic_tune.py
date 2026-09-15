@@ -27,7 +27,6 @@ import voice
 
 QUIET_SEC = 3.0
 SPEAK_ROUNDS = 3
-TUNING_PATH = paths.기계자리("mic.json")
 
 
 def _levels(seconds: float, label: str) -> list[float]:
@@ -101,10 +100,10 @@ def main(argv: list[str]) -> int:
         print("\n저장하려면: python -X utf8 mic_tune.py --apply")
         return 0
 
-    TUNING_PATH.write_text(
+    paths.기계자리("mic.json").write_text(
         json.dumps({"start_level": m["start_level"], "silence_sec": voice.SILENCE_SEC},
                    ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n{TUNING_PATH}에 저장했다. VC를 다시 띄우면 적용된다.")
+    print(f"\n{paths.기계자리("mic.json")}에 저장했다. VC를 다시 띄우면 적용된다.")
     return 0
 
 

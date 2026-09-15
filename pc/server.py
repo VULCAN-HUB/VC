@@ -44,7 +44,9 @@ from skills import SkillStore
 import keystore
 from store import Store
 
-CONFIG_PATH = paths.config_path()
+# ★★ 설정 자리는 **부를 때** 정한다(`paths.config_path()`). 불러올 때 박아 두면 옛 창고 옮기기 **전** 자리를 가리켜,
+#   원본을 지운 뒤 「없다」고 보고 **새 열쇠로 옛 자리에 다시 만들었다** — 업그레이드 첫 켜기에 폰 짝짓기가 풀리고
+#   기록 폴더에 열쇠 파일이 생겼다(⑦ 실기 2026-09-15).
 MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 폰 사진 한 장이 이보다 크면 줄여서 보내야 한다
 # 글 한 편을 통째로 줄 때의 상한. **넉넉하다** — 오너 창고에서 제일 긴 글이 3,241자다.
 # 아껴서 답을 자르면 AI 가 다시 부르므로 되레 손해고, 상한이 없으면 5만 자도 그대로 나간다.
@@ -68,8 +70,9 @@ def _알림(말: str) -> None:
         pass
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+def load_config(path: Path | None = None) -> dict[str, Any]:
     """설정이 없으면 페어링 토큰을 만들어 저장한다. 이 토큰이 QR에 실린다(결정 16)."""
+    path = path or paths.config_path()
     if path.exists():
         # ★★ **설정이 깨져도 켜져야 한다.** `json.loads` 가 그대로 터져 서버·창이 아예 안 켜졌다.
         #   깨졌으면 지우지 않고 `.깨짐-<시각>` 으로 옆에 치우고 새로 만든다(열쇠가 새로 나오니
@@ -1205,12 +1208,12 @@ class EBServer(ThreadingHTTPServer):
         #   그 사이 화면이 같은 파일에 글자 크기·화면 방식을 적는다 — 통째로 쓰면 그것들이 말없이 지워졌다.
         #   지금 파일을 다시 읽어 **고른 모델 칸만** 바꿔 쓴다.
         try:
-            지금 = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+            지금 = json.loads(paths.config_path().read_text(encoding="utf-8")) if paths.config_path().exists() else {}
             if not isinstance(지금, dict):
                 지금 = {}
         except (OSError, ValueError):
             지금 = {}
-        CONFIG_PATH.write_text(json.dumps({**지금, "models": self.cfg.get("models", {})},
+        paths.config_path().write_text(json.dumps({**지금, "models": self.cfg.get("models", {})},
                                           ensure_ascii=False, indent=2), encoding="utf-8")
         self.picked = models_config.resolve(self.cfg, model_dir)
         if role in ("chat", "vision"):
@@ -2144,21 +2147,21 @@ def _self_check() -> None:
     # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
     # ★★ 모델을 골라도 **화면이 같은 설정 파일에 적은 칸**(글자 크기 등)이 안 지워져야 한다 —
     #   서버가 켤 때 들고 있던 사본으로 통째로 덮어 말없이 지웠다.
-    _설정원문 = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    _설정원문 = paths.config_path().read_text(encoding="utf-8") if paths.config_path().exists() else None
     try:
         _지금 = json.loads(_설정원문) if _설정원문 else {}
-        CONFIG_PATH.write_text(json.dumps({**_지금, "글자배율": 1.3, "화면방식": "최대화"},
+        paths.config_path().write_text(json.dumps({**_지금, "글자배율": 1.3, "화면방식": "최대화"},
                                           ensure_ascii=False), encoding="utf-8")
         assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
-        _뒤 = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        _뒤 = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert _뒤.get("글자배율") == 1.3 and _뒤.get("화면방식") == "최대화", \
             f"모델을 고르니 화면이 적은 설정이 지워졌다: {sorted(_뒤)}"
         assert _뒤.get("models", {}).get("stt") == "medium", _뒤.get("models")
     finally:
         if _설정원문 is None:
-            CONFIG_PATH.unlink(missing_ok=True)
+            paths.config_path().unlink(missing_ok=True)
         else:
-            CONFIG_PATH.write_text(_설정원문, encoding="utf-8")
+            paths.config_path().write_text(_설정원문, encoding="utf-8")
         assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
     assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"
     # 없는 것·없는 역할은 막는다.
@@ -2341,6 +2344,26 @@ def _self_check() -> None:
     소스 = Path(__file__).read_text(encoding="utf-8", errors="replace")
     for 길 in _r.REMOTE_ALLOWED:
         assert f'"{길}"' in 소스, f"원격에 열어 둔 길이 실재하지 않는다: {길}"
+
+    # ★★ **옛 창고 옮기기 뒤 첫 켜기에 열쇠가 바뀌면 안 된다**(⑦ 실기 2026-09-15). 설정 자리를 불러올 때 박아 두면
+    #   옮기기 전 옛 자리를 가리켜, 원본을 지운 뒤 새 열쇠로 옛 자리에 다시 만들었다 — 폰 짝짓기가 풀리고 기록 폴더에 열쇠 파일이 생겼다.
+    import os as _os7
+    with tempfile.TemporaryDirectory() as _t7:
+        _기록7, _앱7 = Path(_t7) / "기록", Path(_t7) / "앱"
+        _기록7.mkdir()
+        (_기록7 / "eb_config.json").write_text(json.dumps({"pair_token": "옛열쇠-옮기기시험"}), encoding="utf-8")
+        _옛7 = {k: _os7.environ.get(k) for k in ("VC_DATA", "VC_STATE")}
+        _os7.environ["VC_DATA"], _os7.environ["VC_STATE"] = str(_기록7), str(_앱7)
+        try:
+            assert "eb_config.json" in paths.기계파일옮기기()["옮김"]
+            assert load_config().get("pair_token") == "옛열쇠-옮기기시험", "옮긴 뒤 첫 켜기에 열쇠가 바뀌었다 — 폰 짝짓기가 풀린다"
+            assert not (_기록7 / "eb_config.json").exists(), "옮긴 뒤 기록 폴더에 설정(열쇠)이 다시 생겼다"
+        finally:
+            for _k, _v in _옛7.items():
+                if _v is None:
+                    _os7.environ.pop(_k, None)
+                else:
+                    _os7.environ[_k] = _v
 
     print("server self-check 통과")
 

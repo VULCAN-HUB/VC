@@ -39,7 +39,8 @@ START_LEVEL = 0.012  # 이 크기를 넘으면 말이 시작된 것으로 본다
 
 # 마이크마다 감도가 다르다. 기본값은 어디선가 반드시 틀린다 — 재서 저장한 값이 있으면
 # 그걸 쓴다(`mic_tune.py --apply`가 만든다).
-MIC_TUNING = paths.기계자리("mic.json")
+# 시험이 바꿔 끼운다 — **비어 있으면 부를 때 앱 자리를 본다**(불러올 때 정하면 옛 창고 옮기기 전 자리에 박힌다).
+MIC_TUNING: Path | None = None
 
 # 답한 직후 이만큼은 호출어 없이 받는다. 사람은 한 번 부르고 여러 마디 이어 말한다 —
 # 매번 호출어를 요구하면 대화가 아니라 명령 입력이 된다.
@@ -49,7 +50,7 @@ FOLLOWUP_SEC = 12
 def _load_tuning() -> None:
     global START_LEVEL, SILENCE_SEC
     try:
-        saved = json.loads(MIC_TUNING.read_text(encoding="utf-8"))
+        saved = json.loads((MIC_TUNING or paths.기계자리("mic.json")).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     START_LEVEL = float(saved.get("start_level", START_LEVEL))
