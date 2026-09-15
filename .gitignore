@@ -43,3 +43,8 @@ pc/eb_config.json
 *.db
 *.db-shm
 *.db-wal
+
+# 맥이 폴더마다 만드는 것 · 맥 가상환경 · 맥 화면 갈무리
+.DS_Store
+.venv-mac/
+pc/vc_mac.png

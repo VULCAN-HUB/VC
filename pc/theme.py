@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 #   (창을 띄우는 자리에서도 따로 부른다 — 여러 번 불러도 된다.)
 paths.pin_qt_plugins()
 
-THEME_FILE = paths.data_dir() / "theme.json"  # 고른 테마를 여기 남긴다. 다시 켜도 그대로다
+THEME_FILE = paths.기계자리("theme.json")  # 고른 테마를 여기 남긴다. 다시 켜도 그대로다
 
 # 글꼴: 한글은 JetBrains Mono·Consolas에 글리프가 없어 대체 폰트로 떨어지며 자간이
 # 흐트러진다. 한글 폰트를 앞에 둬야 계기판처럼 읽히면서도 안 깨진다.

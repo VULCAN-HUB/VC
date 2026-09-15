@@ -27,7 +27,7 @@ import voice
 
 QUIET_SEC = 3.0
 SPEAK_ROUNDS = 3
-TUNING_PATH = paths.data_dir() / "mic.json"
+TUNING_PATH = paths.기계자리("mic.json")
 
 
 def _levels(seconds: float, label: str) -> list[float]:

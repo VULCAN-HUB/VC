@@ -1182,7 +1182,7 @@ class EBServer(ThreadingHTTPServer):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
         self.gate = remote.RemoteGate()
         # ★ 작업 폴더에 기대지 않는다 — 딴 폴더에서 켜면 거기 만들다 접근 거부로 **아예 안 떴다**(시험 쪽).
-        self.artifacts = Path(cfg.get("artifact_dir") or paths.data_dir() / "data" / "artifacts")
+        self.artifacts = Path(cfg.get("artifact_dir") or paths.기계자리("data/artifacts"))
         self.artifacts.mkdir(parents=True, exist_ok=True)
 
         # 원격에서 들어온 지시를 처리할 오케스트레이터. 폰과 같은 부품·같은 1단 모델을 쓴다.
@@ -1364,7 +1364,7 @@ class EBServer(ThreadingHTTPServer):
                         import talklog
 
                         적음 = selflearn.run(self.notes, lambda 말: self.backend.chat(말, 모델),
-                                            talklog.read(60), paths.data_dir() / "vc-스스로짐작.txt")
+                                            talklog.read(60), paths.기계자리("vc-스스로짐작.txt"))
                         if 적음:
                             _알림(f"[스스로 짐작] 대화에서 오너 정보 {적음}개를 짐작으로 적었다(질문 창에서 확인)")
                 except Exception as e:
@@ -1402,7 +1402,10 @@ def _self_check() -> None:
     tmp = tempfile.TemporaryDirectory()
     store = Store(":memory:")
     note_store = Notes(Path(tmp.name) / "notes")
+    # ★ 결과물 자리를 준다 — 안 주면 진짜 기록 자리에 `data/artifacts/*.txt` 가 검사마다 쌓였다(2026-09-15, 33개).
+    cfg["artifact_dir"] = str(Path(tmp.name) / "artifacts")
     server = EBServer(("127.0.0.1", 0), cfg, store, note_store)
+    assert paths.data_dir() not in server.artifacts.parents, "자체점검이 진짜 기록 자리에 결과물을 남긴다"
 
     class FakeBackend(backends.Backend):
         fail = False
@@ -2112,7 +2115,8 @@ def _self_check() -> None:
 
     # ★★ 바깥 AI 로 켜면 그 제공자의 모델 이름을 쓴다(깐 gguf 이름이 클라우드로 나가면 안 된다)
     with tempfile.TemporaryDirectory() as _바깥곳:
-        _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"}},
+        _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"},
+                         "artifact_dir": str(Path(_바깥곳) / "a")},
                         Store(":memory:"), Notes(Path(_바깥곳) / "n", index_now=False))
         try:
             assert _바깥.picked["using"]["chat"] == "claude-시험" == _바깥.picked["using"]["vision"], _바깥.picked["using"]

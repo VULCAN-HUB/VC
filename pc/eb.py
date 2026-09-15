@@ -69,7 +69,7 @@ def _log_crash(err: BaseException) -> None:
     import traceback
 
     try:
-        note = paths.data_dir() / "vc-오류.txt"
+        note = paths.기계자리("vc-오류.txt")
         with note.open("a", encoding="utf-8") as f:
             f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')}" + chr(10))
             traceback.print_exception(type(err), err, err.__traceback__, file=f)
@@ -287,6 +287,16 @@ def main(argv: list[str] | None = None) -> int:
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
 
+    # ★★ 기계 파일을 앱 자리로(오너 결정 2026-09-15) — **혼자 켜기 잠금을 잡은 뒤, db 를 열기 전에.**
+    #   이미 떠 있는 VC 가 db 를 쥐고 있을 때 옮기면 반쪽이 된다 — 서버가 살아 있거나 잠금을 못 잡으면 건너뛴다.
+    if not server_alive() and paths.only_one():
+        try:
+            옮김 = paths.기계파일옮기기()
+        except Exception as err:      # 옮기다 실패해도 켜는 것은 막지 않는다 — 옛 자리를 그대로 쓴다
+            옮김 = {"옮김": [], "남김": [f"옮기기 실패: {type(err).__name__}"], "이미": []}
+        if 옮김["옮김"] or 옮김["남김"]:
+            report.trail(f"기계 파일 앱 자리로 — 옮김 {len(옮김['옮김'])} · 남김 {옮김['남김']}")
+
     cfg = srv.load_config()
     if want_server and not server_alive():
         start_server(cfg)
@@ -373,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
 def _화면상태적기(값: dict) -> None:
     import json
 
-    (paths.data_dir() / "vc-화면상태.json").write_text(
+    (paths.기계자리("vc-화면상태.json")).write_text(
         json.dumps(값, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -464,7 +474,7 @@ def _시험표(argv: list[str]) -> int:
     import json
     import urllib.parse
 
-    자리 = paths.data_dir()
+    자리 = paths.state_dir()   # 시험표도 기계 보고서다 — 기록 폴더에 안 둔다
     폴더 = next((a for a in argv if not a.startswith("-")), "")
     쓸까 = "--쓴다" in argv or "--write" in argv
     줄표: list = []
@@ -1142,7 +1152,7 @@ if __name__ == "__main__":
                 f"  뜻 벡터는 뒤에서 다시 만든다 — 켜 두면 채워진다"
                 f" (지금 만들 거리 {n.vec_left()}개){chr(10)}"
                 f"  기록(.md)은 안 건드렸다.")
-        (paths.data_dir() / "vc-색인다시.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-색인다시.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
         말하기(said)
         # **일을 마쳤으면 반드시 나간다.** 설치본에서 이 스위치만 할 일을 다 하고도
@@ -1270,9 +1280,9 @@ if __name__ == "__main__":
                           f" (새 이름이 이미 있는 것들이다): {', '.join(못바꾼[:3])}")
 
         n.conn.close()
-        (paths.data_dir() / "vc-판올리기.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-판올리기.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:12]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-판올리기.txt'}")
+               + f"  적었다: {paths.기계자리('vc-판올리기.txt')}")
         os._exit(0)
 
     if "--휴지통" in sys.argv:
@@ -1305,9 +1315,9 @@ if __name__ == "__main__":
             줄.append(f"  … 앞 40개만 보였다 (모두 {보인}개)")
         줄 += ["", "  되살리려면 그 파일을 글 폴더로 옮겨라 — 파일이 곧 항목이다.",
                f"  글 폴더: {paths.notes_dir()}"]
-        (paths.data_dir() / "vc-휴지통.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-휴지통.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:12]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-휴지통.txt'}")
+               + f"  적었다: {paths.기계자리('vc-휴지통.txt')}")
         os._exit(0)
 
     if "--사본치우기" in sys.argv:
@@ -1437,9 +1447,9 @@ if __name__ == "__main__":
                    f"  남은 항목: {n.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}장"]
 
         n.conn.close()
-        (paths.data_dir() / "vc-사본치움.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-사본치움.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:14]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-사본치움.txt'}")
+               + f"  적었다: {paths.기계자리('vc-사본치움.txt')}")
         os._exit(0)
 
     if "--찾기점수" in sys.argv or "--score" in sys.argv:
@@ -1463,7 +1473,7 @@ if __name__ == "__main__":
                 건너뛸 = True
             elif not a.startswith("-"):
                 준것.append(a)
-        물음표 = Path(준것[0]) if 준것 else (paths.data_dir() / "찾기물음.txt")
+        물음표 = Path(준것[0]) if 준것 else (paths.기계자리("찾기물음.txt"))
         if not 물음표.exists():
             말하기(f"물음 파일이 없다: {물음표}{chr(10)}"
                    f"  한 줄에 하나씩 「물음 | 정답 제목」 꼴로 적어 두면 된다.")
@@ -1565,10 +1575,10 @@ if __name__ == "__main__":
         said = (f"물음 {센것}개 · 1등 {일등} · 3등 안 {셋안} · 목록 밖 {밖}"
                 f" · {clock.perf_counter() - t0:.1f}초{재는자리}{뺌}{chr(10)}{chr(10)}"
                 + chr(10).join(줄))
-        (paths.data_dir() / "vc-찾기점수.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-찾기점수.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
         말하기(said.split(chr(10))[0] + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-찾기점수.txt'}")
+               + f"  적었다: {paths.기계자리('vc-찾기점수.txt')}")
         os._exit(0)
 
     if "--흡수" in sys.argv or "--ingest" in sys.argv:
@@ -1664,7 +1674,7 @@ if __name__ == "__main__":
         except Exception as e:
             줄 += ["", f"★ 비싼 문지기를 못 돌렸다: {type(e).__name__}: {e}",
                    "  문지기 없이 쌓으면 과정 소음이 그대로 항목이 된다. 안 쓴다."]
-            (paths.data_dir() / "vc-흡수.txt").write_text(chr(10).join(줄),
+            (paths.기계자리("vc-흡수.txt")).write_text(chr(10).join(줄),
                                                           encoding="utf-8")
             # ★ **센 것을 오류 옆에 다시 놓는다.** 멈춘 재도 「내 파일을 몇 장 봤나」는
             # 알아야 한다 — 막이는 쓰는 것을 막아야지 보는 것을 막으면 안 된다.
@@ -1780,9 +1790,9 @@ if __name__ == "__main__":
             if 잃은:
                 줄.append(f"  ★ 쓴 것보다 는 것이 적다 — {잃은}개가 겹쳐 덮였다.")
 
-        (paths.data_dir() / "vc-흡수.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-흡수.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[-6:]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-흡수.txt'}")
+               + f"  적었다: {paths.기계자리('vc-흡수.txt')}")
         os._exit(0)
 
     if "--이음선" in sys.argv or "--links" in sys.argv:
@@ -1803,9 +1813,9 @@ if __name__ == "__main__":
         줄 += ["", "== 카드 줄(내가 꼽은 1등) =="]
         줄 += [f"  {t}  →  {v[0] if v else '(없음)'}" for t, v in sorted(길.items())]
         said = chr(10).join(줄)
-        (paths.data_dir() / "vc-이음선.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-이음선.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
-        말하기(줄[0] + chr(10) + f"  적었다: {paths.data_dir() / 'vc-이음선.txt'}")
+        말하기(줄[0] + chr(10) + f"  적었다: {paths.기계자리('vc-이음선.txt')}")
         os._exit(0)
 
     if "--재보기" in sys.argv or "--bench" in sys.argv:
@@ -1834,7 +1844,7 @@ if __name__ == "__main__":
                 f"  제일 빠른 것 {min(잰다):.0f} ms · 제일 느린 것 {max(잰다):.0f} ms{chr(10)}"
                 f"  뜻 벡터 {n.conn.execute('SELECT count(*) FROM vectors').fetchone()[0]}개"
                 f" · 아직 못 만든 것 {n.vec_left()}개 · 본문이 빈 항목 {빈것}개")
-        (paths.data_dir() / "vc-재보기.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-재보기.txt")).write_text(said, encoding="utf-8")
         말하기(said)
         raise SystemExit(0)
 
@@ -1842,7 +1852,7 @@ if __name__ == "__main__":
         # **일부러 예외를 500번 낸다.** 같은 예외가 쏟아져도 로그가 안 부푸는지
         # 낯선 PC 에서 직접 재 보라고 둔 스위치다 — 5차 시험에서 예외가 한 건도
         # 안 나서 그 방어가 실제로 도는지 못 봤다.
-        death = paths.data_dir() / report.DEATH
+        death = paths.기계자리(report.DEATH)
         before = death.stat().st_size if death.exists() else 0
         for _ in range(500):
             try:
@@ -1854,7 +1864,7 @@ if __name__ == "__main__":
                 f"  죽음 기록 {before} -> {after} 바이트 (늘어난 것 {after - before})"
                 f"{chr(10)}  막지 않았다면 수십 KB 가 됐어야 한다.{chr(10)}"
                 f"  파일: {death}")
-        (paths.data_dir() / "vc-예외시험.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-예외시험.txt")).write_text(said, encoding="utf-8")
         말하기(said)
         raise SystemExit(0)
 
@@ -1873,6 +1883,7 @@ if __name__ == "__main__":
             "모델 있나": (m / "model.onnx").exists(),
             "낱말표 있나": (m / "tokenizer.json").exists(),
             "기록 자리": str(paths.data_dir()),
+            "앱 자리": str(paths.state_dir()),
             "런타임 붙듦": pin_runtime(),
             # 목소리 모델을 못 찾으면 윈도 기본 목소리로 조용히 내려앉는다 — 원격에서 볼 길이 여기뿐이다
             "목소리 모델 있나": any((m / "piper").glob("*.onnx")) if (m / "piper").is_dir() else False,
@@ -1950,7 +1961,7 @@ if __name__ == "__main__":
                 report["★ 기록 자리"] = 쪽지문제
             report["AI 가 붙는 법"] = (
                 f"GET http://127.0.0.1:{PORT}/eb/v1/hello · "
-                f"헤더 Authorization: Bearer <{paths.data_dir() / 'eb_config.json'} 의 pair_token> "
+                f"헤더 Authorization: Bearer <{paths.config_path()} 의 pair_token> "
                 "· hello 가 나머지 쓰는 법을 다 알려 준다")
             report["  그중 흐린 선"] = 셈("SELECT count(*) FROM links WHERE 흐림 = 1")
             report["뜻 벡터 수"] = 셈("SELECT count(*) FROM vectors")
@@ -1996,7 +2007,7 @@ if __name__ == "__main__":
             report["임베더 됨"] = onnx_embedder(m) is not None
         except BaseException as err:
             report["임베더 오류"] = f"{type(err).__name__}: {err}"
-        out = paths.data_dir() / "vc-진단.json"
+        out = paths.기계자리("vc-진단.json")
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         말하기(json.dumps(report, ensure_ascii=False, indent=2))
         raise SystemExit(0)

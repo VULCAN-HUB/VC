@@ -189,7 +189,11 @@ def _self_check() -> None:
            "backend": {"kind": "openai_compatible", "base_url": "http://unused/v1"},
            "models": {"chat": "", "vision": "", "stt": "", "voice": ""}}
     tmp = tempfile.TemporaryDirectory()
+    # ★ 결과물 자리를 준다 — 안 주면 진짜 기록 자리에 「볼륨 올려」 결과물이 검사마다 쌓였다(2026-09-15).
+    cfg["artifact_dir"] = str(Path(tmp.name) / "artifacts")
     pc = EBServer(("127.0.0.1", 0), cfg, Store(":memory:"), Notes(Path(tmp.name) / "notes"))
+    import paths as _paths
+    assert _paths.data_dir() not in pc.artifacts.parents, "자체점검이 진짜 기록 자리에 결과물을 남긴다"
     threading.Thread(target=pc.serve_forever, daemon=True).start()
     pc_base = f"http://127.0.0.1:{pc.server_address[1]}"
 

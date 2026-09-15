@@ -284,6 +284,135 @@ def data_dir() -> Path:
     return here
 
 
+def _앱자리기본() -> Path:
+    """구운 판이 **기계 파일**을 두는 운영체제 자리. 맥 Application Support · 윈도우 LOCALAPPDATA."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / APP_NAME
+    base = os.environ.get("XDG_STATE_HOME")
+    return (Path(base) if base else Path.home() / ".local" / "state") / APP_NAME
+
+
+def state_dir() -> Path:
+    """**기계 파일**(db · 설정 열쇠 · 로그 · 보고서 · 결과물 · 테마)이 사는 자리. 없으면 만든다.
+
+    ★★ 기록 자리는 **사람이 여는 폴더**다(옵시디언·파일 앱) — 오너 결정(2026-09-15): 메모만 둔다.
+    전에는 db·열쇠·로그 20여 가지가 글과 섞였고, 맥 문서 폴더는 iCloud 로 동기화돼
+    **열쇠와 db 가 올라가고** 「저장 공간 최적화」가 db 를 내리면 색인이 깨질 수 있었다.
+
+    차례: `VC_STATE` → `VC_DATA` 를 줬으면 **기록 자리를 따른다**(시험이 진짜 자리를 못 건드리게) →
+    구운 판이거나 `기록자리.txt` 를 쓰면 운영체제 앱 자리 → 소스로 돌면 기록 자리(개발 흐름 그대로).
+    """
+    if env := os.environ.get("VC_STATE"):
+        here = Path(env)
+    elif os.environ.get("VC_DATA"):
+        here = data_dir()
+    elif frozen() or _적어둔자리() is not None:
+        here = _앱자리기본()
+    else:
+        here = data_dir()
+    here.mkdir(parents=True, exist_ok=True)
+    return here
+
+
+def 기계자리(이름: str) -> Path:
+    """기계 파일 하나의 자리. **앱 자리에 없고 옛 기록 자리에만 있으면 옛 자리를 준다.**
+
+    옮기기가 확인에 실패해 원본을 남겼을 때도 VC 가 그대로 돌게 하는 되돌림이다 —
+    아무것도 안 사라지고, 다음에 켤 때 다시 옮겨 본다.
+    """
+    새 = state_dir() / 이름
+    옛 = data_dir() / 이름
+    if 새 != 옛 and not 새.exists() and 옛.exists():
+        return 옛
+    return 새
+
+
+# 옛 기록 자리에서 앱 자리로 옮길 기계 파일. **글(`data/notes`) · 첨부 · 휴지통은 여기 없다** — 사람 것이다.
+기계파일들 = (
+    "notes_index.db", "eb.db", "eb_config.json", "theme.json", "mic.json",
+    "vc-기록.log", "vc-죽음.log", "vc-오류.txt", "vc-메모리.json", "vc-화면상태.json", "vc-자전.json",
+    "vc-진단.json", "vc-스스로짐작.txt", "vc-색인다시.txt", "vc-판올리기.txt", "vc-휴지통.txt",
+    "vc-사본치움.txt", "vc-찾기점수.txt", "vc-흡수.txt", "vc-이음선.txt", "vc-재보기.txt",
+    "vc-예외시험.txt", "찾기물음.txt",
+    "data/talk.jsonl", "data/recordings", "data/artifacts",
+)
+
+
+def _옮긴것확인(옛: Path, 새: Path, 옛크기: tuple[int, int]) -> bool:
+    """사본이 원본만큼 멀쩡한가. db 는 열어서 검사, json 은 읽어 보고, 나머지는 크기를 댄다."""
+    import json as _j
+
+    if 새.is_dir():
+        파일 = [f for f in 새.rglob("*") if f.is_file()]
+        return (len(파일), sum(f.stat().st_size for f in 파일)) == 옛크기
+    if 새.stat().st_size != 옛크기[1]:
+        return False
+    if 새.suffix == ".db":
+        con = _sq.connect(f"file:{새}?mode=ro", uri=True)
+        try:
+            return con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        finally:
+            con.close()
+    if 새.suffix == ".json":
+        _j.loads(새.read_text(encoding="utf-8"))
+    return True
+
+
+def 기계파일옮기기() -> dict:
+    """옛 기록 자리의 기계 파일을 앱 자리로 **복사 → 확인 → 원본 지움**(오너 결정 2026-09-15). 켤 때 한 번.
+
+    ★ **혼자 켜기 잠금을 잡은 뒤, db 를 열기 전에** 부른다 — 열린 db 를 옮기면 반쪽이 된다.
+    확인에 실패하면 반쪽 사본을 치우고 **원본은 그대로 둔다** — `기계자리()` 가 옛 자리를 계속 준다.
+    앱 자리에 이미 있는 것은 건드리지 않는다(두 번 불러도 같다).
+    """
+    import shutil
+
+    새곳, 옛곳 = state_dir(), data_dir()
+    결과: dict = {"옮김": [], "남김": [], "이미": []}
+    if 새곳.resolve() == 옛곳.resolve():
+        return 결과
+    for 이름 in 기계파일들:
+        옛, 새 = 옛곳 / 이름, 새곳 / 이름
+        if not 옛.exists():
+            continue
+        if 새.exists():
+            결과["이미"].append(이름)
+            continue
+        딸림 = [옛.with_name(옛.name + 끝) for 끝 in ("-wal", "-shm")] if 이름.endswith(".db") else []
+        딸림 = [f for f in 딸림 if f.exists()]
+        try:
+            새.parent.mkdir(parents=True, exist_ok=True)
+            if 옛.is_dir():
+                파일 = [f for f in 옛.rglob("*") if f.is_file()]
+                옛크기 = (len(파일), sum(f.stat().st_size for f in 파일))
+                shutil.copytree(옛, 새)
+            else:
+                옛크기 = (1, 옛.stat().st_size)
+                for f in 딸림:
+                    shutil.copy2(f, 새.with_name(f.name))
+                shutil.copy2(옛, 새)
+            if not _옮긴것확인(옛, 새, 옛크기):
+                raise ValueError("사본이 원본과 다르다")
+        except (OSError, ValueError, _sq.Error) as e:
+            if 새.is_dir():
+                shutil.rmtree(새, ignore_errors=True)
+            else:
+                for f in [새, *[새.with_name(d.name) for d in 딸림]]:
+                    f.unlink(missing_ok=True)
+            결과["남김"].append(f"{이름}: {type(e).__name__}")
+            continue
+        if 옛.is_dir():
+            shutil.rmtree(옛, ignore_errors=True)
+        else:
+            for f in [옛, *딸림]:
+                f.unlink(missing_ok=True)
+        결과["옮김"].append(이름)
+    return 결과
+
+
 SPOT = "기록자리.txt"
 
 
@@ -362,7 +491,13 @@ def only_one(data: Path | None = None) -> bool:
     global _LOCK
     if _LOCK is not None:
         return True
-    where = (data or data_dir()) / "vc-혼자.lock"
+    if data is None and state_dir() != data_dir():
+        # 잠금 파일도 기계 파일이라 앱 자리에 둔다. **기록 자리마다 따로 잠그는 뜻**은 이름에 자리 지문을 넣어 지킨다.
+        import hashlib
+        지문 = hashlib.sha1(str(data_dir().resolve()).encode("utf-8")).hexdigest()[:10]
+        where = state_dir() / f"vc-혼자-{지문}.lock"
+    else:
+        where = (data or data_dir()) / "vc-혼자.lock"
     if os.name != "nt":
         # ★ 맥·리눅스는 **열린 파일도 지워진다** — 아래 윈도우 방식이면 둘째가 앞엣것의 잠금을 지우고 같이 떴다.
         #   flock 은 여는 것마다 따로라 같은 프로세스 안에서도 둘째를 막는다(자체점검과 같은 뜻).
@@ -403,11 +538,11 @@ def notes_dir() -> Path:
 
 
 def index_path() -> Path:
-    return data_dir() / "notes_index.db"
+    return 기계자리("notes_index.db")
 
 
 def store_path() -> Path:
-    return data_dir() / "eb.db"
+    return 기계자리("eb.db")
 
 
 def 휴지통자리() -> Path:
@@ -421,7 +556,7 @@ def 휴지통자리() -> Path:
 
 
 def config_path() -> Path:
-    return data_dir() / "eb_config.json"
+    return 기계자리("eb_config.json")
 
 
 def load_config() -> dict:
@@ -753,6 +888,57 @@ def _self_check() -> None:
     assert "?" not in str(곳), f"우리가 박는 자리부터 깨졌다: {곳}"
     if "?" in 스스로:
         print(f"  (Qt 가 스스로 말하는 자리는 깨져 있다: {스스로} — 박아서 넘겼다)")
+
+    # ★★ **기계 파일은 앱 자리로, 옛 창고는 복사 → 확인 → 원본 지움**(오너 결정 2026-09-15).
+    #   소스로 돌 때는 기록 자리 그대로 · VC_DATA 를 주면 따라간다(시험 격리) · 확인 못 한 것은 원본을 남기고 옛 자리를 계속 쓴다.
+    assert state_dir() == data_dir(), "소스로 돌 때 기계 파일 자리가 기록 자리를 떠났다 — 개발 흐름이 바뀐다"
+    옛판 = sys.platform
+    옛환경 = {k: os.environ.get(k) for k in ("VC_DATA", "VC_STATE", "LOCALAPPDATA")}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            기록, 앱 = Path(tmp) / "기록", Path(tmp) / "앱"
+            기록.mkdir()
+            os.environ["VC_DATA"] = str(기록)
+            os.environ.pop("VC_STATE", None)
+            assert state_dir() == data_dir() == 기록, "VC_DATA 를 주면 기계 파일도 따라가야 시험이 진짜 자리를 안 건드린다"
+            sys.platform = "darwin"
+            assert _앱자리기본() == Path.home() / "Library" / "Application Support" / APP_NAME, _앱자리기본()
+            sys.platform = "win32"
+            os.environ["LOCALAPPDATA"] = str(Path(tmp) / "로컬")
+            assert _앱자리기본() == Path(tmp) / "로컬" / APP_NAME, _앱자리기본()
+            sys.platform = 옛판
+
+            os.environ["VC_STATE"] = str(앱)
+            (기록 / "eb_config.json").write_text('{"pair_token": "t"}', encoding="utf-8")
+            _c2 = _sq.connect(str(기록 / "eb.db"))
+            _c2.execute("CREATE TABLE a (x)")
+            _c2.execute("INSERT INTO a VALUES (1)")
+            _c2.commit()
+            _c2.close()
+            (기록 / "notes_index.db").write_bytes(b"not a database at all " * 60)   # 깨진 db
+            (기록 / "data" / "artifacts").mkdir(parents=True)
+            (기록 / "data" / "artifacts" / "a.txt").write_text("결과", encoding="utf-8")
+            (기록 / "data" / "notes").mkdir(parents=True)
+            (기록 / "data" / "notes" / "글.md").write_text("글", encoding="utf-8")
+
+            결과 = 기계파일옮기기()
+            assert "eb.db" in 결과["옮김"] and not (기록 / "eb.db").exists() and (앱 / "eb.db").exists(), 결과
+            assert store_path() == 앱 / "eb.db" and config_path() == 앱 / "eb_config.json", (store_path(), config_path())
+            assert "data/artifacts" in 결과["옮김"] and (앱 / "data" / "artifacts" / "a.txt").exists(), 결과
+            assert any(x.startswith("notes_index.db") for x in 결과["남김"]), f"확인 못 한 db 를 옮겼다고 한다: {결과}"
+            assert (기록 / "notes_index.db").exists() and not (앱 / "notes_index.db").exists(), \
+                "확인 못 한 사본을 남기거나 원본을 지웠다"
+            assert index_path() == 기록 / "notes_index.db", "옮기지 못한 파일은 옛 자리를 계속 써야 한다"
+            assert (기록 / "data" / "notes" / "글.md").exists(), "글을 건드렸다 — 글은 기계 파일이 아니다"
+            다시 = 기계파일옮기기()
+            assert not 다시["옮김"] and "eb.db" not in 다시["남김"], f"두 번 부르면 달라진다: {다시}"
+    finally:
+        sys.platform = 옛판
+        for k, v in 옛환경.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     print("paths self-check 통과")
 

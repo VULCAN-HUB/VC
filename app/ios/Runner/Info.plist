@@ -9,9 +9,9 @@
 	<key>CFBundleDisplayName</key>
 	<string>VC</string>
 	<key>NSCameraUsageDescription</key>
-	<string>PC 의 VC 설정에 뜬 QR 을 찍어 연결한다</string>
+	<string>PC·맥 VC 설정에 뜬 QR 을 찍어 연결한다</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>같은 와이파이의 PC 에서 VC 창고를 보고 적는다</string>
+	<string>같은 와이파이의 PC·맥에서 VC 창고를 보고 적는다</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

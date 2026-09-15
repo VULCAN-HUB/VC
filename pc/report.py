@@ -60,7 +60,7 @@ def _hide_names(text: str) -> str:
 def trail(what: str) -> None:
     """한 줄 남긴다. **죽어도 여기까지는 갔다**를 알려 주는 자국이다."""
     try:
-        path = paths.data_dir() / TRAIL
+        path = paths.기계자리(TRAIL)
         if path.exists() and path.stat().st_size > KEEP_BYTES:
             # 앞을 버리고 뒤만 남긴다. 최근 것이 쓸모 있다.
             tail = path.read_bytes()[-KEEP_BYTES // 2:]
@@ -81,7 +81,7 @@ def watch_deaths() -> None:
     if _death_file is not None:
         return
     try:
-        _death_file = (paths.data_dir() / DEATH).open("a", encoding="utf-8")
+        _death_file = (paths.기계자리(DEATH)).open("a", encoding="utf-8")
         # ★ **켤 때는 여기에 아무것도 안 쓴다.** 예전에는 「=== 켬」을 여기 적었는데,
         # 그러면 **켤 때마다 죽음 기록이 자라서 크기로는 죽었는지 알 수가 없다.**
         # 시험하는 쪽이 31바이트씩 느는 것을 보고 「매번 죽는다」로 읽을 뻔했고,
@@ -159,7 +159,7 @@ def _now() -> str:
 
 def _note(line: str) -> None:
     """죽음 기록에 한 줄. 너무 커지면 앞을 버린다 — 자국이 무한정 자라면 안 된다."""
-    path = paths.data_dir() / DEATH
+    path = paths.기계자리(DEATH)
     if path.exists() and path.stat().st_size > KEEP_BYTES:
         path.write_bytes(("...(앞부분 버림)" + chr(10)).encode()
                          + path.read_bytes()[-KEEP_BYTES // 2:])
@@ -255,7 +255,7 @@ def 메모리찍기() -> None:
     except OSError:
         return          # 못 재면 안 적는다. facts() 가 「창이 안 적었다」로 읽는다
     try:
-        (paths.data_dir() / _메모파일).write_text(
+        (paths.기계자리(_메모파일)).write_text(
             json.dumps({"잰때": time.time(), "켠지": time.time() - _시작한때,
                         "지금MB": 지금, "최고MB": 최고}), encoding="utf-8")
     except OSError:
@@ -275,6 +275,7 @@ def facts() -> dict:
         "설치본인가": paths.frozen(),
         "딸린 것 자리": _hide_home(str(paths.app_dir())),
         "기록 자리": _hide_home(str(paths.data_dir())),
+        "앱 자리": _hide_home(str(paths.state_dir())),
         "모델 자리": _hide_home(str(models)),
         "뜻 검색 모델 자리": _hide_home(str(paths.meaning_dir())),
         "모델 있나": (models / "model.onnx").exists(),
@@ -319,7 +320,7 @@ def facts() -> dict:
     # 45초를 기다려도 41MB · 0초 그대로고 「다시 봐라」가 영영 안 사라졌다.
     # 자전(vc-자전.json)과 같은 길이다 — 창이 적고, 딴 프로세스는 읽는다.
     try:
-        글 = json.loads((paths.data_dir() / _메모파일).read_text(encoding="utf-8"))
+        글 = json.loads((paths.기계자리(_메모파일)).read_text(encoding="utf-8"))
         몇초전 = time.time() - float(글["잰때"])
         켠지 = float(글["켠지"])          # 창이 파일에 적던 그 순간의 「켠 지」
         값 = (f"{int(글['지금MB'])}MB (최고 {int(글['최고MB'])}MB · "
@@ -353,7 +354,7 @@ def facts() -> dict:
     except Exception as err:
         out["onnxruntime 실패"] = f"{type(err).__name__}: {err}"
     try:
-        out["죽음 기록"] = _죽음갈라((paths.data_dir() / DEATH).read_text(
+        out["죽음 기록"] = _죽음갈라((paths.기계자리(DEATH)).read_text(
             encoding="utf-8", errors="replace"))
     except OSError:
         out["죽음 기록"] = "없음"
@@ -380,7 +381,7 @@ def bundle(out_dir: str | Path = "") -> Path:
     안 담는 것: 기록 내용, 파일 이름, 사용자 이름.
     """
     data = paths.data_dir()
-    where = Path(out_dir) if out_dir else data
+    where = Path(out_dir) if out_dir else paths.state_dir()
     where.mkdir(parents=True, exist_ok=True)
     zip_path = where / f"VC-진단-{time.strftime('%Y%m%d-%H%M%S')}.zip"
 
@@ -388,7 +389,7 @@ def bundle(out_dir: str | Path = "") -> Path:
         z.writestr("무엇이 어디.json",
                    json.dumps(facts(), ensure_ascii=False, indent=2))
         for name in (TRAIL, DEATH):
-            f = data / name
+            f = paths.기계자리(name)
             if f.exists():
                 z.writestr(name, _hide_names(_hide_home(f.read_text(encoding="utf-8", errors="replace"))))
         cfg = paths.config_path()

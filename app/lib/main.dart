@@ -267,7 +267,7 @@ class _RootState extends State<Root> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text('이 PC 에 연결할까?', style: TextStyle(color: _text, fontSize: 19)),
+        title: const Text('이 컴퓨터에 연결할까?', style: TextStyle(color: _text, fontSize: 19)),
         content: Text(p.label, style: _mono(15, _accent)),
         actions: [
           TextButton(
@@ -329,7 +329,7 @@ class IntroPage extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text('VULCAN · 내 기억 창고', style: _mono(12, _muted)),
                 const Spacer(flex: 4),
-                Text('// PC 를 찾는 중', style: _mono(11, _accent.withValues(alpha: .75))),
+                Text('// 컴퓨터를 찾는 중', style: _mono(11, _accent.withValues(alpha: .75))),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: 120,
@@ -377,18 +377,18 @@ class _PairPageState extends State<PairPage> {
           body: SafeArea(
             child: ListView(padding: const EdgeInsets.fromLTRB(22, 18, 22, 32), children: [
               const Center(child: VcMark(size: 150)),
-              const Text('PC 와 잇기',
+              const Text('PC·맥과 잇기',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 27, fontWeight: FontWeight.w600, color: _text)),
               const SizedBox(height: 8),
-              Text('집 PC 의 VC 창고를 폰에서 보고,\n폰에서 적은 것을 PC 에 남긴다.',
+              Text('집 PC·맥의 VC 창고를 폰에서 보고,\n폰에서 적은 것을 거기에 남긴다.',
                   textAlign: TextAlign.center, style: TextStyle(color: _dim.withValues(alpha: .7), height: 1.55)),
               const SectionLabel('순서'),
               const _Panel(
                 child: Column(children: [
-                  _Step('01', 'PC 에서 VC 를 켠다', '폰과 같은 와이파이여야 한다'),
+                  _Step('01', 'PC·맥에서 VC 를 켠다', '폰과 같은 와이파이여야 한다'),
                   _Step('02', '설정 → 폰 연결 → 「QR 보이기」', 'QR 은 2분 뒤 사라진다'),
-                  _Step('03', '아래 「QR 찍기」로 찍는다', '붙을 PC 주소를 한 번 확인한다', last: true),
+                  _Step('03', '아래 「QR 찍기」로 찍는다', '붙을 컴퓨터 주소를 한 번 확인한다', last: true),
                 ]),
               ),
               const SizedBox(height: 24),
@@ -413,7 +413,10 @@ class _PairPageState extends State<PairPage> {
                   TextField(
                     controller: _typed,
                     style: _mono(13, _text),
-                    decoration: const InputDecoration(hintText: 'http://PC주소:8765/app#t=…'),
+                    // ★ 키보드가 올라오면 아래 「연결」 단추가 깔려 안 보였다(아이폰 실기 2026-09-15).
+                    //   칸 아래로 단추 높이만큼 더 보이게 끌어올린다.
+                    scrollPadding: const EdgeInsets.only(bottom: 160),
+                    decoration: const InputDecoration(hintText: 'http://컴퓨터주소:8765/app#t=…'),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -495,7 +498,7 @@ class _ScanPageState extends State<ScanPage> {
             left: 0,
             right: 0,
             bottom: 56,
-            child: Text('PC 화면의 QR 을 네모 안에 맞춰 줘',
+            child: Text('PC·맥 화면의 QR 을 네모 안에 맞춰 줘',
                 textAlign: TextAlign.center, style: TextStyle(color: _text, fontSize: 15)),
           ),
         ]),
@@ -551,7 +554,7 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> with WidgetsBindingObserver {
   int _tab = 0;
-  String _state = 'PC 에 잇는 중…';
+  String _state = '컴퓨터에 잇는 중…';
   Color _dot = _muted;
 
   @override
@@ -599,7 +602,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (r == FlushResult.unauthorized) {
       widget.onUnauthorized();
     } else if (r == FlushResult.offline) {
-      _show('PC 에 못 닿았어 — 쓴 글은 폰에 두고 연결되면 보낸다', _warn);
+      _show('컴퓨터에 못 닿았어 — 쓴 글은 폰에 두고 연결되면 보낸다', _warn);
     }
   }
 
@@ -616,7 +619,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (e is VcUnauthorized) {
       widget.onUnauthorized();
     } else if (e is VcOffline) {
-      _show('PC 에 못 닿았어 — 같은 와이파이·VC 켜짐을 봐 줘', _warn);
+      _show('컴퓨터에 못 닿았어 — 같은 와이파이·VC 켜짐을 봐 줘', _warn);
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
@@ -928,12 +931,35 @@ class _WriteTabState extends State<WriteTab> {
   String _say = '';
   bool _sayOk = true;
   bool _busy = false;
+  // ★ 알림 줄이 가리키는 글. 저장할 때만 줄을 바꾸면, 오프라인에서 저장한 뒤 나중에 보내져도
+  //   「폰에 저장됨 · 전송 대기」가 그대로 남았다(아래 목록만 「서버 저장 완료」로 바뀜 — 윈도우 실기).
+  //   대기함이 그 글을 보내면 줄도 따라 바꾼다.
+  String? _sayId;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.outbox.addListener(_onOutbox);
+  }
 
   @override
   void dispose() {
+    widget.outbox.removeListener(_onOutbox);
     _title.dispose();
     _body.dispose();
     super.dispose();
+  }
+
+  void _onOutbox() {
+    final id = _sayId;
+    if (id == null || !mounted) return;
+    for (final it in widget.outbox.items) {
+      if (it.id == id && it.sent) {
+        _sayId = null;
+        _tell('서버 저장 완료 — 「${it.savedAs ?? it.title}」', true);
+        return;
+      }
+    }
   }
 
   static String _today() {
@@ -965,8 +991,10 @@ class _WriteTabState extends State<WriteTab> {
         return;
       }
       _body.clear();
+      _sayId = item.id;
       _tell('폰에 저장됨 — 보내는 중…', true);
       await widget.onSend(); // ② 닿으면 보낸다
+      if (item.sent) _sayId = null;
       _tell(item.sent ? '서버 저장 완료 — 「${item.savedAs ?? item.title}」' : '폰에 저장됨 · 전송 대기 — 연결되면 보낸다', true);
     } finally {
       if (mounted) setState(() => _busy = false);

@@ -269,7 +269,7 @@ class 멈칫셈:
 
             import paths
 
-            (paths.data_dir() / "vc-자전.json").write_text(
+            (paths.기계자리("vc-자전.json")).write_text(
                 json.dumps({"판": self.판, "두배": self.두배, "다섯배": self.다섯배,
                             "제일느린": self.제일느린, "자는중": 자는중,
                             "말": ("[자는 중 — 아무도 안 봐서 안 그린다] " if 자는중 else "")
@@ -286,7 +286,7 @@ class 멈칫셈:
 
             import paths
 
-            글 = (paths.data_dir() / "vc-자전.json").read_text(encoding="utf-8")
+            글 = (paths.기계자리("vc-자전.json")).read_text(encoding="utf-8")
             return str(json.loads(글).get("말") or "안 돌았다")
         except Exception:
             return "안 돌았다"

@@ -20,12 +20,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-LOG_PATH = paths.data_dir() / "data" / "talk.jsonl"
+LOG_PATH = paths.기계자리("data/talk.jsonl")
 MAX_LINES = 5000  # 넘으면 오래된 것부터 버린다. 무한히 쌓이면 여는 것부터 느려진다
 
 # 실제 소리도 남긴다. 받아쓰기가 틀렸을 때 **글자만 봐서는** 마이크가 작아서인지
 # 모델이 약해서인지 못 가른다 — 원본을 다시 돌려봐야 안다.
-AUDIO_DIR = paths.data_dir() / "data" / "recordings"   # 작업 폴더가 아니라 기록 자리 기준
+AUDIO_DIR = paths.기계자리("data/recordings")   # 작업 폴더가 아니라 VC 자리 기준 — 진단용 녹음이라 기계 파일이다
 MAX_AUDIO_FILES = 300  # 넘으면 오래된 것부터 지운다. 목소리를 무한정 쌓아두지 않는다
 
 _lock = threading.Lock()

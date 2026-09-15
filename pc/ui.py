@@ -72,6 +72,11 @@ from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, sec
 from skills import Skill, SkillStore, analyze
 from store import Store
 
+
+def _키글(키: str) -> str:
+    """차림표에 적는 단축키 글. **맥은 Qt 가 Ctrl 을 ⌘ 로 읽는다** — `(Ctrl+,)` 로 적혀 헷갈렸다(오너 2026-09-15)."""
+    return 키.replace("Ctrl+", "⌘") if sys.platform == "darwin" else 키
+
 # --- 화면 상수 ----------------------------------------------------------
 #
 # 색·글꼴은 **여기 없다.** theme.py가 들고 있고 `theme.T.X`로 쓴다 — 통째로 갈아
@@ -2214,7 +2219,7 @@ class MainWindow(QWidget):
         except OSError as err:
             self.report(f"진단 묶음을 못 만들었어: {err}", [ROOT])
             return
-        self.report(f"진단 묶음을 만들었어 → {made.name}  (기록 폴더에 있어)", [ROOT])
+        self.report(f"진단 묶음을 만들었어 → {made.name}  (앱 자리에 있어)", [ROOT])
         # `QMessageBox.information` 은 **손도 안 댄 윈도우 기본 대화상자**로 뜬다 —
         # 파란 i 아이콘·기본 고딕·「OK」. VC 안에서 제일 이질적이라는 지적을 받았다.
         # 확인창과 같은 길로 보낸다.
@@ -2225,8 +2230,8 @@ class MainWindow(QWidget):
     def _build_more(self) -> None:
         """`⋯` 차림표. 열 때마다 새로 짓는다 — 서식이 늘거나 줄 수 있다."""
         self.more_menu.clear()
-        self.more_menu.addAction("새 항목  (Ctrl+N)", self.new_note)
-        self.more_menu.addAction("오늘 일지  (Ctrl+D)", self.open_daily)
+        self.more_menu.addAction(f"새 항목  ({_키글('Ctrl+N')})", self.new_note)
+        self.more_menu.addAction(f"오늘 일지  ({_키글('Ctrl+D')})", self.open_daily)
         # ★ **접힌 목차를 여기로 옮긴다.** 카드가 좁으면 위 줄에서 목차를 숨기는데,
         # 여기에도 안 넣어서 **소제목으로 갈 길이 통째로 사라졌다**(시험 쪽 라-③ —
         # 「목차 UI 가 안 보이고 ⋯ 메뉴에도 없다」). 접는 것은 자리를 아끼려는
@@ -2248,7 +2253,7 @@ class MainWindow(QWidget):
             gone = self.more_menu.addAction("지우기", self.drop_note)
             gone.setToolTip("이 항목을 지운다. 파일이 사라진다")
         self.more_menu.addSeparator()
-        self.more_menu.addAction("설정 · 내 정보  (Ctrl+,)",
+        self.more_menu.addAction(f"설정 · 내 정보  ({_키글('Ctrl+,')})",
                                  lambda: self._later(lambda: settings.open_dialog(self, self.notes)))
         self.more_menu.addAction("전체화면  (F11)", lambda: settings.toggle_full(self))
         self.more_menu.addAction("문제 알리기 (진단 묶기)", self.make_report)
