@@ -334,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -744,8 +744,63 @@ class Handler(BaseHTTPRequestHandler):
             _알림(f"[서버] POST {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
+    # 첨부 한 개의 한도(4단계). 폰 사진은 수 MB, 짧은 영상은 수십 MB 다. 글(8MB)보다 넉넉히, 그래도 끝은 있다.
+    MAX_ATTACH = 200 * 1024 * 1024
+
+    def _attach(self, url) -> None:
+        """폰이 찍은 사진·영상·음성을 `_첨부/연/월/` 에 저장하고 **본문에 쓸 이름**을 준다(4단계).
+
+        ★ 글에 붙이는 일은 안 한다 — 폰이 받은 이름으로 `![[이름]]` 을 적어 **기존 글 쓰기 길**로 보낸다.
+          그래야 덧붙이기 · 같은 글 두 번 막기 · 글 잠금을 새로 만들지 않는다.
+        """
+        # ★ 몸이 크니 **읽기 전에** 열쇠를 본다. 틀린 열쇠로 200MB 를 받아 줄 까닭이 없다 — 끊는다.
+        if not self._authorized(url.path):
+            self.close_connection = True
+            return self._send(401, {"error": "unauthorized"})
+        q = parse_qs(url.query)
+        name = (q.get("name") or [""])[0]
+        stem = (q.get("title") or [""])[0].strip()
+        cid = (q.get("client_id") or [""])[0]
+        if not name or not notes.is_attachment(name):
+            self.close_connection = True
+            return self._send(400, {"error": "받는 파일 꼴이 아니다", "name": name[:80]})
+        if cid and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", cid):
+            self.close_connection = True
+            return self._send(400, {"error": "client_id 는 영문·숫자·-_ 8~80자다"})
+        try:
+            length = int(self.headers.get("Content-Length") or -1)
+        except ValueError:
+            length = -1
+        if length <= 0:
+            self.close_connection = True
+            return self._send(400, {"error": "Content-Length 가 없거나 0 이다"})
+        if length > self.MAX_ATTACH:
+            self.close_connection = True
+            self._send(413, {"error": "첨부가 너무 크다", "max_mb": self.MAX_ATTACH // (1024 * 1024)})
+            return self._비우고끊기()
+        # ★★ 폰 대기함은 응답이 끊기면 같은 파일을 다시 보낸다 — `client_id` 로 한 번만 받는다(글과 같은 표).
+        store = self.server.store
+        if cid and (전 := store.client_write(cid)) is not None and self.server.notes.attachment_path(전["title"]):
+            self.close_connection = True          # 몸은 안 받는다 — 이미 있다
+            return self._send(200, {"name": 전["title"], "duplicate": True})
+        data = self.rfile.read(length)
+        if len(data) != length:
+            return self._send(400, {"error": "몸이 덜 왔다", "got": len(data), "want": length})
+        try:
+            saved = self.server.notes.save_attachment(data, Path(name).suffix.lower(), stem=stem)
+        except OSError as 못씀:
+            return self._send(507, {"error": "못 썼다 — 첨부 자리에 쓸 수 없다", "why": type(못씀).__name__})
+        if cid:
+            store.client_write_begin(cid, saved)
+            store.client_write_done(cid)
+        return self._send(201, {"name": saved, "bytes": length})
+
     def _post(self) -> None:
         url = urlparse(self.path)
+
+        # 첨부는 몸이 JSON 이 아니라 **파일 바이트 그대로**다 — JSON 읽기 앞에서 가른다.
+        if url.path == "/eb/v1/attach":
+            return self._attach(url)
 
         # 인증보다 먼저 본문을 읽어 비운다. 안 읽고 401을 보내면 남은 바이트가 소켓에
         # 남아 다음 요청이 그걸 요청줄로 읽고 연결이 끊긴다(keep-alive라 더 잘 터진다).
@@ -1493,6 +1548,31 @@ def _self_check() -> None:
     _상, _몸 = call("GET", "/eb/v1/status")
     assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
     assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
+
+    # --- 첨부 올리기(4단계): 폰이 찍은 사진을 바이트 그대로 올리고, 받은 이름으로 글을 쓴다 ---
+    def 올리기(name, data, title="사진 시험", cid=None, token="test-token"):
+        import urllib.parse
+        q = urllib.parse.urlencode({"name": name, "title": title, **({"client_id": cid} if cid else {})})
+        req = urllib.request.Request(base + "/eb/v1/attach?" + q, data=data, method="POST",
+                                     headers={"Authorization": f"Bearer {token}",
+                                              "Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            return e.code, (json.loads(raw) if raw else None)
+
+    assert 올리기("사진.jpg", b"\xff\xd8fake", token="wrong-token")[0] == 401
+    assert 올리기("실행.exe", b"MZ")[0] == 400, "아무 파일이나 받는다"
+    _s1, _a1 = 올리기("IMG_0001.HEIC", b"heic-bytes", cid="attach-test-0001")
+    assert _s1 == 201 and _a1["name"].endswith(".heic"), (_s1, _a1)
+    _p1 = server.notes.attachment_path(_a1["name"])
+    assert _p1 is not None and _p1.read_bytes() == b"heic-bytes", _p1
+    _s2, _a2 = 올리기("IMG_0001.HEIC", b"heic-bytes", cid="attach-test-0001")
+    assert _s2 == 200 and _a2.get("duplicate") and _a2["name"] == _a1["name"], "폰이 다시 보내면 사진이 두 장 생긴다"
+    call("POST", "/eb/v1/memory", {"title": "사진 시험", "text": f"받은 제품\n\n![[{_a1['name']}]]"})
+    assert _a1["name"] in server.notes.read("사진 시험").attachments(), "받은 이름으로 쓴 글이 첨부를 안 가리킨다"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을

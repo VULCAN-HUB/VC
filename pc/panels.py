@@ -202,6 +202,10 @@ class NoteView(QTextBrowser):
         elif kind == "note":
             name, _, heading = rest.partition("#")
             self.link_clicked.emit(name, heading)
+        elif kind == "file":
+            # 📎 첨부 고리(영상·녹음·heic·pdf) — 컴퓨터의 기본 앱으로 연다.
+            from PyQt5.QtGui import QDesktopServices
+            QDesktopServices.openUrl(url)
 
     def to_markdown(self, body: str) -> str:
         """우리 표기를 마크다운으로 바꾼다. 순서가 중요하다 — 끼움이 링크를 품는다.
@@ -214,6 +218,10 @@ class NoteView(QTextBrowser):
                 path = self.find_file(name) if self.find_file else None
                 if path is None:
                     return f"⟨없는 첨부: {name}⟩"
+                # ★ 그림만 그림으로 넣는다. 폰 사진(.heic)·영상·녹음·pdf 를 그림 칸에 넣으면 **깨진 그림**이 뜬다 —
+                #   고리로 두고 누르면 컴퓨터의 기본 앱이 연다(4단계).
+                if Path(name).suffix.lower() not in notes.IMAGE_EXT:
+                    return f"[📎 {name}]({Path(path).as_uri()})"
                 return f"![{name}]({Path(path).as_uri()})"
             label = f"{name}#{head}" if head else name
             고리 = f"[⟨{label}⟩]({self._주소('note:' + label)})"
@@ -1511,6 +1519,12 @@ def _self_check() -> None:
         md2 = v2.to_markdown("현장 ![[사진.png]] 과 ![[없는것.png]]")
         assert "![사진.png](file:" in md2, md2
         assert "없는 첨부" in md2, md2
+        # ★ 폰 사진(.heic)·영상·녹음은 그림 칸에 넣으면 깨진다 — 📎 고리로(4단계).
+        영상 = Path(_d) / "IMG_0001.mov"
+        영상.write_bytes(b"mov")
+        v3 = NoteView(find_file=lambda nm: 영상 if nm == "IMG_0001.mov" else None)
+        md3 = v3.to_markdown("받은 제품 ![[IMG_0001.mov]]")
+        assert "[📎 IMG_0001.mov](file:" in md3 and "![IMG_0001.mov]" not in md3, md3
 
         # 큰 사진은 칸 폭에 맞춰 줄인다. 원래 크기로 두면 칸을 뚫고 나간다.
         v2.resize(320, 240)

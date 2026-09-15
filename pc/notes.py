@@ -149,7 +149,11 @@ UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # 첨부로 보는 확장자. **첨부는 항목이 아니다** — `![[사진.png]]`을 노트 링크로 세면
 # "아직 없는 것"에 사진 이름이 끝없이 쌓이고 그래프에 유령 점이 생긴다.
-ATTACH_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".pdf"}
+# ★ 폰으로 남기는 모든 기록(결정 16) — 아이폰 사진은 .heic, 영상은 .mov·.mp4, 녹음은 .m4a 로 온다.
+#   그림만 받던 목록이라 폰 사진이 「받는 파일 꼴이 아니다」로 막혔다(4단계). 원본을 그대로 둔다.
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+PHONE_MEDIA_EXT = {".heic", ".heif", ".mov", ".mp4", ".m4v", ".m4a", ".aac", ".mp3", ".wav"}
+ATTACH_EXT = IMAGE_EXT | {".pdf"} | PHONE_MEDIA_EXT
 ATTACH_DIR = "_첨부"
 
 # 지난 판을 두는 곳. 점으로 시작해 **옵시디언에서 안 보인다** — 기계가 챙기는 것이지
