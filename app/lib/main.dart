@@ -661,6 +661,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         Flexible(
                           child: Text(_state, style: _mono(11, _muted), overflow: TextOverflow.ellipsis),
                         ),
+                        // 늘 보이는 한 줄의 「보낼 것」(결정 17). 없으면 아무 말도 안 한다.
+                        ListenableBuilder(
+                          listenable: widget.outbox,
+                          builder: (_, _) => widget.outbox.pending == 0
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: Text('보낼 것 ${widget.outbox.pending}', style: _mono(11, _warn)),
+                                ),
+                        ),
                       ]),
                     ]),
                   ),
