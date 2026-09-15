@@ -501,16 +501,23 @@ def open_dialog(win, notes: Notes):
     import phone_app
     import phone_relay
 
-    폰틀, _ = 쪽("폰 연결", "같은 와이파이의 폰에서 VC 앱 「QR 찍기」(또는 폰 카메라 → 브라우저)로 QR 을 찍으면 "
-                         "폰에서 PC 창고를 보고, 폰에서 적은 것이 PC 에 저장된다.")
-    폰주소 = QLabel(f"폰 주소: {phone_app.app_url(phone_relay.local_ip())}")
+    폰틀, _ = 쪽("폰 연결", "폰 VC 앱 「QR 찍기」(또는 폰 카메라 → 브라우저)로 QR 을 찍으면 폰에서 이 창고를 보고, "
+                         "폰에서 적은 것이 여기 저장된다. 폰과 이 컴퓨터 둘 다 테일스케일이 켜져 있으면 어디서나 붙는다.")
+    import tailnet
+
+    # ★★ QR 에는 테일스케일 주소를 담는다(결정 18). 집 와이파이 주소를 담으면 폰이 다른 망으로 옮기는 순간 못 닿는다.
+    #   시험이 바꿔 끼울 수 있게 창에 달아 둔다.
+    창.테일주소 = tailnet.tailscale_ip
+    _테일 = 창.테일주소()
+    폰주소 = QLabel(f"폰 주소: {phone_app.app_url(_테일)}" if _테일
+                    else "폰 주소: 테일스케일이 꺼져 있다 — 이 컴퓨터에서 켜고 창을 다시 연다")
     폰주소.setObjectName("ask_label")
     from PyQt5.QtCore import Qt
 
     폰주소.setTextInteractionFlags(Qt.TextSelectableByMouse)
     폰틀.addWidget(폰주소)
-    폰풀이 = QLabel("QR 에는 PC 열쇠가 들어 있다 — 남이 찍지 않게 2분 뒤 사라진다. "
-                  "안 열리면 폰이 같은 와이파이인지, 윈도우 방화벽이 VC 를 막지 않는지 본다.")
+    폰풀이 = QLabel("QR 에는 이 컴퓨터의 열쇠가 들어 있다 — 남이 찍지 않게 2분 뒤 사라진다. "
+                  "안 열리면 폰과 이 컴퓨터의 테일스케일이 같은 계정으로 켜져 있는지, 방화벽이 VC 를 막지 않는지 본다.")
     폰풀이.setObjectName("note")
     폰풀이.setWordWrap(True)
     폰틀.addWidget(폰풀이)
@@ -519,20 +526,50 @@ def open_dialog(win, notes: Notes):
     폰단추 = QPushButton("QR 보이기")
     폰단추.setObjectName("primary")
 
-    def QR보이기() -> None:
+    창.폰경고 = QLabel("")
+    창.폰경고.setObjectName("note")
+    창.폰경고.setWordWrap(True)
+    창.폰경고.hide()
+    폰집단추 = QPushButton("집 와이파이 주소로 보이기")
+    폰집단추.hide()
+
+    def _QR그리기(주소: str) -> None:
         from PyQt5.QtCore import QTimer
         from PyQt5.QtGui import QPixmap
 
         그림 = QPixmap()
-        그림.loadFromData(phone_app.qr_png(phone_app.pair_url(phone_relay.local_ip(),
-                                                              paths.load_config()["pair_token"])))
+        그림.loadFromData(phone_app.qr_png(phone_app.pair_url(주소, paths.load_config()["pair_token"])))
         창.폰QR.setPixmap(그림)
         창.폰QR.show()
         QTimer.singleShot(120_000, lambda: (창.폰QR.clear(), 창.폰QR.hide()))
 
+    def QR보이기() -> None:
+        테일 = 창.테일주소()
+        if not 테일:
+            # ★ 조용히 집 주소로 넘어가지 않는다(결정 21) — 알리고, 사람이 알고 고르게 한다
+            창.폰QR.clear()
+            창.폰QR.hide()
+            창.폰경고.setText("테일스케일이 꺼져 있다 — 이 컴퓨터와 폰에서 켜고 다시 누른다. "
+                            "급하면 아래 단추로 집 와이파이 주소를 보인다(같은 와이파이에서만 붙는다).")
+            창.폰경고.show()
+            폰집단추.show()
+            return
+        창.폰경고.hide()
+        폰집단추.hide()
+        _QR그리기(테일)
+
+    def 집QR보이기() -> None:
+        _QR그리기(phone_relay.local_ip())
+        창.폰경고.setText("집 와이파이 주소로 보였다 — 폰이 같은 와이파이일 때만 붙는다.")
+        창.폰경고.show()
+
     폰단추.clicked.connect(QR보이기)
+    폰집단추.clicked.connect(집QR보이기)
     창.폰단추 = 폰단추
+    창.폰집단추 = 폰집단추
     폰틀.addWidget(폰단추)
+    폰틀.addWidget(창.폰경고)
+    폰틀.addWidget(폰집단추)
     폰틀.addWidget(창.폰QR)
     폰틀.addStretch(1)
 

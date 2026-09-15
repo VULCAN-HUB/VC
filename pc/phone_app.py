@@ -86,7 +86,7 @@ PAGE = """<!doctype html><html lang="ko"><meta charset="utf-8">
 <main>
  <section id="pair" hidden>
   <p class="say">PC 에서 VC 를 켜고 <b>설정 → 폰 연결</b> 의 QR 을 폰 카메라로 찍어 줘.</p>
-  <p class="dim">열리면 브라우저 메뉴의 「홈 화면에 추가」로 앱처럼 쓴다. PC 와 같은 와이파이여야 한다.</p>
+  <p class="dim">열리면 브라우저 메뉴의 「홈 화면에 추가」로 앱처럼 쓴다. PC·맥과 폰 모두 테일스케일이 켜져 있어야 한다(같은 와이파이면 집 주소로도 된다).</p>
  </section>
  <section id="find">
   <div class="row"><input id="q" placeholder="찾을 말 (비우면 창고 앞머리)" enterkeyhint="search"><button id="go">찾기</button></div>
@@ -133,7 +133,7 @@ async function api(method, path, body) {
     r = await fetch(path, {method, headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
                            body: body === undefined ? undefined : JSON.stringify(body)});
   } catch (e) {
-    $('state').textContent = 'PC 에 못 닿았어 — 같은 와이파이인지, VC 가 켜져 있는지 봐 줘';
+    $('state').textContent = '컴퓨터에 못 닿았어 — 테일스케일과 VC 가 켜져 있는지 봐 줘';
     return null;
   }
   if (r.status === 401) { unpaired('열쇠가 안 맞아 — QR 을 다시 찍어 줘'); return null; }
