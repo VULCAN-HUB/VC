@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'outbox.dart';
 import 'vc_api.dart';
+import 'pick.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -1020,10 +1021,11 @@ class _NotePageState extends State<NotePage> {
 }
 
 class WriteTab extends StatefulWidget {
-  const WriteTab({super.key, required this.outbox, required this.onSend});
+  const WriteTab({super.key, required this.outbox, required this.onSend, this.pick = pickMedia});
 
   final Outbox outbox;
   final Future<void> Function() onSend;
+  final Picker pick; // 사진·영상 고르기(4단계). 시험에서는 가짜로 갈아 끼운다
 
   @override
   State<WriteTab> createState() => _WriteTabState();
@@ -1039,11 +1041,22 @@ class _WriteTabState extends State<WriteTab> {
   //   「폰에 저장됨 · 전송 대기」가 그대로 남았다(아래 목록만 「서버 저장 완료」로 바뀜 — 윈도우 실기).
   //   대기함이 그 글을 보내면 줄도 따라 바꾼다.
   String? _sayId;
+  // 이 글에 붙일 사진·영상(4단계). 저장하면 대기함이 폰 안에 사본을 둔다.
+  final List<File> _picked = [];
 
   @override
   void initState() {
     super.initState();
     widget.outbox.addListener(_onOutbox);
+  }
+
+  Future<void> _pick(PickHow how) async {
+    try {
+      final got = await widget.pick(how);
+      if (got.isNotEmpty && mounted) setState(() => _picked.addAll(got));
+    } catch (_) {
+      _tell('사진을 못 가져왔어 — 아이폰 설정 › VC 에서 사진·카메라 허락을 봐 줘', false);
+    }
   }
 
   @override
@@ -1083,18 +1096,20 @@ class _WriteTabState extends State<WriteTab> {
 
   Future<void> _save() async {
     final text = _body.text.trim();
-    if (text.isEmpty || _busy) return;
+    // 사진만 붙여도 기록이다(에버노트처럼) — 글이 비어도 첨부가 있으면 저장한다.
+    if ((text.isEmpty && _picked.isEmpty) || _busy) return;
     final title = _title.text.trim().isEmpty ? _today() : _title.text.trim();
     setState(() => _busy = true);
     try {
       final OutboxItem item;
       try {
-        item = await widget.outbox.add(title, text); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
+        item = await widget.outbox.add(title, text, files: List.of(_picked)); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
       } catch (e) {
         _tell('폰에 저장 못 했어 — 적은 글은 칸에 그대로 있어 ($e)', false);
         return;
       }
       _body.clear();
+      setState(() => _picked.clear());
       _sayId = item.id;
       _tell('폰에 저장됨 — 보내는 중…', true);
       await widget.onSend(); // ② 닿으면 보낸다
@@ -1124,7 +1139,7 @@ class _WriteTabState extends State<WriteTab> {
       child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(it.title,
+            Text(it.files.isEmpty ? it.title : '${it.title}  📎${it.files.length}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: _text, fontWeight: FontWeight.w600)),
@@ -1155,7 +1170,39 @@ class _WriteTabState extends State<WriteTab> {
             decoration: const InputDecoration(
                 hintText: '제목 — 비우면 오늘 날짜', prefixIcon: Icon(Icons.title, color: _muted)),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
+          // 사진·영상 붙이기(4단계). 고른 것은 칩으로 — 눌러서 뺀다.
+          Row(children: [
+            IconButton(
+                tooltip: '사진 찍기',
+                onPressed: _busy ? null : () => _pick(PickHow.photo),
+                icon: const Icon(Icons.photo_camera_outlined, color: _accent)),
+            IconButton(
+                tooltip: '영상 찍기',
+                onPressed: _busy ? null : () => _pick(PickHow.video),
+                icon: const Icon(Icons.videocam_outlined, color: _accent)),
+            IconButton(
+                tooltip: '사진첩에서 고르기',
+                onPressed: _busy ? null : () => _pick(PickHow.library),
+                icon: const Icon(Icons.photo_library_outlined, color: _accent)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  for (var i = 0; i < _picked.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: InputChip(
+                        label: Text(_picked[i].uri.pathSegments.last, style: _mono(11, _text)),
+                        onDeleted: () => setState(() => _picked.removeAt(i)),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 4),
           Expanded(
             flex: 3,
             child: TextField(
