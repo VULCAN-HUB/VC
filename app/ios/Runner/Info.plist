@@ -9,7 +9,11 @@
 	<key>CFBundleDisplayName</key>
 	<string>VC</string>
 	<key>NSCameraUsageDescription</key>
-	<string>PC·맥 VC 설정에 뜬 QR 을 찍어 연결한다</string>
+	<string>VC 설정 QR 을 찍어 연결하고, 기록에 붙일 사진·영상을 찍는다</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>사진첩의 사진·영상을 골라 기록에 붙인다</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>영상을 찍을 때 소리를 함께 담는다</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>테일스케일이나 같은 와이파이로 PC·맥의 VC 창고를 보고 적는다</string>
 	<key>NSAppTransportSecurity</key>

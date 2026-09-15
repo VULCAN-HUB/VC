@@ -111,6 +111,39 @@ class VcApi {
     return store is Map ? store['notes'] as int? : null;
   }
 
+  /// 첨부 올리기(4단계) — 사진·영상·녹음을 바이트 그대로. 서버가 **본문에 쓸 이름**을 준다.
+  /// 같은 `clientId` 로 다시 보내면 서버는 몸을 안 받고 같은 이름을 준다(대기함 재전송).
+  Future<String> attach(String name, List<int> bytes, {String title = '', String? clientId}) async {
+    final uri = pairing.base.replace(path: '/eb/v1/attach', queryParameters: {
+      'name': name,
+      if (title.isNotEmpty) 'title': title,
+      'client_id': ?clientId,
+    });
+    final http.Response r;
+    try {
+      // 영상은 크다 — 글보다 넉넉히 기다린다.
+      r = await _client
+          .post(uri,
+              headers: {'Authorization': 'Bearer ${pairing.token}', 'Content-Type': 'application/octet-stream'},
+              body: bytes)
+          .timeout(timeout * 12);
+    } on Exception catch (e) {
+      throw VcOffline(offlineReason(e));
+    }
+    if (r.statusCode == 401) throw VcUnauthorized();
+    var j = <String, dynamic>{};
+    try {
+      final d = jsonDecode(utf8.decode(r.bodyBytes));
+      if (d is Map<String, dynamic>) j = d;
+    } on FormatException {
+      // 몸이 JSON 이 아니면 빈 것으로 본다
+    }
+    if (r.statusCode >= 300) throw VcError(r.statusCode, '${j['error'] ?? 'HTTP ${r.statusCode}'}');
+    final saved = j['name'];
+    if (saved is! String || saved.isEmpty) throw VcError(r.statusCode, '서버가 첨부 이름을 안 줬다');
+    return saved;
+  }
+
   /// 「상태·기록」(결정 17 ③) — 자국 끝줄 · 죽음 줄 수 · 켠 지(초). 글 이름·집 경로는 서버가 가린다.
   Future<Map<String, dynamic>> status() => _call('GET', '/eb/v1/status');
 

@@ -26,6 +26,24 @@ extension SendStateLabel on SendState {
       };
 }
 
+/// 글에 딸린 사진·영상·녹음 하나(4단계). 폰 안 대기함 자리에 복사해 둔 사본을 가리킨다.
+class OutboxFile {
+  OutboxFile({required this.path, required this.name, this.uploaded});
+
+  final String path; // 폰 안 사본
+  final String name; // 원래 이름 — 꼴(.heic·.mov)을 서버가 이걸로 가린다
+  String? uploaded; // 서버가 준 이름. 있으면 다시 안 올린다
+
+  Map<String, dynamic> toJson() => {'path': path, 'name': name, 'uploaded': ?uploaded};
+
+  static OutboxFile? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final p = j['path'], n = j['name'];
+    if (p is! String || n is! String) return null;
+    return OutboxFile(path: p, name: n, uploaded: j['uploaded'] as String?);
+  }
+}
+
 class OutboxItem {
   OutboxItem({
     required this.id,
@@ -36,7 +54,8 @@ class OutboxItem {
     this.sent = false,
     this.savedAs,
     this.error,
-  });
+    List<OutboxFile>? files,
+  }) : files = files ?? [];
 
   final String id;
   final String title;
@@ -46,8 +65,16 @@ class OutboxItem {
   bool sent;
   String? savedAs;
   String? error;
+  final List<OutboxFile> files;
 
   SendState get state => sent ? SendState.sent : (attempts == 0 ? SendState.saved : SendState.waiting);
+
+  /// 보낼 몸 — 올린 첨부를 `![[이름]]` 으로 뒤에 붙인다.
+  String get bodyToSend => [
+        text,
+        for (final f in files)
+          if (f.uploaded != null) '![[${f.uploaded}]]',
+      ].where((s) => s.trim().isNotEmpty).join('\n\n');
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -58,6 +85,7 @@ class OutboxItem {
         'sent': sent,
         'savedAs': ?savedAs,
         'error': ?error,
+        if (files.isNotEmpty) 'files': files.map((f) => f.toJson()).toList(),
       };
 
   static OutboxItem? fromJson(Object? j) {
@@ -73,6 +101,9 @@ class OutboxItem {
       sent: j['sent'] == true,
       savedAs: j['savedAs'] as String?,
       error: j['error'] as String?,
+      files: j['files'] is List
+          ? (j['files'] as List).map(OutboxFile.fromJson).whereType<OutboxFile>().toList()
+          : null,
     );
   }
 }
@@ -130,9 +161,21 @@ class Outbox extends ChangeNotifier {
   }
 
   /// 새 글을 폰에 저장한다. 이것이 끝나면 앱이 꺼져도 글은 남는다.
-  Future<OutboxItem> add(String title, String text) async {
+  Future<OutboxItem> add(String title, String text, {List<File> files = const []}) async {
+    final id = newId();
+    // ★ 고른 사진은 **폰 안 대기함 자리로 복사**해 둔다 — 사진첩·임시 폴더의 원본은 앱 밖에서 사라질 수 있다.
+    final keep = <OutboxFile>[];
+    if (files.isNotEmpty) {
+      final dir = Directory('${file.parent.path}/vc_outbox_files');
+      await dir.create(recursive: true);
+      for (var i = 0; i < files.length; i++) {
+        final name = files[i].uri.pathSegments.last;
+        final copy = await files[i].copy('${dir.path}/$id-$i-$name');
+        keep.add(OutboxFile(path: copy.path, name: name));
+      }
+    }
     final item = OutboxItem(
-        id: newId(), title: title, text: text, created: DateTime.now().millisecondsSinceEpoch);
+        id: id, title: title, text: text, created: DateTime.now().millisecondsSinceEpoch, files: keep);
     items.insert(0, item);
     await _save();
     return item;
@@ -143,12 +186,37 @@ class Outbox extends ChangeNotifier {
     if (_flushing) return FlushResult.done;
     _flushing = true;
     try {
+      next:
       for (final item in items.where((i) => !i.sent).toList().reversed) {
         item.attempts++;
         try {
-          item.savedAs = await api.write(item.title, item.text, clientId: item.id);
+          // 첨부부터 올린다. 받은 이름을 글에 `![[이름]]` 으로 붙인다 — 같은 id 로 다시 보내도 서버는 한 번만 받는다.
+          for (var i = 0; i < item.files.length; i++) {
+            final f = item.files[i];
+            if (f.uploaded != null) continue;
+            final List<int> bytes;
+            try {
+              bytes = await File(f.path).readAsBytes();
+            } on FileSystemException {
+              // 사진 없이 글만 보내면 「사진 붙인 기록」이 조용히 반쪽이 된다 — 보내지 않고 까닭을 보인다
+              item.error = '첨부가 폰에서 사라졌다 — ${f.name}';
+              await _save();
+              continue next;
+            }
+            f.uploaded = await api.attach(f.name, bytes, title: item.title, clientId: '${item.id}-f$i');
+            await _save();
+          }
+          item.savedAs = await api.write(item.title, item.bodyToSend, clientId: item.id);
           item.sent = true;
           item.error = null;
+          // 서버에 다 들어간 뒤에만 폰 사본을 지운다
+          for (final f in item.files) {
+            try {
+              await File(f.path).delete();
+            } on FileSystemException {
+              // 이미 없으면 그만
+            }
+          }
         } on VcOffline catch (e) {
           item.error = null;
           offlineReason = e.reason;
