@@ -87,6 +87,10 @@ class Outbox extends ChangeNotifier {
   final List<OutboxItem> items; // 새것이 앞
   bool _flushing = false;
 
+  /// 마지막으로 못 닿았을 때의 까닭(`VcOffline.reason`). 모르면 빈 글.
+  /// ★ 전에는 여기서 까닭을 버려, 폰 알림 줄이 「못 닿았어」만 보였다(2026-09-15 아이폰 실기).
+  String offlineReason = '';
+
   /// 보낸 것은 최근 이만큼만 남긴다(안 보낸 것은 몇 개든 다 남긴다).
   static const keepSent = 30;
 
@@ -145,8 +149,9 @@ class Outbox extends ChangeNotifier {
           item.savedAs = await api.write(item.title, item.text, clientId: item.id);
           item.sent = true;
           item.error = null;
-        } on VcOffline {
+        } on VcOffline catch (e) {
           item.error = null;
+          offlineReason = e.reason;
           await _save();
           return FlushResult.offline;
         } on VcUnauthorized {

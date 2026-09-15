@@ -602,7 +602,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (r == FlushResult.unauthorized) {
       widget.onUnauthorized();
     } else if (r == FlushResult.offline) {
-      _show('컴퓨터에 못 닿았어 — 쓴 글은 폰에 두고 연결되면 보낸다', _warn);
+      final why = widget.outbox.offlineReason;
+      _show('컴퓨터에 못 닿았어${why.isEmpty ? '' : ' ($why)'} — 쓴 글은 폰에 두고 연결되면 보낸다', _warn);
     }
   }
 
