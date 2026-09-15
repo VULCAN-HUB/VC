@@ -430,6 +430,29 @@ def 상태요약(줄수: int = 30) -> dict:
             "uptime_s": int(time.time() - _시작한때)}
 
 
+def 요약쓰기(기록폴더: str | Path) -> Path | None:
+    """설정 「기계 기록 보기」가 「둘 다」일 때, 사람이 읽는 요약 한 장을 `_VC기록/상태.md` 에 적는다.
+
+    ★ 바뀐 게 없으면 안 쓴다 — 30초마다 덮으면 옵시디언·iCloud 가 매번 흔들린다. 그래서 「켠 지」처럼 늘 바뀌는 값은 안 싣는다.
+    """
+    요 = 상태요약(40)
+    줄 = ["# VC 상태", "",
+         "> VC 가 적는 기계 기록 요약이다. 고쳐도 다음에 덮인다. 설정 「기계 기록 보기」를 「한 곳」으로 두면 더 안 적는다.", ""]
+    if 요["deaths"]:
+        줄 += [f"⚠ 죽음 기록 {요['deaths']}줄 — VC 에서 「문제 알리기」로 묶어 보내 줘", ""]
+    줄 += ["## 최근 기록 (새것이 위)", ""] + [f"- {z}" for z in reversed(요["trail"])]
+    글 = chr(10).join(줄) + chr(10)
+    자리 = Path(기록폴더) / "_VC기록" / "상태.md"
+    try:
+        if 자리.exists() and 자리.read_text(encoding="utf-8") == 글:
+            return None
+        자리.parent.mkdir(parents=True, exist_ok=True)
+        자리.write_text(글, encoding="utf-8")
+        return 자리
+    except OSError:
+        return None         # 기록 폴더가 잠겨도 VC 는 멈추면 안 된다
+
+
 def _self_check() -> None:
     import tempfile
 
@@ -445,6 +468,11 @@ def _self_check() -> None:
             요약글 = json.dumps(상태요약(), ensure_ascii=False)
             assert "검사 시작" in 요약글, 요약글
             assert "회의록" not in 요약글 and str(Path.home()) not in 요약글, 요약글
+            # 「둘 다」의 요약 한 장 — 가린 채로 쓰고, 안 바뀌었으면 다시 안 쓴다.
+            쓴 = 요약쓰기(Path(tmp) / "기록")
+            assert 쓴 is not None and 쓴.parent.name == "_VC기록", 쓴
+            assert "검사 시작" in 쓴.read_text(encoding="utf-8") and "회의록" not in 쓴.read_text(encoding="utf-8")
+            assert 요약쓰기(Path(tmp) / "기록") is None, "안 바뀌었는데 또 쓴다 — 옵시디언·iCloud 가 30초마다 흔들린다"
 
             # ★★ **메모리는 「켠 지」와 같이 적힌다.** 시험하는 쪽이 뜬 직후에 재서
             # 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다(모델이 아직 안

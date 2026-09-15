@@ -161,6 +161,8 @@ HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든�
 # 서식(템플릿)을 두는 곳. 밑줄로 시작해 항목 목록에서 눈에 안 띄되, 사람이 열어
 # 고칠 수 있게 **보이는** 폴더로 둔다(`_첨부`와 같은 자리).
 TEMPLATE_DIR = "_서식"
+# 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 요약을 적는 자리(결정 17). 기계가 쓴 글이라 항목으로 안 센다.
+VC_LOG_DIR = "_VC기록"
 
 # 서식 안에서 갈아 끼우는 자리. 옵시디언 표기도 같이 받는다.
 SLOT_RE = re.compile(r"\{\{\s*(날짜|시각|제목|date|time|title)\s*\}\}", re.I)          # 노트 폴더 안. `_`로 시작해 항목 폴더와 눈으로 갈린다
@@ -1167,8 +1169,8 @@ class Notes:
             self.reindex()
 
     def _is_history(self, path: Path) -> bool:
-        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다."""
-        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts
+        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다. VC 가 적는 기계 기록 요약도."""
+        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts or VC_LOG_DIR in path.parts
 
     def _색인열기(self, index) -> None:
         """색인 파일을 열고 표 모양을 맞춘다. 깨졌으면 `sqlite3.DatabaseError` 가 난다."""
@@ -3740,6 +3742,11 @@ def _self_check() -> None:
         n.reindex()
         assert n.read("일지") is None
         assert n.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == 1
+        # VC 가 적는 기계 기록 요약(`_VC기록/`, 결정 17)도 항목이 아니다 — 기록 폴더는 메모만.
+        (n.root / VC_LOG_DIR).mkdir(exist_ok=True)
+        (n.root / VC_LOG_DIR / "상태.md").write_text("# VC 상태\n\n- 서버 열었다\n", encoding="utf-8")
+        n.reindex()
+        assert n.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == 1, "기계 기록 요약을 항목으로 센다"
 
     # --- 뜻으로 찾기 ---
     # **모델 없이 검사한다.** 자체점검이 모델 파일에 매이면, 모델이 없는 PC에서는

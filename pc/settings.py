@@ -34,6 +34,18 @@ def 되돌리기초() -> int:
     except (TypeError, ValueError):
         return 되돌리기기본
     return 값 if 값 in [초 for _, 초 in 되돌리기때] else 되돌리기기본
+
+
+# 기계 기록(자국·죽음·상태)을 어디서 보나(결정 17). 원본은 늘 앱 자리다.
+# 「둘 다」면 사람이 읽는 요약을 기록 폴더 `_VC기록/` 에도 적는다 — VC 가 꺼져도 폰 파일 앱·옵시디언에서 보인다.
+기록보기때 = (("한 곳 + VC 화면", "한곳"), ("둘 다 — 기록 폴더 _VC기록/ 에도 요약", "둘다"))
+기록보기기본 = "한곳"
+
+
+def 기록보기() -> str:
+    """설정의 「기계 기록 보기」. 모르는 값이면 기본(한 곳)."""
+    값 = paths.load_config().get("기계기록보기", 기록보기기본)
+    return 값 if 값 in [v for _, v in 기록보기때] else 기록보기기본
 PROFILE_TITLE = "나에 대해"
 
 QUESTIONS: dict[str, list[str]] = {
@@ -383,6 +395,13 @@ def open_dialog(win, notes: Notes):
         창.되돌리기.addItem(보일, 초)
     창.되돌리기.setCurrentIndex(max(0, 창.되돌리기.findData(되돌리기초())))
     줄(화면틀, "표식이 가운데로 돌아오기까지 (손 안 댄 시간)", 창.되돌리기)
+    # 기계 기록 보기(결정 17). 기록 폴더는 메모만 — 「둘 다」일 때만 요약 한 장을 `_VC기록/` 에 둔다.
+    창.기록보기 = QComboBox()
+    창.기록보기.setObjectName("pick")
+    for 보일, 값 in 기록보기때:
+        창.기록보기.addItem(보일, 값)
+    창.기록보기.setCurrentIndex(max(0, 창.기록보기.findData(기록보기())))
+    줄(화면틀, "기계 기록(자국·오류) 보기", 창.기록보기)
     화면틀.addStretch(1)
 
     # ── 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
@@ -648,7 +667,8 @@ def open_dialog(win, notes: Notes):
         방식 = 창.방식.currentText()
         되돌림 = int(창.되돌리기.currentData())
         paths.save_config({**paths.load_config(),
-                           "화면방식": 방식, "표식되돌리기초": 되돌림})
+                           "화면방식": 방식, "표식되돌리기초": 되돌림,
+                           "기계기록보기": str(창.기록보기.currentData())})
         apply_screen(win, 방식)
         # **바로 먹게 한다.** 다시 켜야 적용되면 골라 놓고도 그대로인 줄 안다.
         그래프 = getattr(win, "graph", None)
@@ -759,6 +779,9 @@ def _self_check() -> None:
             창.방식.setCurrentText("전체화면")
             # ★ 표식이 저절로 가운데로 돌아오기까지의 시간도 여기서 고른다.
             창.되돌리기.setCurrentIndex(창.되돌리기.findData(60))
+            # 기계 기록 보기(결정 17): 기본은 「한 곳」, 여기서 「둘 다」로 바꿔 저장한다.
+            assert 창.기록보기.currentData() == "한곳", 창.기록보기.currentData()
+            창.기록보기.setCurrentIndex(창.기록보기.findData("둘다"))
             # 값이 바로 먹는지 보려고 그래프인 척하는 것을 하나 달아 둔다.
             win.graph = type("가짜그래프", (), {"자동제자리초": 0.0})()
             창.저장()
@@ -774,6 +797,10 @@ def _self_check() -> None:
             assert paths.load_config().get("표식되돌리기초") == 60, paths.load_config()
             assert 되돌리기초() == 60, 되돌리기초()
             assert win.graph.자동제자리초 == 60.0, "고른 시간이 그래프에 바로 안 먹는다"
+            assert 기록보기() == "둘다", paths.load_config().get("기계기록보기")
+            paths.save_config({**paths.load_config(), "기계기록보기": "엉뚱"})
+            assert 기록보기() == 기록보기기본, "모르는 값을 그대로 받는다"
+            paths.save_config({**paths.load_config(), "기계기록보기": "둘다"})
             # 설정 한 줄이 깨져도 창이 죽으면 안 된다 — 아는 값만 받고 나머지는 기본으로.
             for 엉뚱 in ("스물", None, -5, 7):
                 paths.save_config({**paths.load_config(), "표식되돌리기초": 엉뚱})

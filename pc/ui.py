@@ -1319,6 +1319,9 @@ class MainWindow(QWidget):
 
         def 일() -> None:
             self._테일 = tailnet.tailscale_ip()
+            # 「기계 기록 보기 — 둘 다」면 요약 한 장을 기록 폴더 `_VC기록/` 에도(결정 17). 안 바뀌었으면 안 쓴다.
+            if settings.기록보기() == "둘다":
+                report.요약쓰기(self.notes.root)
         threading.Thread(target=일, daemon=True).start()
 
     def _그리띠(self) -> None:
