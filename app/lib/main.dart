@@ -718,6 +718,8 @@ class _BrowseTabState extends State<BrowseTab> {
   String _asked = '';
   String? _empty;
   bool _busy = false;
+  // ★ 못 닿았을 때 「창고 앞머리 0장」이 떠, 창고가 빈 것처럼 보였다(2026-09-15 아이폰 실기). 못 센 것은 0 이 아니다.
+  bool _offline = false;
 
   int _sentSeen = 0;
 
@@ -756,9 +758,17 @@ class _BrowseTabState extends State<BrowseTab> {
       setState(() {
         _hits = r;
         _asked = q;
+        _offline = false;
         _empty = r.isEmpty ? '안 나왔어 — 말을 바꿔 봐' : null;
       });
     } catch (e) {
+      if (e is VcOffline && mounted) {
+        setState(() {
+          _offline = true;
+          _hits = [];
+          _empty = '컴퓨터에 못 닿아 창고를 못 불렀어 — 당겨서 다시';
+        });
+      }
       widget.onFail(e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -782,7 +792,7 @@ class _BrowseTabState extends State<BrowseTab> {
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: SectionLabel(_asked.isEmpty ? '창고 앞머리' : '찾은 것', trailing: _busy ? '…' : '${_hits.length}장'),
+          child: SectionLabel(_asked.isEmpty ? '창고 앞머리' : '찾은 것', trailing: _busy ? '…' : (_offline ? '—' : '${_hits.length}장')),
         ),
         Expanded(
           child: RefreshIndicator(
