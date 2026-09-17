@@ -1337,6 +1337,70 @@ class Notes:
             out.append((f"{when[:4]}-{when[4:6]}-{when[6:8]} {when[9:11]}:{when[11:13]}", f))
         return out
 
+    # --- 고정 · 보관 · 색 · 휴지통 (편의 기능 18·27·28·30번) ---------------
+
+    COLORS = ("빨강", "주황", "노랑", "초록", "파랑", "보라", "회색")
+
+    def mark(self, title: str, pinned: bool | None = None, archived: bool | None = None,
+             color: str | None = None) -> Note | None:
+        """글 하나의 표시를 바꾼다. `None` 은 그대로. 색은 `""` 이면 지운다. 없는 글이면 None.
+
+        보관·색은 앞머리(`보관: true` · `색: 노랑`)에 적는다 — 옵시디언에서도 속성으로 보인다.
+        """
+        with self._글잠금(title):
+            note = self.read(title)
+            if note is None:
+                return None
+            if pinned is not None:
+                note.pinned = pinned
+            if archived is not None:
+                if archived:
+                    note.extra["보관"] = True
+                else:
+                    note.extra.pop("보관", None)
+            if color is not None:
+                if color:
+                    if color not in self.COLORS:
+                        raise ValueError(f"모르는 색: {color}")
+                    note.extra["색"] = color
+                else:
+                    note.extra.pop("색", None)
+            self.write(note)
+            return note
+
+    def trashed(self) -> list[tuple[str, str, Path, Path]]:
+        """휴지통 — 지난 판은 있는데 글이 없는 것. `(제목, 언제, 마지막 판, 되살릴 자리)` 새것이 먼저.
+
+        지울 때 늘 한 판 남기므로(`_delete`) 휴지통을 따로 두지 않는다.
+        """
+        base = self.root / HISTORY_DIR
+        out = []
+        if not base.is_dir():
+            return out
+        for folder in {f.parent for f in base.rglob("*.md")}:
+            rel = folder.relative_to(base)
+            live = self.root / rel.parent / f"{folder.name}.md"
+            if live.exists():
+                continue
+            판 = sorted(folder.glob("*.md"))[-1]
+            when = 판.stem
+            out.append((folder.name, f"{when[:4]}-{when[4:6]}-{when[6:8]} {when[9:11]}:{when[11:13]}", 판, live))
+        return sorted(out, key=lambda x: x[1], reverse=True)
+
+    def untrash(self, snapshot: Path) -> str | None:
+        """휴지통에서 되살린다. 되살린 제목(없으면 None). 이력 폴더 밖의 파일은 안 받는다."""
+        base = (self.root / HISTORY_DIR).resolve()
+        snapshot = Path(snapshot).resolve()
+        if base not in snapshot.parents or not snapshot.is_file():
+            return None
+        for title, _, 판, live in self.trashed():
+            if 판.resolve() == snapshot:
+                note = Note.loads(title, read_text(판))
+                live.parent.mkdir(parents=True, exist_ok=True)
+                self.write(note, at=live)
+                return title
+        return None
+
     def restore(self, title: str, snapshot: Path) -> bool:
         """지난 판으로 되돌린다.
 
@@ -3600,6 +3664,24 @@ def _self_check() -> None:
         assert not is_attachment("그냥 항목")
         # 표 안 링크 `[[제목\|보일 말]]` — 제목 끝에 `\` 가 붙으면 끊긴 링크다
         assert parse_links("| [[제품 · a-1\\|a-1]] | [[회의#8월\\|보기]] |") == [("제품 · a-1", ""), ("회의", "8월")]
+        # 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번)
+        n.write(Note(title="표시 시험", body="몸"))
+        g = n.mark("표시 시험", pinned=True, archived=True, color="노랑")
+        assert g.pinned and n.read("표시 시험").extra.get("보관") is True and n.read("표시 시험").extra.get("색") == "노랑"
+        n.mark("표시 시험", archived=False, color="")
+        assert "보관" not in n.read("표시 시험").extra and "색" not in n.read("표시 시험").extra and n.read("표시 시험").pinned
+        try:
+            n.mark("표시 시험", color="검정")
+            raise AssertionError("모르는 색을 받았다")
+        except ValueError:
+            pass
+        assert n.mark("없는 글", pinned=True) is None
+        n.delete("표시 시험")
+        휴 = [x for x in n.trashed() if x[0] == "표시 시험"]
+        assert 휴, "지운 글이 휴지통에 없다"
+        assert n.untrash(휴[0][2]) == "표시 시험" and n.read("표시 시험").body.strip() == "몸", "못 되살렸다"
+        assert not [x for x in n.trashed() if x[0] == "표시 시험"], "되살렸는데 휴지통에 남았다"
+        assert n.untrash(n.root / "표시 시험.md") is None, "이력 밖 파일을 되살리기로 받았다"
         # 사진 글자 주석은 미리보기에 안 나오고, 찾기에는 걸린다
         assert 카드미리보기("정수기 받음\n\n%%\n사진 글자 (a.jpg):\n송장 7788\n%%") == "정수기 받음"
 

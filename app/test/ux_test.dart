@@ -352,6 +352,56 @@ void main() {
     expect(find.text('print(1)'), findsOneWidget, reason: '코드 블록을 못 그린다');
     expect(find.textContaining('```'), findsNothing);
   });
+
+  testWidgets('카드 — 고정은 맨 위 · 길게 눌러 고정 · 왼쪽으로 밀어 보관 · 휴지통 되살리기', (tester) async {
+    final calls = <String>[];
+    var pinnedB = false;
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
+      final path = req.url.path;
+      if (path == '/eb/v1/memory/mark') {
+        final b = jsonDecode(req.body) as Map;
+        calls.add('mark ${b['title']} ${b.containsKey('pinned') ? 'pinned=${b['pinned']}' : ''}${b.containsKey('archived') ? 'archived=${b['archived']}' : ''}');
+        if (b['title'] == '나' && b['pinned'] == true) pinnedB = true;
+        return _json({'title': b['title']});
+      }
+      if (path == '/eb/v1/trash') {
+        return _json({'trash': [{'id': 'abc123', 'title': '지운 글', 'when': '2026-09-18 10:00'}]});
+      }
+      if (path == '/eb/v1/trash/restore') {
+        calls.add('restore ${(jsonDecode(req.body) as Map)['id']}');
+        return _json({'restored': true});
+      }
+      return _json({'results': [
+        {'title': '가', 'preview': '첫째'},
+        {'title': '나', 'preview': '둘째', 'pinned': pinnedB, 'color': '노랑'},
+      ]});
+    }));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}))));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
+    expect(tester.getTopLeft(find.text('가')).dy < tester.getTopLeft(find.text('나')).dy, isTrue);
+
+    await tester.longPress(find.text('나'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('맨 위에 고정'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(calls, contains('mark 나 pinned=true'));
+    expect(tester.getTopLeft(find.text('나')).dy < tester.getTopLeft(find.text('가')).dy, isTrue, reason: '고정한 글이 위로 안 간다');
+
+    await tester.drag(find.text('가'), const Offset(-500, 0));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(calls, contains('mark 가 archived=true'), reason: '왼쪽으로 밀어도 보관이 안 된다');
+
+    await tester.pumpWidget(MaterialApp(home: TrashPage(api: api, onFail: (_) {})));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('되살리기'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(calls, contains('restore abc123'));
+  });
 }
 
 class _FakeShortcuts implements AppShortcuts {

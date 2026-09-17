@@ -166,13 +166,29 @@ class VcApi {
     return '${j['text'] ?? ''}';
   }
 
+  /// 고정 · 보관 · 색(편의 기능 18·27·30번). 색 '' 은 지우기.
+  Future<void> mark(String title, {bool? pinned, bool? archived, String? color}) => _call('POST', '/eb/v1/memory/mark',
+      body: {'title': title, 'pinned': ?pinned, 'archived': ?archived, 'color': ?color});
+
+  /// 지우기 — 휴지통으로(지난 판이 남아 되살릴 수 있다).
+  Future<void> delete(String title) => _call('POST', '/eb/v1/memory/delete', body: {'title': title});
+
+  /// 휴지통(편의 기능 28번) — [{id, title, when}]
+  Future<List<Map<String, dynamic>>> trash() async {
+    final t = (await _call('GET', '/eb/v1/trash'))['trash'];
+    return t is List ? t.whereType<Map<String, dynamic>>().toList() : [];
+  }
+
+  Future<void> restore(String id) => _call('POST', '/eb/v1/trash/restore', body: {'id': id});
+
   /// 「상태·기록」(결정 17 ③) — 자국 끝줄 · 죽음 줄 수 · 켠 지(초). 글 이름·집 경로는 서버가 가린다.
   Future<Map<String, dynamic>> status() => _call('GET', '/eb/v1/status');
 
   /// 찾기 1단 — 몸은 안 온다. 빈 말이면 창고 앞머리.
-  Future<List<Map<String, dynamic>>> search(String q, {int k = 20}) async {
-    // card=1 — 사람이 훑는 목록 카드(태그 · 첫 사진 · 미리보기)
-    final results = (await _call('GET', '/eb/v1/memory/search', query: {'q': q, 'k': '$k', 'card': '1'}))['results'];
+  Future<List<Map<String, dynamic>>> search(String q, {int k = 20, bool archived = false}) async {
+    // card=1 — 사람이 훑는 목록 카드(태그 · 첫 사진 · 미리보기). 보관한 글은 archived 일 때만.
+    final results = (await _call('GET', '/eb/v1/memory/search',
+        query: {'q': q, 'k': '$k', 'card': '1', if (archived) 'archived': '1'}))['results'];
     return results is List ? results.whereType<Map<String, dynamic>>().toList() : [];
   }
 

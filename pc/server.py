@@ -140,6 +140,25 @@ class Hub:
 카드미리보기 = notes.카드미리보기   # 폰 카드 · 맥 VC 최근 글이 같이 쓴다
 
 
+def 앞머리(path: str) -> str:
+    """글 파일의 앞머리(`---` 사이) 글자. 색인 몸에는 앞머리가 없어 파일에서 읽는다."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            첫 = f.readline()
+            if 첫.strip() != "---":
+                return ""
+            줄 = []
+            for 한 in f:
+                if 한.strip() == "---":
+                    break
+                줄.append(한)
+                if len(줄) > 60:
+                    break
+            return "".join(줄)
+    except OSError:
+        return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "EB/" + PROTOCOL_VERSION
@@ -334,10 +353,10 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -387,6 +406,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        if url.path == "/eb/v1/trash":
+            return self._send(200, {"trash": [
+                {"id": self._휴지통id(판), "title": t, "when": w}
+                for t, w, 판, _ in self.server.notes.trashed()[:100]]})
 
         # 첨부 받아 보기 — 폰 글 보기가 사진을 그린다(오너 실기 2026-09-16: 앱에서 사진이 안 보였다).
         # 이름만 받는다 — 경로 성분은 버리고 첨부 꼴만, 창고 안에서만 찾는다.
@@ -522,11 +546,17 @@ class Handler(BaseHTTPRequestHandler):
             k = max(1, min(k, MAX_HITS_BRIEF if 간추려 else MAX_HITS))
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
             카드 = (args.get("card") or ["0"])[0] not in ("0", "", "false")
+            보관함 = (args.get("archived") or ["0"])[0] not in ("0", "", "false")
             # ★★ **훑을 때는 제목만 있으면 된다.** 「무슨 결정들이 있었나」처럼 목록을 보는
             #   일은 흔한데, 지금은 장마다 요약·날짜·이음선까지 실어 보낸다.
             #   [잰 것, 오너 창고] `kind:결정` 120장 — 지금 20,233자 · 제목만 6,586자(3배).
             #   AI 는 목록을 보고 **고른 것만** 다시 묻는다. 그때 요약이 필요하면 그때 준다.
-            rows = self.server.notes.search(q, k)
+            rows = self.server.notes.search(q, k * 3 if 카드 else k)
+            if 카드:
+                # 폰 목록 — 보관한 글은 보관함에서만(킵). AI 길은 그대로 다 본다.
+                def 보관됨(r) -> bool:
+                    return bool(re.search(r"(?m)^보관:\s*true\s*$", 앞머리(r["path"])))
+                rows = [r for r in rows if 보관됨(r) == 보관함][:k]
             out = []
             for r in rows:
                 몸 = r["body"]
@@ -583,6 +613,9 @@ class Handler(BaseHTTPRequestHandler):
                     if 첨부수 := len(notes.parse_attachments(몸)):
                         한장["files"] = 첨부수
                     한장["preview"] = 카드미리보기(몸)
+                    머리 = 앞머리(r["path"])
+                    if m := re.search(r"(?m)^색:\s*\"?([^\"\s]+)\"?\s*$", 머리):   # 앞머리는 따옴표로 적힌다
+                        한장["color"] = m.group(1)
                     try:
                         한장["updated"] = time.strftime("%Y-%m-%d", time.localtime(Path(r["path"]).stat().st_mtime))
                     except OSError:
@@ -790,6 +823,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # 첨부 한 개의 한도(4단계). 폰 사진은 수 MB, 짧은 영상은 수십 MB 다. 글(8MB)보다 넉넉히, 그래도 끝은 있다.
     MAX_ATTACH = 200 * 1024 * 1024
+
+    def _휴지통id(self, 판: Path) -> str:
+        """휴지통 한 장의 이름표 — 경로를 밖에 안 내보낸다."""
+        import hashlib
+
+        return hashlib.sha1(str(판).encode("utf-8")).hexdigest()[:16]
 
     def _attach(self, url) -> None:
         """폰이 찍은 사진·영상·음성을 `_첨부/연/월/` 에 저장하고 **본문에 쓸 이름**을 준다(4단계).
@@ -1009,6 +1048,40 @@ class Handler(BaseHTTPRequestHandler):
         #   **잘못 넣은 것을 치우는 길**이 없는 쪽이 이상하다.
         #   지우기는 **되돌릴 수 있다**(지우기 전에 한 판 남긴다) — 그래서 승인 없이 연다.
         #   이름 바꾸기는 **가리키던 링크까지 따라 고친다**(`rename`) — 옵시디언과 같다.
+        # 고정 · 보관 · 색(편의 기능 18·27·30번) — 폰 카드 길게 누르기·밀기가 부른다
+        if url.path == "/eb/v1/memory/mark":
+            title = body.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return self._send(400, {"error": "title required"})
+            고름 = {}
+            for k in ("pinned", "archived"):
+                if k in body:
+                    if not isinstance(body[k], bool):
+                        return self._send(400, {"error": f"{k} 는 true·false"})
+                    고름[k] = body[k]
+            if "color" in body:
+                if not isinstance(body["color"], str):
+                    return self._send(400, {"error": "color 는 글자", "colors": list(notes.Notes.COLORS)})
+                고름["color"] = body["color"]
+            try:
+                g = self.server.notes.mark(title.strip(), **고름)
+            except ValueError as e:
+                return self._send(400, {"error": str(e), "colors": list(notes.Notes.COLORS)})
+            if g is None:
+                return self._send(404, {"error": "no such note", "title": title[:80]})
+            return self._send(200, {"title": g.title, "pinned": g.pinned,
+                                    "archived": g.extra.get("보관") is True, "color": g.extra.get("색", "")})
+
+        # 휴지통 되살리기(편의 기능 28번) — 목록의 id 로만(경로를 받지 않는다)
+        if url.path == "/eb/v1/trash/restore":
+            want = body.get("id")
+            for i, (_, _, 판, _) in enumerate(self.server.notes.trashed()):
+                if want == self._휴지통id(판):
+                    제목 = self.server.notes.untrash(판)
+                    if 제목:
+                        return self._send(200, {"title": 제목, "restored": True})
+            return self._send(404, {"error": "휴지통에 없다"})
+
         if url.path == "/eb/v1/memory/delete":
             title = body.get("title", "")
             if not isinstance(title, str) or not title.strip():
@@ -1713,6 +1786,27 @@ def _self_check() -> None:
     _정리 = server.consolidate_now()
     assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
     assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
+
+    # --- 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번) ---
+    call("POST", "/eb/v1/memory", {"title": "표시 카드", "text": "보관할 글 표시카드낱말"})
+    assert call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "color": "검정"})[0] == 400
+    assert call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "pinned": "yes"})[0] == 400
+    assert call("POST", "/eb/v1/memory/mark", {"title": "없는 글", "pinned": True})[0] == 404
+    _상, _표 = call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "pinned": True, "color": "노랑"})
+    assert _상 == 200 and _표["pinned"] and _표["color"] == "노랑", _표
+    _카 = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1")[1]["results"]]
+    assert _카 and _카[0].get("color") == "노랑" and _카[0].get("pinned"), _카
+    call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "archived": True})
+    assert not call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1")[1]["results"], "보관한 글이 목록에 나온다"
+    assert call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1&archived=1")[1]["results"], "보관함에 없다"
+    assert call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말"))[1]["results"], "AI 길에서 보관 글이 사라졌다"
+    call("POST", "/eb/v1/memory/delete", {"title": "표시 카드"})
+    _휴 = [x for x in call("GET", "/eb/v1/trash")[1]["trash"] if x["title"] == "표시 카드"]
+    assert _휴 and "/" not in _휴[0]["id"], "휴지통에 없거나 경로가 샌다"
+    assert call("POST", "/eb/v1/trash/restore", {"id": "없는id"})[0] == 404
+    assert call("POST", "/eb/v1/trash/restore", {"id": _휴[0]["id"]})[0] == 200
+    assert server.notes.read("표시 카드") is not None, "휴지통에서 못 되살렸다"
+    assert call("GET", "/eb/v1/trash", token="wrong-token")[0] == 401
 
     # --- 서식을 폰까지(5단계): 창고 `_서식/` 의 틀을 열쇠 단 문으로 준다. 자리는 채우지 않고 그대로 ---
     server.notes.template_root().mkdir(parents=True, exist_ok=True)
