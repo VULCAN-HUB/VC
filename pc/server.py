@@ -353,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task")
@@ -406,6 +406,24 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        # 폴더 보기(편의 기능 29번 · 원노트 공책·애플 노트 폴더) — 폴더마다 글 수. 기계 자리는 뺀다.
+        if url.path == "/eb/v1/folders":
+            뿌리 = str(self.server.notes.root)
+            셈: dict[str, int] = {}
+            for (경로,) in self.server.notes.conn.execute("SELECT path FROM notes"):
+                안 = Path(경로).parent
+                try:
+                    이름 = 안.relative_to(뿌리).as_posix()
+                except ValueError:
+                    continue
+                if 이름 in (".", ""):
+                    이름 = "/"
+                if any(x.startswith((".", "_")) for x in 이름.split("/")):
+                    continue
+                셈[이름] = 셈.get(이름, 0) + 1
+            return self._send(200, {"folders": [{"path": k, "notes": v}
+                                                for k, v in sorted(셈.items())]})
 
         if url.path == "/eb/v1/trash":
             return self._send(200, {"trash": [
@@ -1811,6 +1829,13 @@ def _self_check() -> None:
     _정리 = server.consolidate_now()
     assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
     assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
+
+    # --- 폴더 보기(편의 기능 29번) ---
+    _폴 = call("GET", "/eb/v1/folders")[1]["folders"]
+    assert _폴 and all("/" != f["path"][0] or f["path"] == "/" for f in _폴), _폴
+    assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
+    assert sum(f["notes"] for f in _폴) >= 1
+    assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
 
     # --- 오늘 일지 · 할 일 체크(편의 기능 23·26번) ---
     _상, _오늘 = call("POST", "/eb/v1/daily", {})

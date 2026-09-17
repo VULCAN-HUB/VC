@@ -579,6 +579,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(prefs.smart, isEmpty, reason: '길게 눌러도 안 지워진다');
   });
+
+  testWidgets('폴더 — ⋮ 에서 고르면 그 폴더만 본다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_folder');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final asked = <String>[];
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        if (req.url.path == '/eb/v1/folders') {
+          return _json({
+            'folders': [
+              {'path': '2026/09', 'notes': 3},
+              {'path': '/', 'notes': 1},
+            ],
+          });
+        }
+        if (req.url.path == '/eb/v1/memory/search') asked.add(req.url.queryParameters['q'] ?? '');
+        return _json({'results': [], 'store': {'notes': 4}});
+      }),
+    );
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('폴더'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.text('3장'), findsOneWidget, reason: '폴더마다 글 수가 안 보인다');
+    await tester.tap(find.text('2026/09'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(asked.last, 'path:2026/09', reason: '고른 폴더로 안 좁힌다');
+  });
 }
 
 class _FakeNotifier implements Notifier {

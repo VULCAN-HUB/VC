@@ -181,6 +181,12 @@ class VcApi {
 
   Future<void> restore(String id) => _call('POST', '/eb/v1/trash/restore', body: {'id': id});
 
+  /// 폴더 보기(편의 기능 29번) — [{path, notes}]
+  Future<List<Map<String, dynamic>>> folders() async {
+    final f = (await _call('GET', '/eb/v1/folders'))['folders'];
+    return f is List ? f.whereType<Map<String, dynamic>>().toList() : [];
+  }
+
   /// 오늘 일지(편의 기능 23번) — 없으면 만들고 제목을 준다.
   Future<String> daily() async => '${(await _call('POST', '/eb/v1/daily', body: {}))['title'] ?? ''}';
 

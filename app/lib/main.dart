@@ -901,6 +901,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         _openStatus(context);
                       } else if (v == 'daily') {
                         _openDaily();
+                      } else if (v == 'folders') {
+                        _openFolders();
                       } else if (v == 'archive') {
                         Navigator.push(
                           context,
@@ -935,6 +937,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'send', child: Text('지금 보내기')),
                       PopupMenuItem(value: 'daily', child: Text('오늘 일지')),
+                      PopupMenuItem(value: 'folders', child: Text('폴더')),
                       PopupMenuItem(value: 'archive', child: Text('보관함')),
                       PopupMenuItem(value: 'trash', child: Text('휴지통')),
                       PopupMenuItem(value: 'status', child: Text('상태·기록')),
@@ -1003,6 +1006,42 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       ),
     );
     if (mounted) _list.currentState?._find();
+  }
+
+  /// 폴더 보기(편의 기능 29번) — 고르면 그 폴더만 본다(`path:` 로 좁힌다).
+  Future<void> _openFolders() async {
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await widget.api.folders();
+    } catch (e) {
+      _fail(e);
+      return;
+    }
+    if (!mounted) return;
+    final got = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Text('폴더 — 고르면 그 폴더만 본다', style: _mono(12, _muted)),
+            ),
+            for (final r in rows)
+              ListTile(
+                leading: const Icon(Icons.folder_outlined, color: _accent),
+                title: Text('${r['path']}', style: const TextStyle(color: _text)),
+                trailing: Text('${r['notes']}장', style: _mono(11, _muted)),
+                onTap: () => Navigator.pop(c, '${r['path']}'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (got == null || !mounted) return;
+    _list.currentState?._openFolder(got);
   }
 
   void _openStatus(BuildContext context) => Navigator.push(
@@ -1564,6 +1603,13 @@ class _BrowseTabState extends State<BrowseTab> {
     if (book == null) return;
     await book.removeSmart(f.name);
     if (mounted) setState(() {});
+  }
+
+  /// 폴더로 좁혀 본다(편의 기능 29번). 찾기 문법 `path:` 를 쓴다.
+  void _openFolder(String path) {
+    _q.text = path == '/' ? '' : 'path:$path';
+    setState(() => _filter = '');
+    _find();
   }
 
   void _pickFilter(String v) {
