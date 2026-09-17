@@ -528,6 +528,57 @@ void main() {
     expect(fake.canceled.length, 1, reason: '알림을 안 지웠다');
     expect(book.items, isEmpty);
   });
+
+  testWidgets('스마트 폴더 — 지금 보기를 저장하면 칩이 되고, 누르면 그 조건으로 찾는다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_smart');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final prefs = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
+    final asked = <String>[];
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        asked.add(req.url.queryParameters['q'] ?? '');
+        return _json({
+          'results': [
+            {'title': '정수기', 'preview': '종류: 정수기', 'tags': ['제품']},
+          ],
+        });
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}, prefs: prefs))));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField).first, '정수기');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('이 보기 저장'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('저장'));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    expect(prefs.smart.single.q, '정수기');
+    // 칩 줄은 가로로 길다 — 끝까지 밀어 저장한 칩을 본다
+    await tester.drag(find.text('전체'), const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('⭐ 정수기'), findsOneWidget, reason: '저장한 보기가 칩으로 안 뜬다');
+
+    // 다시 열어도 남아 있고, 눌러 부르면 그 말로 찾는다
+    final again = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
+    expect(again.smart.single.name, '정수기', reason: '스마트 폴더가 안 남는다');
+    asked.clear();
+    await tester.tap(find.text('⭐ 정수기'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(asked.last, '정수기');
+
+    await tester.longPress(find.text('⭐ 정수기'));
+    await tester.pumpAndSettle();
+    expect(prefs.smart, isEmpty, reason: '길게 눌러도 안 지워진다');
+  });
 }
 
 class _FakeNotifier implements Notifier {

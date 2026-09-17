@@ -952,6 +952,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 onFail: _fail,
                 outbox: widget.outbox,
                 alarms: widget.alarms,
+                prefs: widget.prefs,
                 onAppend: (t) => _write(title: t),
                 onSaveLine: (t, line) async {
                   await widget.outbox.add(t, line);
@@ -1272,6 +1273,7 @@ class BrowseTab extends StatefulWidget {
     this.onAppend,
     this.onSaveLine,
     this.alarms,
+    this.prefs,
     this.archived = false,
   });
 
@@ -1281,6 +1283,7 @@ class BrowseTab extends StatefulWidget {
   final void Function(String title)? onAppend; // 글 보기의 「이어 쓰기」
   final Future<void> Function(String title, String line)? onSaveLine; // 글 보기의 칸 고치기
   final AlarmBook? alarms; // 글 보기의 시간 알림
+  final AppPrefs? prefs; // 스마트 폴더(편의 기능 25번)
   final bool archived; // 보관함으로 쓸 때
 
   @override
@@ -1528,6 +1531,41 @@ class _BrowseTabState extends State<BrowseTab> {
     }
   }
 
+  /// 지금 보기를 이름 붙여 저장(편의 기능 25번 · 애플 노트 스마트 폴더).
+  Future<void> _saveSmart() async {
+    final book = widget.prefs;
+    if (book == null) return;
+    final guess = _q.text.trim().isNotEmpty ? _q.text.trim() : (_filter == _photo ? '사진' : _filter);
+    final ctl = TextEditingController(text: guess);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('이 보기를 무엇으로 부를까'),
+        content: TextField(controller: ctl, autofocus: true, onSubmitted: (v) => Navigator.pop(c, v)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('그만')),
+          TextButton(onPressed: () => Navigator.pop(c, ctl.text), child: const Text('저장')),
+        ],
+      ),
+    );
+    // ★ 창이 닫히는 애니메이션이 끝나기 전에 없애면 「disposed 된 것을 썼다」로 터진다 — 한 박자 뒤에
+  Future<void>.delayed(const Duration(milliseconds: 400), ctl.dispose);
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    await book.addSmart(SmartFolder(name: name.trim(), q: _q.text.trim(), filter: _filter));
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('「${name.trim()}」 로 저장했어 — 칩에서 다시 불러')));
+  }
+
+  Future<void> _dropSmart(SmartFolder f) async {
+    final book = widget.prefs;
+    if (book == null) return;
+    await book.removeSmart(f.name);
+    if (mounted) setState(() {});
+  }
+
   void _pickFilter(String v) {
     setState(() => _filter = _filter == v ? '' : v);
     _find();
@@ -1576,9 +1614,18 @@ class _BrowseTabState extends State<BrowseTab> {
               hintText: '창고에서 찾기',
               isDense: true,
               prefixIcon: const Icon(Icons.search, color: _muted),
-              suffixIcon: _q.text.isEmpty
-                  ? null
-                  : IconButton(
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 지금 보기(찾는 말 + 칩)를 이름 붙여 저장 — 스마트 폴더(편의 기능 25번)
+                  if (widget.prefs != null && (_q.text.trim().isNotEmpty || _filter.isNotEmpty))
+                    IconButton(
+                      tooltip: '이 보기 저장',
+                      icon: const Icon(Icons.star_border, color: _muted),
+                      onPressed: _saveSmart,
+                    ),
+                  if (_q.text.isNotEmpty)
+                    IconButton(
                       tooltip: '지우기',
                       icon: const Icon(Icons.close, color: _muted),
                       onPressed: () {
@@ -1586,6 +1633,8 @@ class _BrowseTabState extends State<BrowseTab> {
                         _find();
                       },
                     ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1594,7 +1643,35 @@ class _BrowseTabState extends State<BrowseTab> {
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            children: [_chip('전체', ''), _chip('📷 사진', _photo), for (final t in _tags) _chip('#$t', t)],
+            children: [
+              _chip('전체', ''),
+              _chip('📷 사진', _photo),
+              for (final t in _tags) _chip('#$t', t),
+              // 저장해 둔 보기 — 누르면 그 조건으로, 길게 누르면 지운다
+              for (final f in widget.prefs?.smart ?? const <SmartFolder>[])
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: GestureDetector(
+                    onLongPress: () => _dropSmart(f),
+                    child: ChoiceChip(
+                      label: Text('⭐ ${f.name}'),
+                      selected: _q.text.trim() == f.q && _filter == f.filter,
+                      showCheckmark: false,
+                      onSelected: (_) {
+                        _q.text = f.q;
+                        setState(() => _filter = f.filter);
+                        _find();
+                      },
+                      labelStyle: const TextStyle(color: _dim, fontSize: 13),
+                      backgroundColor: _card,
+                      selectedColor: _accent.withValues(alpha: .28),
+                      side: BorderSide(color: _accent.withValues(alpha: .18)),
+                      shape: const StadiumBorder(),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         Padding(
@@ -2127,7 +2204,8 @@ Future<String?> editProp(BuildContext context, String key, String value) async {
       ],
     ),
   );
-  ctl.dispose();
+  // ★ 창이 닫히는 애니메이션이 끝나기 전에 없애면 「disposed 된 것을 썼다」로 터진다 — 한 박자 뒤에
+  Future<void>.delayed(const Duration(milliseconds: 400), ctl.dispose);
   return got;
 }
 
