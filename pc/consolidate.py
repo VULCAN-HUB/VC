@@ -173,15 +173,27 @@ def gather(store: Notes, guesses: dict[str, dict] | None = None) -> tuple[list[P
     return sorted(by.values(), key=lambda p: p.name.lower()), unsure
 
 
+def vendor_title(who: str) -> str:
+    return f"업체 · {who}"
+
+
+def _who(who: str, in_table: bool = False) -> str:
+    """업체 칸 — 업체 정리 글로 잇는다(편의 기능 6번 · 글 사이 관계)."""
+    if not who:
+        return ""
+    가름 = "\\|" if in_table else "|"
+    return f"[[{vendor_title(who)}{가름}{who}]]"
+
+
 def _body(p: Product) -> str:
-    rows = [f"| {e.day or '—'} | {e.what}{f' ({e.who})' if e.who else ''} | [[{e.source}]] |" for e in p.events]
+    rows = [f"| {e.day or '—'} | {e.what}{f' ({_who(e.who, True)})' if e.who else ''} | [[{e.source}]] |" for e in p.events]
     parts = [
         f"> VC 가 메모에서 모아 **다시 쓰는** 글이다. 고치려면 원래 메모를 고친다 — 여기를 고치면 다음 정리 때 덮인다.",
         "",
         f"- 제품명 : {p.name}",
         f"- 종류 : {p.kind}",
         f"- 지금 상태 : {p.state}",
-        f"- 업체 : {p.who}",
+        f"- 업체 : {_who(p.who)}",
         f"- 마지막 받은날 : {p.got}",
         f"- 마지막 보낸날 : {p.sent}",
         "",
@@ -198,7 +210,7 @@ def _body(p: Product) -> str:
 def _list_body(prods: list[Product], unsure: list[str]) -> str:
     def table(items: list[Product]) -> list[str]:
         out = ["| 제품 | 종류 | 업체 | 받은날 | 보낸날 |", "|---|---|---|---|---|"]
-        out += [f"| [[{p.title}\\|{p.name}]] | {p.kind} | {p.who} | {p.got} | {p.sent} |" for p in items]
+        out += [f"| [[{p.title}\\|{p.name}]] | {p.kind} | {_who(p.who, True)} | {p.got} | {p.sent} |" for p in items]
         return out
     have = [p for p in prods if p.state == HAVE]
     gone = [p for p in prods if p.state == GONE]
@@ -213,6 +225,27 @@ def _list_body(prods: list[Product], unsure: list[str]) -> str:
         parts += ["## 확인 필요", "", "제품명 칸이 없거나, AI 가 짐작한 이름이 메모에 없다. 메모에 `- 제품명 : …` 을 적으면 다음 정리 때 들어간다.", ""]
         parts += [f"- [[{t.split(' — ')[0]}]]" + (f" — {t.split(' — ', 1)[1]}" if ' — ' in t else "") for t in unsure] + [""]
     return "\n".join(parts)
+
+
+def vendors(prods: list[Product]) -> dict[str, list[tuple[Event, Product]]]:
+    """업체마다 주고받은 일(날 차례)."""
+    by: dict[str, list[tuple[Event, Product]]] = {}
+    for p in prods:
+        for e in p.events:
+            if e.who:
+                by.setdefault(e.who, []).append((e, p))
+    return {k: sorted(v, key=lambda x: x[0].day) for k, v in sorted(by.items())}
+
+
+def _vendor_body(who: str, rows: list[tuple[Event, Product]]) -> str:
+    지금 = sorted({p.name for _, p in rows if p.state == HAVE})
+    parts = ["> VC 가 메모에서 모아 **다시 쓰는** 글이다. 고치려면 원래 메모를 고친다.", "",
+             f"- 업체 : {who}",
+             f"- 주고받은 제품 : {len({p.name for _, p in rows})}",
+             f"- 지금 가진 것 : {', '.join(지금) if 지금 else '없음'}",
+             "", f"#{TAG}", "", "## 주고받은 기록", "", "| 날 | 일 | 제품 | 근거 |", "|---|---|---|---|"]
+    parts += [f"| {e.day or '—'} | {e.what} | [[{p.title}\\|{p.name}]] | [[{e.source}]] |" for e, p in rows]
+    return "\n".join(parts + [""])
 
 
 def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
@@ -235,6 +268,8 @@ def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
         return {"products": 0, "written": []}
     for p in prods:
         put(p.title, _body(p), "제품")
+    for who, rows in vendors(prods).items():
+        put(vendor_title(who), _vendor_body(who, rows), "업체")
     put(LIST_TITLE, _list_body(prods, unsure), "", pinned=True)
     return {"products": len(prods), "have": sum(p.state == HAVE for p in prods),
             "unsure": len(unsure), "written": written}
@@ -273,6 +308,12 @@ def _self_check() -> None:
         assert "지금 가진 것 **1**" in 목록.body and "[[제품 · vcis-689\\|vcis-689]]" in 목록.body, 목록.body
         장 = n.read("제품 · vcis-689")
         assert "[[정수기 보냄]]" in 장.body and "- 지금 상태 : 보유중" in 장.body and "![[정수기.jpg]]" in 장.body, 장.body
+        # 글 사이 관계 — 업체마다 한 장, 제품 글·목록의 업체 칸이 그리로 잇는다
+        김 = n.read("업체 · 김매니저")
+        assert 김 is not None and "[[제품 · vcis-689\\|vcis-689]]" in 김.body and "[[정수기 보냄]]" in 김.body, 김
+        assert "- 업체 : [[업체 · 박대리|박대리]]" in 장.body, 장.body
+        assert "[[업체 · 박대리\\|박대리]]" in 목록.body, 목록.body
+        assert ("업체 · 김매니저", "") in __import__("notes").parse_links(장.body), "업체 링크가 끊겼다"
         # 정리 글은 다시 입력으로 안 읽힌다 — 두 번 돌려도 제품이 안 는다
         assert run(n)["written"] == [], "안 바뀌었는데 또 쓴다"
         assert len(gather(n)[0]) == 3
