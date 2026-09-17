@@ -17,6 +17,7 @@ import 'pick.dart';
 import 'templates.dart';
 import 'prefs.dart';
 import 'shortcuts.dart';
+import 'ocr.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -1678,10 +1679,14 @@ class NoteBody extends StatelessWidget {
     return out;
   }
 
+  static final _comment = RegExp(r'%%[\s\S]*?%%');
+
   @override
   Widget build(BuildContext context) {
     final parts = <Widget>[];
     var at = 0;
+    // 옵시디언 주석(`%% … %%` — 사진 글자 등)은 안 보인다
+    final text = this.text.replaceAll(_comment, '').trimRight();
     for (final m in _embed.allMatches(text)) {
       final name = m.group(1)!.trim();
       final dot = name.lastIndexOf('.');
@@ -1770,6 +1775,7 @@ class WriteTab extends StatefulWidget {
       this.fixedTitle,
       this.startBody,
       this.autofocus = false,
+      this.readText = readImageText,
       this.onSaved});
 
   final Outbox outbox;
@@ -1778,6 +1784,7 @@ class WriteTab extends StatefulWidget {
   final Future<(List<Tpl>, bool)> Function()? templates; // 서식(5단계) — (틀 목록, 못 닿음)
   final String? fixedTitle; // 이어 쓰기 — 이 제목 글 끝에 붙는다(서버 기본이 덧붙이기)
   final String? startBody; // 서식에서 새 글
+  final TextReader readText; // 사진 속 글자(기기 안) — 시험은 가짜
   final bool autofocus;
   // 편집기로 쓸 때 — 저장하면 불린다(보내기는 기다리지 않는다)
   final void Function(OutboxItem item)? onSaved;
@@ -1902,9 +1909,17 @@ class _WriteTabState extends State<WriteTab> {
     final title = widget.fixedTitle ?? (_title.text.trim().isEmpty ? _today() : _title.text.trim());
     setState(() => _busy = true);
     try {
+      // 사진 속 글자를 숨은 주석으로 붙인다 — 영수증·송장 번호가 찾기에 걸린다(편의 기능 13번)
+      final seen = <String, String>{};
+      for (final f in _picked) {
+        final t = await widget.readText(f);
+        if (t.isNotEmpty) seen[f.uri.pathSegments.last] = t;
+      }
+      final hidden = hiddenText(seen);
+      final withText = hidden.isEmpty ? text : (text.isEmpty ? hidden : '$text\n\n$hidden');
       final OutboxItem item;
       try {
-        item = await widget.outbox.add(title, text, files: List.of(_picked)); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
+        item = await widget.outbox.add(title, withText, files: List.of(_picked)); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
       } catch (e) {
         _tell('폰에 저장 못 했어 — 적은 글은 칸에 그대로 있어 ($e)', false);
         return;

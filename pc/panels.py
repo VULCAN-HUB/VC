@@ -215,6 +215,7 @@ class NoteView(QTextBrowser):
 
         첨부는 **진짜 그림**으로 넣는다. 이름만 보여주면 사진을 붙인 의미가 없다.
         """
+        body = re.sub(r"(?s)%%.*?%%", "", body)   # 옵시디언 주석(사진 글자)은 안 보인다
         body = self._항목꼴.sub(lambda m: f"**{m.group(1).strip()}** · {m.group(2).strip() or '—'}  ", body)
         def embed(m):
             name, head = m.group(1).strip(), (m.group(2) or "").strip()
@@ -1532,6 +1533,7 @@ def _self_check() -> None:
         # 항목 줄은 목록 점 대신 굵은 이름 · 값(2026-09-18 창 점검)
         md4 = v3.to_markdown("- 제품명 : vcis-689\n- 보낸날 : \n- [[회의]] 보기")
         assert "**제품명** · vcis-689" in md4 and "**보낸날** · —" in md4, md4
+        assert "송장" not in v3.to_markdown("받음\n%%\n사진 글자: 송장 7788\n%%"), "숨은 글자가 보인다"
 
         # 큰 사진은 칸 폭에 맞춰 줄인다. 원래 크기로 두면 칸을 뚫고 나간다.
         v2.resize(320, 240)

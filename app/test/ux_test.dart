@@ -269,6 +269,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(EditorPage), findsOneWidget, reason: '아이콘 「새 메모」로 편집기가 안 열린다');
   });
+
+  testWidgets('사진 속 글자 — 저장 때 숨은 주석으로 붙고, 글 보기에는 안 보인다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_ocr');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final pic = File('${dir.path}/IMG_9.jpg')..writeAsBytesSync([1]);
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: WriteTab(
+          outbox: box,
+          onSend: () async {},
+          pick: (_) async => [pic],
+          readText: (f) async => '운송장 55667788',
+        ),
+      ),
+    ));
+    await tester.tap(find.byTooltip('사진첩에서 고르기'));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).at(1), '택배 보냄');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('저장'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pump();
+    final text = box.items.single.text;
+    expect(text, startsWith('택배 보냄'));
+    expect(text, contains('%%'));
+    expect(text, contains('운송장 55667788'), reason: '사진 글자가 안 붙었다');
+
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: NoteBody(api: api, text: text))));
+    expect(find.textContaining('55667788'), findsNothing, reason: '숨은 글자가 보인다');
+    expect(find.text('택배 보냄'), findsOneWidget);
+  });
 }
 
 class _FakeShortcuts implements AppShortcuts {

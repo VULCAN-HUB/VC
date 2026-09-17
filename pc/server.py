@@ -1693,6 +1693,11 @@ def _self_check() -> None:
     server.picked = _옛
 
     # --- 흩어진 메모 → 제품 정리 글(편의 기능 1·5번) ---
+    # 사진 속 글자(폰이 숨은 주석으로 붙임)는 찾기에 걸리고 카드 미리보기엔 안 보인다(편의 기능 13번)
+    call("POST", "/eb/v1/memory", {"title": "송장 사진", "text": "택배 보냄\n\n%%\n사진 글자 (a.jpg):\n운송장 55667788\n%%"})
+    _송 = call("GET", "/eb/v1/memory/search?q=55667788&card=1")[1]["results"]
+    assert any(x["title"] == "송장 사진" for x in _송), "사진 글자로 못 찾는다"
+    assert all("5566" not in x.get("preview", "") for x in _송), "숨은 글자가 미리보기에 보인다"
     call("POST", "/eb/v1/memory", {"title": "정리 시험 받음", "text": "- 제품명 : zz-1\n- 받은날 : 2026-10-01"})
     _정리 = server.consolidate_now()
     assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
