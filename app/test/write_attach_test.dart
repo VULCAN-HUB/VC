@@ -20,7 +20,7 @@ void main() {
 
     await tester.tap(find.byTooltip('더 붙이기'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('사진첩에서 고르기'));
+    await tester.tap(find.text('사진첩'));
     await tester.pumpAndSettle();
     expect(find.text('IMG_0002.HEIC'), findsOneWidget);
 

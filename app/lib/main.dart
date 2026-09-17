@@ -1623,8 +1623,34 @@ class NoteBody extends StatelessWidget {
       props.clear();
     }
 
+    var inCode = false;
+    final code = <String>[];
     for (final line in s.split('\n')) {
       final t = line.trim();
+      // 코드 울타리 — 안은 그대로, 고정폭으로
+      if (t.startsWith('```')) {
+        if (inCode) {
+          out.add(Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(8)),
+            child: SelectableText(code.join('\n'),
+                style: const TextStyle(fontFamily: 'Menlo', fontSize: 13, color: _dim, height: 1.4)),
+          ));
+          code.clear();
+        } else {
+          flushPlain();
+          flushProps();
+          flushTable();
+        }
+        inCode = !inCode;
+        continue;
+      }
+      if (inCode) {
+        code.add(line);
+        continue;
+      }
       if (t.startsWith('|')) {
         flushPlain();
         flushProps();
@@ -1645,8 +1671,25 @@ class NoteBody extends StatelessWidget {
       if (t.startsWith('>')) {
         flushPlain();
         flushProps();
-        out.add(Text(label(t.replaceFirst(RegExp(r'^>\s?'), '')),
-            style: const TextStyle(color: _muted, fontSize: 12.5, height: 1.5)));
+        final inner = t.replaceFirst(RegExp(r'^>\s?'), '');
+        final callout = RegExp(r'^\[!(\w+)\][+-]?\s*(.*)$').firstMatch(inner);
+        out.add(callout != null
+            // 옵시디언 접는 칸 머리 — 굵게
+            ? Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(children: [
+                  const Icon(Icons.expand_more, size: 16, color: _accent),
+                  const SizedBox(width: 4),
+                  Expanded(
+                      child: Text(label(callout.group(2)!.isEmpty ? callout.group(1)! : callout.group(2)!),
+                          style: const TextStyle(color: _text, fontWeight: FontWeight.w600))),
+                ]),
+              )
+            : Container(
+                padding: const EdgeInsets.only(left: 10),
+                decoration: BoxDecoration(border: Border(left: BorderSide(color: _accent.withValues(alpha: .4), width: 2))),
+                child: Text(label(inner), style: const TextStyle(color: _dim, fontSize: 14, height: 1.5)),
+              ));
         continue;
       }
       final p = _prop.firstMatch(line);
@@ -1863,22 +1906,40 @@ class _WriteTabState extends State<WriteTab> {
 
   /// ＋ 시트 — 드물게 쓰는 붙이기(결정 26).
   Future<void> _more() async {
+    // 격자 — 붙일 것이 늘어도 시트가 길어지지 않는다(작은 폰에서 아래가 잘렸다)
     final got = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: _card,
       builder: (c) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          for (final (key, icon, label) in const [
-            ('library', Icons.photo_library_outlined, '사진첩에서 고르기'),
-            ('video', Icons.videocam_outlined, '영상 찍기'),
-            ('record', Icons.mic_none, '녹음'),
-          ])
-            ListTile(
-              leading: Icon(icon, color: _accent),
-              title: Text(label, style: const TextStyle(color: _text)),
-              onTap: () => Navigator.pop(c, key),
-            ),
-        ]),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+          child: Wrap(alignment: WrapAlignment.center, spacing: 4, runSpacing: 8, children: [
+            for (final (key, icon, label) in const [
+              ('library', Icons.photo_library_outlined, '사진첩'),
+              ('video', Icons.videocam_outlined, '영상'),
+              ('record', Icons.mic_none, '녹음'),
+              ('table', Icons.table_chart_outlined, '표'),
+              ('fold', Icons.expand_more, '접는 칸'),
+              ('code', Icons.code, '코드'),
+              ('quote', Icons.format_quote_outlined, '인용'),
+            ])
+              SizedBox(
+                width: 84,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => Navigator.pop(c, key),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Column(children: [
+                      Icon(icon, color: _accent, size: 26),
+                      const SizedBox(height: 6),
+                      Text(label, style: const TextStyle(color: _text, fontSize: 12.5)),
+                    ]),
+                  ),
+                ),
+              ),
+          ]),
+        ),
       ),
     );
     if (!mounted || got == null) return;
@@ -1890,7 +1951,27 @@ class _WriteTabState extends State<WriteTab> {
       case 'record':
         final f = await widget.record(context);
         if (f != null && mounted) setState(() => _picked.add(f));
+      case 'table':
+        _insert('| 항목 | 내용 |\n|---|---|\n|  |  |\n');
+      case 'fold':
+        _insert('> [!note]- 접는 칸\n> ');
+      case 'code':
+        _insert('```\n\n```\n', back: 5);
+      case 'quote':
+        _insert('> ');
     }
+  }
+
+  /// 커서 자리에 끼운다(줄 머리에서 시작하게). `back` 만큼 커서를 되돌린다.
+  void _insert(String snippet, {int back = 0}) {
+    final t = _body.text;
+    final sel = _body.selection;
+    final at = sel.isValid ? sel.start : t.length;
+    final head = at > 0 && t[at - 1] != '\n' ? '\n' : '';
+    final next = t.replaceRange(at, sel.isValid ? sel.end : at, '$head$snippet');
+    final cursor = at + head.length + snippet.length - back;
+    _body.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: cursor));
+    if (widget.onSaved != null) setState(() {});
   }
 
   Future<void> _pick(PickHow how) async {

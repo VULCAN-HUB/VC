@@ -288,7 +288,7 @@ void main() {
     ));
     await tester.tap(find.byTooltip('더 붙이기'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('사진첩에서 고르기'));
+    await tester.tap(find.text('사진첩'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(1), '택배 보냄');
     await tester.runAsync(() async {
@@ -324,6 +324,33 @@ void main() {
     await tester.tap(find.text('녹음'));
     await tester.pumpAndSettle();
     expect(find.text('녹음 2026-10-01 0930.m4a'), findsOneWidget, reason: '녹음이 안 붙었다');
+  });
+
+  testWidgets('＋ › 표 · 접는 칸 넣기 — 커서 자리에 끼우고, 글 보기가 표·접는 칸·코드를 그린다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_blocks');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: WriteTab(outbox: box, onSend: () async {}))));
+    await tester.enterText(find.byType(TextField).at(1), '메모');
+    await tester.tap(find.byTooltip('더 붙이기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('표'));
+    await tester.pumpAndSettle();
+    final text = tester.widget<TextField>(find.byType(TextField).at(1)).controller!.text;
+    expect(text, startsWith('메모\n| 항목 | 내용 |'), reason: '줄을 바꿔 표를 끼워야 한다');
+
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: NoteBody(api: api, text: '> [!note]- 촬영 준비\n> 조명 두 개\n\n```\nprint(1)\n```'),
+        ),
+      ),
+    ));
+    expect(find.text('촬영 준비'), findsOneWidget, reason: '접는 칸 머리를 못 그린다');
+    expect(find.textContaining('[!note]'), findsNothing);
+    expect(find.text('print(1)'), findsOneWidget, reason: '코드 블록을 못 그린다');
+    expect(find.textContaining('```'), findsNothing);
   });
 }
 
