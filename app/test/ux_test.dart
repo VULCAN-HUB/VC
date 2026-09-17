@@ -163,4 +163,33 @@ void main() {
     expect(body, contains('받은날 : ${DateTime.now().year}-'), reason: '서식 자리를 안 채웠다');
     expect(find.text('새 메모'), findsWidgets);
   });
+
+  testWidgets('글 보기 칸 누르기 — 상태를 골라 글 끝에 한 줄로 덧붙인다', (tester) async {
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
+      return _json({'title': '정수기', 'text': '- 제품명 : vcis-689\n- 상태 : 보유중'});
+    }));
+    final saved = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: NotePage(
+        api: api,
+        onFail: (_) {},
+        title: '정수기',
+        onSaveLine: (t, line) async => saved.add('$t|$line'),
+      ),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('보유중'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('보냄'));
+    await tester.pumpAndSettle();
+    expect(saved, ['정수기|- 상태 : 보냄'], reason: '고른 상태가 글 끝에 안 적혔다');
+
+    // 그대로 고르면 안 적는다
+    await tester.tap(find.text('보유중'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('보유중').last);
+    await tester.pumpAndSettle();
+    expect(saved.length, 1, reason: '안 바꿨는데 적었다');
+  });
 }

@@ -783,7 +783,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     api: widget.api,
                     onFail: _fail,
                     outbox: widget.outbox,
-                    onAppend: (t) => _write(title: t)),
+                    onAppend: (t) => _write(title: t),
+                    onSaveLine: (t, line) async {
+                      await widget.outbox.add(t, line);
+                      _send();
+                    }),
               ),
             ]),
           ),
@@ -912,12 +916,14 @@ String whenLabel(String ymd, {DateTime? now}) {
 }
 
 class BrowseTab extends StatefulWidget {
-  const BrowseTab({super.key, required this.api, required this.onFail, this.outbox, this.onAppend});
+  const BrowseTab(
+      {super.key, required this.api, required this.onFail, this.outbox, this.onAppend, this.onSaveLine});
 
   final VcApi api;
   final OnFail onFail;
   final Outbox? outbox; // 폰 글을 보내면 목록을 다시 부른다
   final void Function(String title)? onAppend; // 글 보기의 「이어 쓰기」
+  final Future<void> Function(String title, String line)? onSaveLine; // 글 보기의 칸 고치기
 
   @override
   State<BrowseTab> createState() => _BrowseTabState();
@@ -1120,6 +1126,7 @@ class _BrowseTabState extends State<BrowseTab> {
                         q: _asked,
                         folder: h['folder'] as String?,
                         onAppend: widget.onAppend,
+                        onSaveLine: widget.onSaveLine,
                       ),
                     ),
                   ),
@@ -1215,7 +1222,8 @@ class NotePage extends StatefulWidget {
       required this.title,
       this.q = '',
       this.folder,
-      this.onAppend});
+      this.onAppend,
+      this.onSaveLine});
 
   final VcApi api;
   final OnFail onFail;
@@ -1223,6 +1231,8 @@ class NotePage extends StatefulWidget {
   final String q;
   final String? folder;
   final void Function(String title)? onAppend;
+  // 한 줄을 이 글 끝에 덧붙인다(칸 고치기) — 폰에 먼저 저장하고 보낸다
+  final Future<void> Function(String title, String line)? onSaveLine;
 
   @override
   State<NotePage> createState() => _NotePageState();
@@ -1267,7 +1277,23 @@ class _NotePageState extends State<NotePage> {
                 child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 96), children: [
                   if (widget.folder != null) Text('// ${widget.folder}', style: _mono(11, _muted)),
                   const SizedBox(height: 4),
-                  _Panel(child: NoteBody(text: '${j['text'] ?? ''}', api: widget.api)),
+                  _Panel(
+                    child: NoteBody(
+                      text: '${j['text'] ?? ''}',
+                      api: widget.api,
+                      onEditProp: widget.onSaveLine == null
+                          ? null
+                          : (k, v) async {
+                              final got = await editProp(this.context, k, v);
+                              if (got == null || got.trim() == v.trim() || !mounted) return;
+                              await widget.onSaveLine!(widget.title, '- $k : ${got.trim()}');
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(
+                                  duration: const Duration(seconds: 2),
+                                  content: Text('$k → ${got.trim()} — 글 끝에 적었어. 정리에 곧 반영돼')));
+                            },
+                    ),
+                  ),
                   if (j['cut'] == true)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
@@ -1282,14 +1308,65 @@ class _NotePageState extends State<NotePage> {
 }
 
 
+/// 항목 칸 하나를 고친다(편의 기능 4번) — 상태는 고르고, 날짜는 달력, 나머지는 글로.
+/// 고친 값을 돌려준다(그대로 두면 null).
+Future<String?> editProp(BuildContext context, String key, String value) async {
+  final k = key.replaceAll(' ', '');
+  if (k.contains('상태')) {
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(padding: const EdgeInsets.all(16), child: Text('$key 바꾸기', style: _mono(12, _muted))),
+          for (final v in const ['보유중', '보냄', '반납'])
+            ListTile(
+              title: Text(v, style: const TextStyle(color: _text)),
+              trailing: v == value ? const Icon(Icons.check, color: _accent) : null,
+              onTap: () => Navigator.pop(c, v),
+            ),
+        ]),
+      ),
+    );
+  }
+  if (k.endsWith('날') || k.endsWith('일') || k.contains('날짜')) {
+    final now = DateTime.now();
+    final got = await showDatePicker(
+      context: context,
+      initialDate: DateTime.tryParse(value) ?? now,
+      firstDate: DateTime(now.year - 20),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (got == null) return null;
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${got.year}-${two(got.month)}-${two(got.day)}';
+  }
+  final ctl = TextEditingController(text: value);
+  final got = await showDialog<String>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: Text(key),
+      content: TextField(controller: ctl, autofocus: true, onSubmitted: (v) => Navigator.pop(c, v)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c), child: const Text('그대로')),
+        TextButton(onPressed: () => Navigator.pop(c, ctl.text), child: const Text('고치기')),
+      ],
+    ),
+  );
+  ctl.dispose();
+  return got;
+}
+
 /// 글 몸 — `![[사진.heic]]` 는 사진으로, 영상·녹음·pdf 는 📎 칸으로,
 /// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
-  const NoteBody({super.key, required this.text, required this.api});
+  const NoteBody({super.key, required this.text, required this.api, this.onEditProp});
 
   final String text;
   final VcApi api;
+  // 항목 칸을 누르면 고친다(편의 기능 4번). 없으면 보기만.
+  final void Function(String key, String value)? onEditProp;
 
   static final _embed = RegExp(r'!\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]');
   static final _prop = RegExp(r'^\s*[-*]\s+([^:：\n]{1,24}?)\s*[:：]\s*(.*)$');
@@ -1314,7 +1391,7 @@ class NoteBody extends StatelessWidget {
       .toList();
 
   /// 글 조각을 항목표 · 표 · 소제목 · 태그 칩 · 글로 가른다.
-  static List<Widget> _words(String s) {
+  static List<Widget> _words(String s, [void Function(String, String)? onEdit]) {
     final out = <Widget>[];
     final plain = <String>[];
     final props = <(String, String)>[];
@@ -1364,15 +1441,20 @@ class NoteBody extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: Column(children: [
           for (final (k, v) in props)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                SizedBox(width: 92, child: Text(k, style: _mono(12.5, _muted))),
-                Expanded(
-                  child: SelectableText(v.isEmpty ? '—' : label(v),
-                      style: TextStyle(color: v.isEmpty ? _muted : _text, fontSize: 15)),
-                ),
-              ]),
+            InkWell(
+              onTap: onEdit == null ? null : () => onEdit(k, v),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 92, child: Text(k, style: _mono(12.5, _muted))),
+                  Expanded(
+                    child: Text(v.isEmpty ? '—' : label(v),
+                        style: TextStyle(color: v.isEmpty ? _muted : _text, fontSize: 15)),
+                  ),
+                  if (onEdit != null) const Icon(Icons.chevron_right, size: 16, color: _muted),
+                ]),
+              ),
             ),
         ]),
       ));
@@ -1445,7 +1527,7 @@ class NoteBody extends StatelessWidget {
       final dot = name.lastIndexOf('.');
       final ext = dot < 0 ? '' : name.substring(dot).toLowerCase();
       if (!_imageExt.contains(ext) && !_fileExt.contains(ext)) continue; // 글 끼움은 글자 그대로 둔다
-      parts.addAll(_words(text.substring(at, m.start)));
+      parts.addAll(_words(text.substring(at, m.start), onEditProp));
       if (_imageExt.contains(ext)) {
         parts.add(Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1463,7 +1545,7 @@ class NoteBody extends StatelessWidget {
       }
       at = m.end;
     }
-    parts.addAll(_words(text.substring(at)));
+    parts.addAll(_words(text.substring(at), onEditProp));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: parts);
   }
 
