@@ -18,8 +18,10 @@ void main() {
       home: Scaffold(body: WriteTab(outbox: box, onSend: () async {}, pick: (_) async => [pic])),
     ));
 
-    await tester.tap(find.byTooltip('사진첩에서 고르기'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('더 붙이기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('사진첩에서 고르기'));
+    await tester.pumpAndSettle();
     expect(find.text('IMG_0002.HEIC'), findsOneWidget);
 
     await tester.runAsync(() async {

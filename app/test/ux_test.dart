@@ -9,6 +9,7 @@ import 'package:vc_app/main.dart';
 import 'package:vc_app/outbox.dart';
 import 'package:vc_app/prefs.dart';
 import 'package:vc_app/shortcuts.dart';
+import 'package:vc_app/templates.dart';
 import 'package:vc_app/vc_api.dart';
 
 // 편의성 손질(2026-09-18 · 오너: 번잡하고 찾기 힘들다) — 노션·에버노트 기준.
@@ -285,8 +286,10 @@ void main() {
         ),
       ),
     ));
-    await tester.tap(find.byTooltip('사진첩에서 고르기'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('더 붙이기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('사진첩에서 고르기'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(1), '택배 보냄');
     await tester.runAsync(() async {
       await tester.tap(find.text('저장'));
@@ -302,6 +305,25 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: NoteBody(api: api, text: text))));
     expect(find.textContaining('55667788'), findsNothing, reason: '숨은 글자가 보인다');
     expect(find.text('택배 보냄'), findsOneWidget);
+  });
+
+  testWidgets('＋ › 녹음 — 녹음 파일이 칩으로 붙는다 · 도구줄은 넷까지', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_rec');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final rec = File('${dir.path}/녹음 2026-10-01 0930.m4a')..writeAsBytesSync([1]);
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: WriteTab(outbox: box, onSend: () async {}, templates: () async => (<Tpl>[], false), record: (_) async => rec),
+      ),
+    ));
+    final tools = find.descendant(of: find.byType(Row).last, matching: find.byType(IconButton));
+    expect(tools.evaluate().length, lessThanOrEqualTo(4), reason: '도구줄 단추가 넷을 넘는다(결정 26)');
+    await tester.tap(find.byTooltip('더 붙이기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('녹음'));
+    await tester.pumpAndSettle();
+    expect(find.text('녹음 2026-10-01 0930.m4a'), findsOneWidget, reason: '녹음이 안 붙었다');
   });
 }
 

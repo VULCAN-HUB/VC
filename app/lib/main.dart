@@ -18,6 +18,7 @@ import 'templates.dart';
 import 'prefs.dart';
 import 'shortcuts.dart';
 import 'ocr.dart';
+import 'recorder.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -1776,6 +1777,7 @@ class WriteTab extends StatefulWidget {
       this.startBody,
       this.autofocus = false,
       this.readText = readImageText,
+      this.record = recordMemo,
       this.onSaved});
 
   final Outbox outbox;
@@ -1785,6 +1787,7 @@ class WriteTab extends StatefulWidget {
   final String? fixedTitle; // 이어 쓰기 — 이 제목 글 끝에 붙는다(서버 기본이 덧붙이기)
   final String? startBody; // 서식에서 새 글
   final TextReader readText; // 사진 속 글자(기기 안) — 시험은 가짜
+  final RecordMemo record; // 녹음 — 시험은 가짜
   final bool autofocus;
   // 편집기로 쓸 때 — 저장하면 불린다(보내기는 기다리지 않는다)
   final void Function(OutboxItem item)? onSaved;
@@ -1856,6 +1859,38 @@ class _WriteTabState extends State<WriteTab> {
     final cur = _body.text;
     _body.text = cur.trim().isEmpty ? filled : '$cur\n\n$filled';
     _body.selection = TextSelection.collapsed(offset: _body.text.length);
+  }
+
+  /// ＋ 시트 — 드물게 쓰는 붙이기(결정 26).
+  Future<void> _more() async {
+    final got = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final (key, icon, label) in const [
+            ('library', Icons.photo_library_outlined, '사진첩에서 고르기'),
+            ('video', Icons.videocam_outlined, '영상 찍기'),
+            ('record', Icons.mic_none, '녹음'),
+          ])
+            ListTile(
+              leading: Icon(icon, color: _accent),
+              title: Text(label, style: const TextStyle(color: _text)),
+              onTap: () => Navigator.pop(c, key),
+            ),
+        ]),
+      ),
+    );
+    if (!mounted || got == null) return;
+    switch (got) {
+      case 'library':
+        await _pick(PickHow.library);
+      case 'video':
+        await _pick(PickHow.video);
+      case 'record':
+        final f = await widget.record(context);
+        if (f != null && mounted) setState(() => _picked.add(f));
+    }
   }
 
   Future<void> _pick(PickHow how) async {
@@ -1978,24 +2013,21 @@ class _WriteTabState extends State<WriteTab> {
   @override
   Widget build(BuildContext context) {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+    // 도구줄은 넷까지(결정 26) — 사진 · 서식 · ＋. 나머지는 ＋ 시트 안에.
     final tool = <Widget>[
       IconButton(
           tooltip: '사진 찍기',
           onPressed: _busy ? null : () => _pick(PickHow.photo),
           icon: const Icon(Icons.photo_camera_outlined, color: _accent)),
-      IconButton(
-          tooltip: '영상 찍기',
-          onPressed: _busy ? null : () => _pick(PickHow.video),
-          icon: const Icon(Icons.videocam_outlined, color: _accent)),
-      IconButton(
-          tooltip: '사진첩에서 고르기',
-          onPressed: _busy ? null : () => _pick(PickHow.library),
-          icon: const Icon(Icons.photo_library_outlined, color: _accent)),
       if (widget.templates != null)
         IconButton(
             tooltip: '서식 넣기',
             onPressed: _busy ? null : _pickTemplate,
             icon: const Icon(Icons.dashboard_customize_outlined, color: _accent)),
+      IconButton(
+          tooltip: '더 붙이기',
+          onPressed: _busy ? null : _more,
+          icon: const Icon(Icons.add_circle_outline, color: _accent)),
     ];
     return PopScope(
       canPop: widget.onSaved == null || !_dirty,

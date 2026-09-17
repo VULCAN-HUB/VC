@@ -1507,6 +1507,17 @@ class EBServer(ThreadingHTTPServer):
                 _알림(f"[정리 짐작 실패] {type(e).__name__}")
                 짐작 = {}
             got = consolidate.run(self.notes, 짐작)
+            # 녹음 받아쓰기(편의 기능 14번) — 붙은 녹음을 몇 개씩. 요약은 대화 모델이 있을 때만
+            try:
+                import transcribe
+
+                요약 = None
+                if chat is not None:
+                    요약 = lambda 글: self.assist("summary", 글)
+                if 들음 := transcribe.run(self.notes, transcribe.whisper, 요약):
+                    _알림(f"[받아쓰기] 녹음 {len(들음)}개를 글 끝에 붙였다")
+            except Exception as e:
+                _알림(f"[받아쓰기 실패] {type(e).__name__}")
         if got.get("written"):
             _알림(f"[정리] 제품 {got['products']}개 · 새로 쓴 정리 글 {len(got['written'])}장")
         return got
