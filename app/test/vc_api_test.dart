@@ -76,6 +76,10 @@ void main() {
     });
     await tester.pump();
     expect(find.textContaining('전송 대기'), findsWidgets);
+    // 대기 글은 「상태·기록」에서 본다(적기 화면은 전체 화면 편집기가 됐다 — 2026-09-18)
+    await tester.pumpWidget(MaterialApp(home: StatusPage(api: api, outbox: outbox)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump();
     expect(find.text('잃으면 안 되는 글'), findsOneWidget, reason: '대기함 목록에 보여야 한다');
     final again = await tester.runAsync(() => Outbox.open(File('${dir.path}/o.json')));
     expect(again!.items.single.text, '잃으면 안 되는 글', reason: '폰 파일에 안 남았다');

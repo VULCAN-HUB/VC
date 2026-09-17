@@ -1,0 +1,115 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:vc_app/main.dart';
+import 'package:vc_app/outbox.dart';
+import 'package:vc_app/vc_api.dart';
+
+// 편의성 손질(2026-09-18 · 오너: 번잡하고 찾기 힘들다) — 노션·에버노트 기준.
+http.Response _json(Object body) =>
+    http.Response.bytes(utf8.encode(jsonEncode(body)), 200, headers: {'content-type': 'application/json'});
+
+void main() {
+  test('날짜를 사람 말로', () {
+    final now = DateTime(2026, 9, 18, 10);
+    expect(whenLabel('2026-09-18', now: now), '오늘');
+    expect(whenLabel('2026-09-17', now: now), '어제');
+    expect(whenLabel('2026-03-02', now: now), '3월 2일');
+    expect(whenLabel('2025-12-31', now: now), '2025.12.31');
+  });
+
+  testWidgets('목록 — 태그 칩이 생기고, 누르면 그 태그로 좁혀 찾는다 · 사진 칩은 사진 붙은 글만', (tester) async {
+    final asked = <String>[];
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
+      final q = req.url.queryParameters['q'] ?? '';
+      asked.add(q);
+      expect(req.url.queryParameters['card'], '1', reason: '목록 카드 칸을 안 달라고 했다');
+      return _json({
+        'results': [
+          if (q.isEmpty || q.contains('tag:제품'))
+            {'title': '정수기', 'preview': '종류: 정수기', 'tags': ['제품'], 'image': '정수기.jpg', 'updated': '2026-09-18'},
+          if (q.isEmpty) {'title': '장보기', 'preview': '우유 · 달걀', 'tags': ['일상']},
+        ]
+      });
+    }));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}))));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pump();
+
+    expect(find.text('#제품'), findsWidgets, reason: '태그 칩이 안 생겼다');
+    expect(find.text('장보기'), findsOneWidget);
+    expect(find.bySemanticsLabel('정수기.jpg'), findsOneWidget, reason: '카드에 사진 미리보기가 없다');
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '#제품'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pump();
+    expect(asked.last, 'tag:제품');
+    expect(find.text('장보기'), findsNothing);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '📷 사진'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pump();
+    expect(asked.last, '', reason: '사진 칩은 전체에서 사진 붙은 것만 고른다');
+    expect(find.text('정수기'), findsOneWidget);
+    expect(find.text('장보기'), findsNothing, reason: '사진 없는 글이 사진 칩에 섞였다');
+  });
+
+  testWidgets('글 보기 — 「- 키 : 값」 줄은 항목표로, 태그 줄은 칩으로', (tester) async {
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: NoteBody(api: api, text: '- 제품명 : vcis-689\n- 보낸날 : \n\n#제품 #정수기\n\n메모 한 줄'),
+        ),
+      ),
+    ));
+    expect(find.text('제품명'), findsOneWidget, reason: '항목 이름이 따로 안 보인다');
+    expect(find.text('vcis-689'), findsOneWidget);
+    expect(find.text('—'), findsOneWidget, reason: '빈 항목은 — 로');
+    expect(find.text('#정수기'), findsOneWidget, reason: '태그가 칩으로 안 갈렸다');
+    expect(find.textContaining('- 제품명'), findsNothing);
+    expect(find.text('메모 한 줄'), findsOneWidget);
+  });
+
+  testWidgets('편집기 — 적은 채로 닫으면 버릴지 묻고, 저장하면 닫힌다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_editor');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    OutboxItem? got;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (c) => Scaffold(
+          body: TextButton(
+            child: const Text('열기'),
+            onPressed: () async {
+              got = await Navigator.push<OutboxItem>(
+                  c, MaterialPageRoute(builder: (_) => EditorPage(outbox: box, onSend: () async {})));
+            },
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(1), '급히 적은 것');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('닫기'));
+    await tester.pumpAndSettle();
+    expect(find.text('적은 것을 버릴까?'), findsOneWidget, reason: '적은 글이 말없이 사라진다');
+    await tester.tap(find.text('계속 쓰기'));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(() async {
+      await tester.tap(find.text('저장'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('열기'), findsOneWidget, reason: '저장했는데 편집기가 안 닫힌다');
+    expect(got?.text, '급히 적은 것');
+  });
+}

@@ -137,6 +137,28 @@ class Hub:
             q.put(event)
 
 
+def 카드미리보기(몸: str, 길이: int = 140) -> str:
+    """폰 목록 카드의 두 줄 — 끼움(`![[…]]`) · 태그만 있는 줄 · 앞머리 · 목록 기호를 걷고 줄을 ` · ` 로 잇는다.
+
+    ★ 그냥 첫 줄을 쓰면 서식으로 쓴 글이 모두 「- 제품명 : …」 한 줄로만 보였다(시뮬레이터 점검 2026-09-18).
+    """
+    몸 = re.sub(r"(?s)^---\n.*?\n---\n", "", 몸)
+    몸 = re.sub(r"!\[\[[^\]]*\]\]", " ", 몸)
+    # `[[제목]]` · `[[제목#소제목|보일 말]]` 은 보일 말만 — 미리보기에 기호가 그대로 남았다(시뮬레이터 점검)
+    몸 = re.sub(r"\[\[([^\]|#]*)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]", lambda m: m.group(2) or m.group(1), 몸)
+    조각 = []
+    for 줄 in 몸.splitlines():
+        줄 = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", "", 줄).strip()
+        줄 = re.sub(r"^#+\s+", "", 줄)
+        if not 줄 or re.fullmatch(r"(?:#[^\s#]+\s*)+", 줄):
+            continue
+        조각.append(re.sub(r"\s*:\s*", ": ", 줄, count=1) if " : " in 줄 else 줄)
+        if sum(len(c) for c in 조각) > 길이:
+            break
+    글 = " · ".join(조각)
+    return 글[:길이] + ("…" if len(글) > 길이 else "")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "EB/" + PROTOCOL_VERSION
@@ -518,6 +540,7 @@ class Handler(BaseHTTPRequestHandler):
             간추려 = (args.get("brief") or ["0"])[0] not in ("0", "", "false")
             k = max(1, min(k, MAX_HITS_BRIEF if 간추려 else MAX_HITS))
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
+            카드 = (args.get("card") or ["0"])[0] not in ("0", "", "false")
             # ★★ **훑을 때는 제목만 있으면 된다.** 「무슨 결정들이 있었나」처럼 목록을 보는
             #   일은 흔한데, 지금은 장마다 요약·날짜·이음선까지 실어 보낸다.
             #   [잰 것, 오너 창고] `kind:결정` 120장 — 지금 20,233자 · 제목만 6,586자(3배).
@@ -568,6 +591,21 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 if 통째로:
                     한장["body"] = 몸
+                # 폰 목록 카드(`card=1`) — 사람이 훑기 좋게 태그 · 첫 사진 · 깔끔한 미리보기 · 고친 날.
+                #   AI 가 부르는 기본 길에는 안 싣는다(크레딧).
+                if 카드:
+                    if 태그들 := notes.parse_tags(몸)[:6]:
+                        한장["tags"] = 태그들
+                    if 사진 := next((a for a in notes.parse_attachments(몸)
+                                   if Path(a).suffix.lower() in notes.IMAGE_EXT | {".heic", ".heif"}), None):
+                        한장["image"] = 사진
+                    if 첨부수 := len(notes.parse_attachments(몸)):
+                        한장["files"] = 첨부수
+                    한장["preview"] = 카드미리보기(몸)
+                    try:
+                        한장["updated"] = time.strftime("%Y-%m-%d", time.localtime(Path(r["path"]).stat().st_mtime))
+                    except OSError:
+                        pass
                 out.append(한장)
             답 = {"results": out}
             # 뜻 검색이 아직 못 도는 때만 말한다(다 올랐으면 한 글자도 안 싣는다).
@@ -1617,6 +1655,16 @@ def _self_check() -> None:
         assert _r.headers["Content-Type"] == "image/heic", _r.headers["Content-Type"]
     assert call("GET", "/eb/v1/attach?" + urllib.parse.urlencode({"name": _a1["name"]}), token="wrong-token")[0] == 401
     assert call("GET", "/eb/v1/attach?name=..%2F..%2Feb_config.json")[0] == 404, "창고 밖 파일을 연다"
+    # 폰 목록 카드(card=1): 첫 사진 · 태그 · 기호 걷은 미리보기. AI 기본 길에는 안 실린다.
+    call("POST", "/eb/v1/memory", {"title": "사진 시험", "text": "- 종류 : 정수기\n\n#제품"})
+    _c = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험") + "&card=1")[1]["results"]
+          if x["title"] == "사진 시험"][0]
+    assert _c.get("image") == _a1["name"] and "제품" in _c.get("tags", []), _c
+    assert "![[" not in _c["preview"] and "종류: 정수기" in _c["preview"], _c["preview"]
+    assert 카드미리보기("[[정수기 vcis-689]] 먼저 · [[회의#8월|8월 회의]]") == "정수기 vcis-689 먼저 · 8월 회의"
+    _ai = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험"))[1]["results"]
+           if x["title"] == "사진 시험"][0]
+    assert "preview" not in _ai and "image" not in _ai, "AI 기본 길에 카드 칸이 실린다(크레딧)"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을

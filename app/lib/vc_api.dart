@@ -165,7 +165,8 @@ class VcApi {
 
   /// 찾기 1단 — 몸은 안 온다. 빈 말이면 창고 앞머리.
   Future<List<Map<String, dynamic>>> search(String q, {int k = 20}) async {
-    final results = (await _call('GET', '/eb/v1/memory/search', query: {'q': q, 'k': '$k'}))['results'];
+    // card=1 — 사람이 훑는 목록 카드(태그 · 첫 사진 · 미리보기)
+    final results = (await _call('GET', '/eb/v1/memory/search', query: {'q': q, 'k': '$k', 'card': '1'}))['results'];
     return results is List ? results.whereType<Map<String, dynamic>>().toList() : [];
   }
 

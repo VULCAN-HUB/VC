@@ -111,7 +111,12 @@ class VcApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      MaterialApp(title: 'VC', debugShowCheckedModeBanner: false, theme: _theme(), home: const Root());
+      MaterialApp(
+        title: 'VC',
+        debugShowCheckedModeBanner: false,
+        theme: _theme(),
+        home: const Root(),
+      );
 }
 
 // ── 공용 조각 ────────────────────────────────────────────────────────────────
@@ -415,10 +420,28 @@ class _PairPageState extends State<PairPage> {
                   TextField(
                     controller: _typed,
                     style: _mono(13, _text),
+                    // ★ 한글 자판으로 뜨면 영문 주소가 「세://…」로 깨졌다(시뮬레이터 점검 2026-09-18).
+                    //   주소 자판 · 자동고침·추천 끔.
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    textInputAction: TextInputAction.go,
+                    onSubmitted: (v) => widget.onCode(v),
                     // ★ 키보드가 올라오면 아래 「연결」 단추가 깔려 안 보였다(아이폰 실기 2026-09-15).
                     //   칸 아래로 단추 높이만큼 더 보이게 끌어올린다.
                     scrollPadding: const EdgeInsets.only(bottom: 160),
-                    decoration: const InputDecoration(hintText: 'http://컴퓨터주소:8765/app#t=…'),
+                    decoration: InputDecoration(
+                      hintText: 'http://컴퓨터주소:8765/app#t=…',
+                      // 주소는 대개 복사해서 온다 — 한 번에 붙인다
+                      suffixIcon: IconButton(
+                        tooltip: '붙여넣기',
+                        icon: const Icon(Icons.content_paste, color: _muted),
+                        onPressed: () async {
+                          final got = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+                          if (got != null) _typed.text = got.trim();
+                        },
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -554,10 +577,12 @@ class Home extends StatefulWidget {
   State<Home> createState() => _HomeState();
 }
 
+// ★ 첫 화면은 목록 하나(노션·에버노트처럼) — 새 메모는 오른쪽 아래 단추로 **전체 화면**에서 쓴다.
+//   전에는 「보기·적기」 두 탭에 적기 칸 · 보낸 기록이 한 화면에 몰려 비좁고 번잡했다(오너 실기 2026-09-18).
 class _HomeState extends State<Home> with WidgetsBindingObserver {
-  int _tab = 0;
   // 서식(5단계) — 못 닿아도 지난번 받은 틀로 적게, 대기함 옆에 받아 둔다.
   late final _book = TemplateBook(File('${widget.outbox.file.parent.path}/vc_templates.json'));
+  final _list = GlobalKey<_BrowseTabState>();
   String _state = '컴퓨터에 잇는 중…';
   Color _dot = _muted;
 
@@ -594,7 +619,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> _send() async {
     final before = widget.outbox.pending;
     final r = await widget.outbox.flush(widget.api);
-    // 보낸 게 있으면 창고 장수를 다시 센다(보내기 전에 센 「창고 0장」이 남아 있었다 — 에뮬레이터로 봄)
     if (r == FlushResult.done && widget.outbox.pending < before) {
       try {
         final n = await widget.api.notes();
@@ -631,6 +655,23 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  /// 새 메모 · 이어 쓰기 — 전체 화면 편집기. 저장하면 곧장 돌아오고, 보내기는 뒤에서 한다.
+  Future<void> _write({String? title}) async {
+    final item = await Navigator.push<OutboxItem>(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => EditorPage(
+            outbox: widget.outbox, onSend: _send, templates: () => _book.load(widget.api), fixedTitle: title),
+      ),
+    );
+    if (item == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 2),
+      content: Text(title == null ? '「${item.title}」 저장했어 — 연결되면 컴퓨터에 보낸다' : '「$title」 끝에 이어 붙였어'),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) => Backdrop(
         child: Scaffold(
@@ -639,56 +680,57 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             bottom: false,
             child: Column(children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 4, 2),
+                padding: const EdgeInsets.fromLTRB(12, 6, 4, 0),
                 child: Row(children: [
-                  const Padding(
-                    padding: EdgeInsets.all(6),
-                    child: Image(image: AssetImage(_markSolid), width: 34, height: 34),
-                  ),
-                  const SizedBox(width: 8),
+                  const Image(image: AssetImage(_markSolid), width: 28, height: 28),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('VC',
-                          style: TextStyle(fontSize: 21, letterSpacing: 3, fontWeight: FontWeight.w600, color: _text)),
-                      const SizedBox(height: 2),
-                      Row(children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _dot,
-                            boxShadow: [BoxShadow(color: _dot.withValues(alpha: .7), blurRadius: 6)],
+                    // 늘 보이는 한 줄(결정 17): 연결 · 보낼 것. 누르면 「상태·기록」.
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _openStatus(context),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _dot,
+                              boxShadow: [BoxShadow(color: _dot.withValues(alpha: .7), blurRadius: 6)],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 7),
-                        Flexible(
-                          child: Text(_state, style: _mono(11, _muted), overflow: TextOverflow.ellipsis),
-                        ),
-                        // 늘 보이는 한 줄의 「보낼 것」(결정 17). 없으면 아무 말도 안 한다.
-                        ListenableBuilder(
-                          listenable: widget.outbox,
-                          builder: (_, _) => widget.outbox.pending == 0
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.only(left: 8),
-                                  child: Text('보낼 것 ${widget.outbox.pending}', style: _mono(11, _warn)),
-                                ),
-                        ),
-                      ]),
-                    ]),
+                          const SizedBox(width: 7),
+                          Flexible(
+                            child: Text(_state, style: _mono(11.5, _muted), overflow: TextOverflow.ellipsis),
+                          ),
+                          ListenableBuilder(
+                            listenable: widget.outbox,
+                            builder: (_, _) => widget.outbox.pending == 0
+                                ? const SizedBox.shrink()
+                                : Padding(
+                                    padding: const EdgeInsets.only(left: 8),
+                                    child: Text('보낼 것 ${widget.outbox.pending}', style: _mono(11.5, _warn)),
+                                  ),
+                          ),
+                        ]),
+                      ),
+                    ),
                   ),
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.more_vert, color: _muted),
                     onSelected: (v) {
                       if (v == 'status') {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox)));
+                        _openStatus(context);
+                      } else if (v == 'send') {
+                        _send();
                       } else {
                         widget.onUnpair();
                       }
                     },
                     itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'send', child: Text('지금 보내기')),
                       PopupMenuItem(value: 'status', child: Text('상태·기록')),
                       PopupMenuItem(value: 'unpair', child: Text('연결 지우기')),
                     ],
@@ -696,24 +738,27 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 ]),
               ),
               Expanded(
-                child: IndexedStack(index: _tab, children: [
-                  BrowseTab(api: widget.api, onFail: _fail, outbox: widget.outbox),
-                  WriteTab(outbox: widget.outbox, onSend: _send, templates: () => _book.load(widget.api)),
-                ]),
+                child: BrowseTab(
+                    key: _list,
+                    api: widget.api,
+                    onFail: _fail,
+                    outbox: widget.outbox,
+                    onAppend: (t) => _write(title: t)),
               ),
             ]),
           ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.search), label: '보기'),
-              NavigationDestination(icon: Icon(Icons.edit_note), label: '적기'),
-            ],
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: _write,
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('새 메모', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ),
       );
+
+  void _openStatus(BuildContext context) => Navigator.push(
+      context, MaterialPageRoute(builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox)));
 }
+
 
 /// 눌러야 펴지는 「상태·기록」(결정 17 ③). 늘 보이는 한 줄에 못 담는 자세한 것 —
 /// 보낼 글과 그 까닭, 컴퓨터가 켜진 지, 죽음 기록, 최근 자국. 컴퓨터 쪽 글 이름·집 경로는 서버가 가려서 준다.
@@ -772,9 +817,31 @@ class _StatusPageState extends State<StatusPage> {
           onRefresh: _load,
           child: ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
             SectionLabel('보낼 것', trailing: '${waiting.length}개'),
+            // 보낼 글 — 전에는 적기 탭 아래에 있었다. 무엇이 남았는지 본문 첫 줄까지 보인다.
             for (final w in waiting)
-              Text('${w.title.isEmpty ? '(제목 없음)' : w.title} · 시도 ${w.attempts}${w.error == null ? '' : ' · ${w.error}'}',
-                  style: _mono(11, _muted)),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${w.title.isEmpty ? '(제목 없음)' : w.title} · 시도 ${w.attempts}${w.files.isEmpty ? '' : ' · 📎${w.files.length}'}',
+                      style: _mono(11.5, _text)),
+                  if (w.text.trim().isNotEmpty)
+                    Text(w.text.trim().split('\n').first,
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _muted, fontSize: 13)),
+                  if (w.error != null) Text(w.error!, style: _mono(11, _warn)),
+                ]),
+              ),
+            if (waiting.isNotEmpty)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await widget.outbox.flush(widget.api);
+                    if (mounted) setState(() {});
+                  },
+                  icon: const Icon(Icons.sync, size: 16, color: _accent),
+                  label: Text('지금 보내기', style: _mono(12, _accent)),
+                ),
+              ),
             SectionLabel('컴퓨터', trailing: up == null ? '—' : '켠 지 ${up ~/ 60}분'),
             if (_why != null) Text(_why!, style: _mono(11, _warn)),
             if (deaths > 0) Text('⚠ 죽음 기록 $deaths줄 — 컴퓨터 VC 에서 「문제 알리기」', style: _mono(11, _warn)),
@@ -787,18 +854,34 @@ class _StatusPageState extends State<StatusPage> {
   }
 }
 
+/// 날짜(`2026-09-17`)를 사람 말로 — 오늘 · 어제 · 9월 17일 · 2025.9.17.
+String whenLabel(String ymd, {DateTime? now}) {
+  final d = DateTime.tryParse(ymd);
+  if (d == null) return ymd;
+  final n = now ?? DateTime.now();
+  final days = DateTime(n.year, n.month, n.day).difference(DateTime(d.year, d.month, d.day)).inDays;
+  if (days == 0) return '오늘';
+  if (days == 1) return '어제';
+  if (d.year == n.year) return '${d.month}월 ${d.day}일';
+  return '${d.year}.${d.month}.${d.day}';
+}
+
 class BrowseTab extends StatefulWidget {
-  const BrowseTab({super.key, required this.api, required this.onFail, this.outbox});
+  const BrowseTab({super.key, required this.api, required this.onFail, this.outbox, this.onAppend});
 
   final VcApi api;
   final OnFail onFail;
   final Outbox? outbox; // 폰 글을 보내면 목록을 다시 부른다
+  final void Function(String title)? onAppend; // 글 보기의 「이어 쓰기」
 
   @override
   State<BrowseTab> createState() => _BrowseTabState();
 }
 
+// ★ 목록 위 칩으로 **골라 보기**(전체 · 사진 · #태그). 전에는 다 한꺼번에 섞여 찾기 힘들었다(오너 실기 2026-09-16).
 class _BrowseTabState extends State<BrowseTab> {
+  static const _photo = '@photo';
+
   final _q = TextEditingController();
   List<Map<String, dynamic>> _hits = [];
   String _asked = '';
@@ -806,6 +889,8 @@ class _BrowseTabState extends State<BrowseTab> {
   bool _busy = false;
   // ★ 못 닿았을 때 「창고 앞머리 0장」이 떠, 창고가 빈 것처럼 보였다(2026-09-15 아이폰 실기). 못 센 것은 0 이 아니다.
   bool _offline = false;
+  String _filter = ''; // '' 전체 · _photo 사진 · 그 밖은 태그 이름
+  List<String> _tags = []; // 칩으로 보일 태그 — 전체 목록에서 많이 쓴 차례
 
   int _sentSeen = 0;
 
@@ -835,17 +920,35 @@ class _BrowseTabState extends State<BrowseTab> {
     }
   }
 
+  int _asking = 0; // 마지막 물음 번호 — 늦게 온 옛 답이 새 목록을 덮지 않게
+
   Future<void> _find() async {
     final q = _q.text.trim();
+    final mine = ++_asking;
+    final tag = (_filter.isEmpty || _filter == _photo) ? '' : _filter;
+    final ask = [q, if (tag.isNotEmpty) 'tag:$tag'].where((s) => s.isNotEmpty).join(' ');
     setState(() => _busy = true);
     try {
-      final r = await widget.api.search(q);
-      if (!mounted) return;
+      final r = await widget.api.search(ask, k: 50);
+      if (!mounted || mine != _asking) return;
+      final shown = _filter == _photo ? r.where((h) => h['image'] != null).toList() : r;
       setState(() {
-        _hits = r;
+        _hits = shown;
         _asked = q;
         _offline = false;
-        _empty = r.isEmpty ? '안 나왔어 — 말을 바꿔 봐' : null;
+        _empty = shown.isEmpty
+            ? (_filter == _photo ? '사진 붙은 글이 없어' : (ask.isEmpty ? '아직 창고가 비었어 — 아래 「새 메모」로 시작' : '안 나왔어 — 말을 바꿔 봐'))
+            : null;
+        // 칩은 아무것도 안 좁혔을 때의 목록으로 세운다 — 좁힌 뒤에 다시 세면 칩이 사라진다
+        if (ask.isEmpty) {
+          final count = <String, int>{};
+          for (final h in r) {
+            for (final t in (h['tags'] as List?)?.whereType<String>() ?? const <String>[]) {
+              count[t] = (count[t] ?? 0) + 1;
+            }
+          }
+          _tags = (count.keys.toList()..sort((a, b) => count[b]!.compareTo(count[a]!))).take(12).toList();
+        }
       });
     } catch (e) {
       if (e is VcOffline && mounted) {
@@ -861,43 +964,107 @@ class _BrowseTabState extends State<BrowseTab> {
     }
   }
 
+  void _pickFilter(String v) {
+    setState(() => _filter = _filter == v ? '' : v);
+    _find();
+  }
+
+  Widget _chip(String label, String value) {
+    final on = _filter == value;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: on,
+        showCheckmark: false,
+        onSelected: (_) => _pickFilter(value),
+        labelStyle: TextStyle(color: on ? _text : _dim, fontSize: 13, fontWeight: on ? FontWeight.w700 : FontWeight.w500),
+        selectedColor: _accent.withValues(alpha: .28),
+        backgroundColor: _card,
+        side: BorderSide(color: on ? _accent.withValues(alpha: .7) : _accent.withValues(alpha: .12)),
+        shape: const StadiumBorder(),
+        visualDensity: VisualDensity.compact,
+      ),
+    );
+  }
+
   @override
-  Widget build(BuildContext context) => Column(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          child: TextField(
-            controller: _q,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _find(),
-            decoration: InputDecoration(
-              hintText: '창고에서 찾기',
-              prefixIcon: const Icon(Icons.search, color: _muted),
-              suffixIcon: IconButton(icon: const Icon(Icons.arrow_forward, color: _accent), onPressed: _find),
-            ),
+  Widget build(BuildContext context) {
+    final what = _asked.isNotEmpty
+        ? '찾은 것'
+        : _filter.isEmpty
+            ? '최근'
+            : (_filter == _photo ? '사진' : '#$_filter');
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: TextField(
+          controller: _q,
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => _find(),
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            hintText: '창고에서 찾기',
+            isDense: true,
+            prefixIcon: const Icon(Icons.search, color: _muted),
+            suffixIcon: _q.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: '지우기',
+                    icon: const Icon(Icons.close, color: _muted),
+                    onPressed: () {
+                      _q.clear();
+                      _find();
+                    }),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: SectionLabel(_asked.isEmpty ? '창고 앞머리' : '찾은 것', trailing: _busy ? '…' : (_offline ? '—' : '${_hits.length}장')),
+      ),
+      SizedBox(
+        height: 48,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          children: [
+            _chip('전체', ''),
+            _chip('📷 사진', _photo),
+            for (final t in _tags) _chip('#$t', t),
+          ],
         ),
-        Expanded(
-          child: RefreshIndicator(
-            color: _accent,
-            backgroundColor: _card,
-            onRefresh: _find,
-            child: ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(18, 2, 18, 4),
+        child: Row(children: [
+          Text(what, style: _mono(11.5, _accent.withValues(alpha: .85), weight: FontWeight.w700)),
+          const Spacer(),
+          Text(_busy ? '…' : (_offline ? '—' : '${_hits.length}장'), style: _mono(11.5, _muted)),
+        ]),
+      ),
+      Expanded(
+        child: RefreshIndicator(
+          color: _accent,
+          backgroundColor: _card,
+          onRefresh: _find,
+          child: ListView(
+            // 오른쪽 아래 「새 메모」 단추에 마지막 카드가 안 가리게
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 96),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
               if (_empty != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 40),
                   child: Column(children: [
                     const Opacity(opacity: .3, child: Image(image: AssetImage(_markSolid), width: 72, height: 72)),
                     const SizedBox(height: 8),
-                    Text(_empty!, style: const TextStyle(color: _muted)),
+                    Text(_empty!, textAlign: TextAlign.center, style: const TextStyle(color: _muted)),
                   ]),
                 ),
               for (final h in _hits)
                 NoteCard(
+                  // ★ 목록이 새로 불리는 사이 누른 카드를 놓치지 않게 — 자리 대신 글로 짝짓는다
+                  key: ValueKey('${h['folder'] ?? ''}/${h['title']}'),
                   hit: h,
+                  api: widget.api,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -907,61 +1074,86 @@ class _BrowseTabState extends State<BrowseTab> {
                         title: '${h['title']}',
                         q: _asked,
                         folder: h['folder'] as String?,
+                        onAppend: widget.onAppend,
                       ),
                     ),
                   ),
                 ),
-            ]),
+            ],
           ),
         ),
-      ]);
+      ),
+    ]);
+  }
 }
 
+/// 목록 한 장 — 제목 · 두 줄 미리보기 · 날짜·태그 · 오른쪽에 첫 사진.
 class NoteCard extends StatelessWidget {
-  const NoteCard({super.key, required this.hit, required this.onTap});
+  const NoteCard({super.key, required this.hit, required this.onTap, this.api});
 
   final Map<String, dynamic> hit;
   final VoidCallback onTap;
+  final VcApi? api;
 
   @override
   Widget build(BuildContext context) {
-    final summary = '${hit['summary'] ?? ''}'.trim();
-    final meta = [hit['created'], hit['kind'], hit['folder']].whereType<String>().join('  ·  ');
+    final preview = '${hit['preview'] ?? hit['summary'] ?? ''}'.trim();
+    final tags = (hit['tags'] as List?)?.whereType<String>().toList() ?? const <String>[];
+    final image = hit['image'] as String?;
+    final files = (hit['files'] as num?)?.toInt() ?? 0;
+    final date = '${hit['updated'] ?? hit['created'] ?? ''}';
+    final api = this.api;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: _card.withValues(alpha: .9),
+        color: _card.withValues(alpha: .92),
         borderRadius: BorderRadius.circular(14),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
           splashColor: _accent.withValues(alpha: .12),
-          child: IntrinsicHeight(
-            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Container(width: 3, color: _accent.withValues(alpha: .85)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('${hit['title']}',
-                        maxLines: 1,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${hit['title']}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600)),
+                  if (preview.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(preview,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600)),
-                    if (summary.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(summary,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: _dim.withValues(alpha: .72), fontSize: 13.5, height: 1.45)),
-                    ],
-                    if (meta.isNotEmpty) ...[const SizedBox(height: 8), Text(meta, style: _mono(10.5, _muted))],
+                        style: TextStyle(color: _dim.withValues(alpha: .75), fontSize: 13.5, height: 1.4)),
+                  ],
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 10, runSpacing: 2, children: [
+                    if (date.isNotEmpty) Text(whenLabel(date), style: _mono(11, _muted)),
+                    for (final t in tags.take(3)) Text('#$t', style: _mono(11, _accent.withValues(alpha: .8))),
+                    if (files > 0 && image == null) Text('📎 $files', style: _mono(11, _muted)),
                   ]),
+                ]),
+              ),
+              if (image != null && api != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 10),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 64,
+                      height: 64,
+                      child: Image.network(api.attachmentUri(image).toString(),
+                          headers: api.authHeaders,
+                          fit: BoxFit.cover,
+                          cacheWidth: 192,
+                          semanticLabel: image,
+                          errorBuilder: (_, _, _) => Container(
+                              color: _panel, child: const Icon(Icons.image_outlined, color: _muted, size: 22))),
+                    ),
+                  ),
                 ),
-              ),
-              const Padding(
-                padding: EdgeInsets.only(right: 8),
-                child: Icon(Icons.chevron_right, color: _muted, size: 20),
-              ),
             ]),
           ),
         ),
@@ -972,20 +1164,29 @@ class NoteCard extends StatelessWidget {
 
 class NotePage extends StatefulWidget {
   const NotePage(
-      {super.key, required this.api, required this.onFail, required this.title, this.q = '', this.folder});
+      {super.key,
+      required this.api,
+      required this.onFail,
+      required this.title,
+      this.q = '',
+      this.folder,
+      this.onAppend});
 
   final VcApi api;
   final OnFail onFail;
   final String title;
   final String q;
   final String? folder;
+  final void Function(String title)? onAppend;
 
   @override
   State<NotePage> createState() => _NotePageState();
 }
 
 class _NotePageState extends State<NotePage> {
-  late final Future<Map<String, dynamic>> _note =
+  late Future<Map<String, dynamic>> _note = _load();
+
+  Future<Map<String, dynamic>> _load() =>
       widget.api.note(widget.title, q: widget.q, folder: widget.folder)..catchError((Object e) {
         widget.onFail(e);
         return <String, dynamic>{};
@@ -996,6 +1197,13 @@ class _NotePageState extends State<NotePage> {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: AppBar(title: Text(widget.title, overflow: TextOverflow.ellipsis)),
+          floatingActionButton: widget.onAppend == null
+              ? null
+              : FloatingActionButton.extended(
+                  onPressed: () => widget.onAppend!(widget.title),
+                  icon: const Icon(Icons.add_comment_outlined),
+                  label: const Text('이어 쓰기', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
           body: FutureBuilder<Map<String, dynamic>>(
             future: _note,
             builder: (context, snap) {
@@ -1004,23 +1212,33 @@ class _NotePageState extends State<NotePage> {
               }
               if (snap.hasError) return const Center(child: Text('못 열었어', style: TextStyle(color: _muted)));
               final j = snap.data ?? {};
-              return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
-                if (widget.folder != null) Text('// ${widget.folder}', style: _mono(11, _muted)),
-                const SizedBox(height: 8),
-                _Panel(child: NoteBody(text: '${j['text'] ?? ''}', api: widget.api)),
-                if (j['cut'] == true)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Text('(일부만 보였어 — 전체 ${j['full_chars']}자)', style: _mono(11, _muted)),
-                  ),
-              ]);
+              return RefreshIndicator(
+                color: _accent,
+                backgroundColor: _card,
+                onRefresh: () async {
+                  setState(() => _note = _load());
+                  await _note;
+                },
+                child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 96), children: [
+                  if (widget.folder != null) Text('// ${widget.folder}', style: _mono(11, _muted)),
+                  const SizedBox(height: 4),
+                  _Panel(child: NoteBody(text: '${j['text'] ?? ''}', api: widget.api)),
+                  if (j['cut'] == true)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text('(일부만 보였어 — 전체 ${j['full_chars']}자)', style: _mono(11, _muted)),
+                    ),
+                ]),
+              );
             },
           ),
         ),
       );
 }
 
-/// 글 몸 — `![[사진.heic]]` 는 사진으로, 영상·녹음·pdf 는 📎 칸으로.
+
+/// 글 몸 — `![[사진.heic]]` 는 사진으로, 영상·녹음·pdf 는 📎 칸으로,
+/// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
   const NoteBody({super.key, required this.text, required this.api});
@@ -1029,24 +1247,87 @@ class NoteBody extends StatelessWidget {
   final VcApi api;
 
   static final _embed = RegExp(r'!\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]');
+  static final _prop = RegExp(r'^\s*[-*]\s+([^:：\n]{1,24}?)\s*[:：]\s*(.*)$');
+  static final _tagLine = RegExp(r'^\s*(#[^\s#]+\s*)+$');
   static const _imageExt = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif'};
   static const _fileExt = {'.pdf', '.mov', '.mp4', '.m4v', '.m4a', '.aac', '.mp3', '.wav', '.svg'};
   static const _style = TextStyle(color: _text, fontSize: 15.5, height: 1.7);
+
+  /// 글 조각을 항목표 · 태그 칩 · 글로 가른다.
+  static List<Widget> _words(String s) {
+    final out = <Widget>[];
+    final plain = <String>[];
+    final props = <(String, String)>[];
+    void flushPlain() {
+      final t = plain.join('\n').trim();
+      if (t.isNotEmpty) out.add(SelectableText(t, style: _style));
+      plain.clear();
+    }
+
+    void flushProps() {
+      if (props.isEmpty) return;
+      out.add(Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(color: _bg.withValues(alpha: .6), borderRadius: BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Column(children: [
+          for (final (k, v) in props)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(width: 92, child: Text(k, style: _mono(12.5, _muted))),
+                Expanded(
+                  child: SelectableText(v.isEmpty ? '—' : v,
+                      style: TextStyle(color: v.isEmpty ? _muted : _text, fontSize: 15)),
+                ),
+              ]),
+            ),
+        ]),
+      ));
+      props.clear();
+    }
+
+    for (final line in s.split('\n')) {
+      final p = _prop.firstMatch(line);
+      if (p != null) {
+        flushPlain();
+        props.add((p.group(1)!.trim(), p.group(2)!.trim()));
+        continue;
+      }
+      flushProps();
+      if (_tagLine.hasMatch(line)) {
+        flushPlain();
+        out.add(Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final t in line.trim().split(RegExp(r'\s+')))
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: .14), borderRadius: BorderRadius.circular(20)),
+                child: Text(t, style: _mono(12.5, _accent)),
+              ),
+          ]),
+        ));
+        continue;
+      }
+      plain.add(line);
+    }
+    flushProps();
+    flushPlain();
+    return out;
+  }
 
   @override
   Widget build(BuildContext context) {
     final parts = <Widget>[];
     var at = 0;
-    void words(String s) {
-      if (s.trim().isNotEmpty) parts.add(SelectableText(s.trim(), style: _style));
-    }
-
     for (final m in _embed.allMatches(text)) {
       final name = m.group(1)!.trim();
       final dot = name.lastIndexOf('.');
       final ext = dot < 0 ? '' : name.substring(dot).toLowerCase();
       if (!_imageExt.contains(ext) && !_fileExt.contains(ext)) continue; // 글 끼움은 글자 그대로 둔다
-      words(text.substring(at, m.start));
+      parts.addAll(_words(text.substring(at, m.start)));
       if (_imageExt.contains(ext)) {
         parts.add(Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1064,7 +1345,7 @@ class NoteBody extends StatelessWidget {
       }
       at = m.end;
     }
-    words(text.substring(at));
+    parts.addAll(_words(text.substring(at)));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: parts);
   }
 
@@ -1085,13 +1366,56 @@ class NoteBody extends StatelessWidget {
       );
 }
 
+
+/// 새 메모 · 이어 쓰기 — 전체 화면 편집기(노션·에버노트처럼). 저장하면 곧장 닫히고 보내기는 뒤에서 한다.
+class EditorPage extends StatelessWidget {
+  const EditorPage({super.key, required this.outbox, required this.onSend, this.templates, this.fixedTitle});
+
+  final Outbox outbox;
+  final Future<void> Function() onSend;
+  final Future<(List<Tpl>, bool)> Function()? templates;
+  final String? fixedTitle;
+
+  @override
+  Widget build(BuildContext context) => Backdrop(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            leading: IconButton(
+                tooltip: '닫기', icon: const Icon(Icons.close), onPressed: () => Navigator.maybePop(context)),
+            title: Text(fixedTitle == null ? '새 메모' : '이어 쓰기', style: const TextStyle(fontSize: 17)),
+          ),
+          body: WriteTab(
+            outbox: outbox,
+            onSend: onSend,
+            templates: templates,
+            fixedTitle: fixedTitle,
+            autofocus: true,
+            onSaved: (item) => Navigator.pop(context, item),
+          ),
+        ),
+      );
+}
+
 class WriteTab extends StatefulWidget {
-  const WriteTab({super.key, required this.outbox, required this.onSend, this.pick = pickMedia, this.templates});
+  const WriteTab(
+      {super.key,
+      required this.outbox,
+      required this.onSend,
+      this.pick = pickMedia,
+      this.templates,
+      this.fixedTitle,
+      this.autofocus = false,
+      this.onSaved});
 
   final Outbox outbox;
   final Future<void> Function() onSend;
   final Picker pick; // 사진·영상 고르기(4단계). 시험에서는 가짜로 갈아 끼운다
   final Future<(List<Tpl>, bool)> Function()? templates; // 서식(5단계) — (틀 목록, 못 닿음)
+  final String? fixedTitle; // 이어 쓰기 — 이 제목 글 끝에 붙는다(서버 기본이 덧붙이기)
+  final bool autofocus;
+  // 편집기로 쓸 때 — 저장하면 불린다(보내기는 기다리지 않는다)
+  final void Function(OutboxItem item)? onSaved;
 
   @override
   State<WriteTab> createState() => _WriteTabState();
@@ -1113,6 +1437,7 @@ class _WriteTabState extends State<WriteTab> {
   @override
   void initState() {
     super.initState();
+    if (widget.fixedTitle != null) _title.text = widget.fixedTitle!;
     widget.outbox.addListener(_onOutbox);
   }
 
@@ -1208,7 +1533,7 @@ class _WriteTabState extends State<WriteTab> {
     final text = _body.text.trim();
     // 사진만 붙여도 기록이다(에버노트처럼) — 글이 비어도 첨부가 있으면 저장한다.
     if ((text.isEmpty && _picked.isEmpty) || _busy) return;
-    final title = _title.text.trim().isEmpty ? _today() : _title.text.trim();
+    final title = widget.fixedTitle ?? (_title.text.trim().isEmpty ? _today() : _title.text.trim());
     setState(() => _busy = true);
     try {
       final OutboxItem item;
@@ -1222,6 +1547,13 @@ class _WriteTabState extends State<WriteTab> {
       setState(() => _picked.clear());
       _sayId = item.id;
       _tell('폰에 저장됨 — 보내는 중…', true);
+      final saved = widget.onSaved;
+      if (saved != null) {
+        // 편집기 — 보내기를 기다리지 않고 닫는다(사진이 크면 오래 걸린다). 보내기는 뒤에서.
+        widget.onSend();
+        WidgetsBinding.instance.addPostFrameCallback((_) => saved(item));
+        return;
+      }
       await widget.onSend(); // ② 닿으면 보낸다
       if (item.sent) _sayId = null;
       _tell(item.sent ? '서버 저장 완료 — 「${item.savedAs ?? item.title}」' : '폰에 저장됨 · 전송 대기 — 연결되면 보낸다', true);
@@ -1230,163 +1562,162 @@ class _WriteTabState extends State<WriteTab> {
     }
   }
 
-  static Color _stateColor(SendState s) => switch (s) {
-        SendState.saved => _dim,
-        SendState.waiting => _warn,
-        SendState.sent => _accent,
-      };
+  // 편집기 칸 — 상자 없이 종이처럼(노션·에버노트). 밖을 누르면 자판이 내려간다.
+  static const _bare = InputDecoration(
+    filled: false,
+    border: InputBorder.none,
+    enabledBorder: InputBorder.none,
+    focusedBorder: InputBorder.none,
+    contentPadding: EdgeInsets.symmetric(vertical: 8),
+  );
 
-  Widget _item(OutboxItem it) {
-    final c = _stateColor(it.state);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: BoxDecoration(
-        color: _card.withValues(alpha: .9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: c.withValues(alpha: .25)),
+  bool get _dirty => _body.text.trim().isNotEmpty || _picked.isNotEmpty;
+
+  Future<void> _askLeave() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('적은 것을 버릴까?'),
+        content: const Text('저장하지 않은 글·사진이 사라진다.', style: TextStyle(color: _dim)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('계속 쓰기')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('버리기', style: TextStyle(color: _warn))),
+        ],
       ),
-      child: Row(children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(it.files.isEmpty ? it.title : '${it.title}  📎${it.files.length}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _text, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(it.error ?? it.text.replaceAll('\n', ' '),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: it.error != null ? _warn : _muted, fontSize: 12.5)),
-          ]),
-        ),
-        const SizedBox(width: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(color: c.withValues(alpha: .12), borderRadius: BorderRadius.circular(20)),
-          child: Text(it.state.label, style: _mono(11, c, weight: FontWeight.w700)),
-        ),
-      ]),
     );
+    if (leave == true && mounted) {
+      _body.clear();
+      setState(() => _picked.clear());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.maybePop(context);
+      });
+    }
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        child: Column(children: [
-          const SectionLabel('새 글'),
-          TextField(
+  Widget build(BuildContext context) {
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final tool = <Widget>[
+      IconButton(
+          tooltip: '사진 찍기',
+          onPressed: _busy ? null : () => _pick(PickHow.photo),
+          icon: const Icon(Icons.photo_camera_outlined, color: _accent)),
+      IconButton(
+          tooltip: '영상 찍기',
+          onPressed: _busy ? null : () => _pick(PickHow.video),
+          icon: const Icon(Icons.videocam_outlined, color: _accent)),
+      IconButton(
+          tooltip: '사진첩에서 고르기',
+          onPressed: _busy ? null : () => _pick(PickHow.library),
+          icon: const Icon(Icons.photo_library_outlined, color: _accent)),
+      if (widget.templates != null)
+        IconButton(
+            tooltip: '서식 넣기',
+            onPressed: _busy ? null : _pickTemplate,
+            icon: const Icon(Icons.dashboard_customize_outlined, color: _accent)),
+    ];
+    return PopScope(
+      canPop: widget.onSaved == null || !_dirty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _askLeave();
+      },
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+          child: TextField(
             controller: _title,
+            readOnly: widget.fixedTitle != null,
+            textInputAction: TextInputAction.next,
             // 글칸 밖을 누르면 자판이 내려간다(노트앱이 다 그렇다) — 전에는 제목을 눌러 ✓ 를 눌러야 내려갔다(오너 실기).
             onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-            decoration: const InputDecoration(
-                hintText: '제목 — 비우면 오늘 날짜', prefixIcon: Icon(Icons.title, color: _muted)),
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: _text),
+            decoration: _bare.copyWith(hintText: '제목 — 비우면 오늘 날짜'),
           ),
-          const SizedBox(height: 4),
-          // 사진·영상 붙이기(4단계). 고른 것은 칩으로 — 눌러서 뺀다.
-          Row(children: [
-            IconButton(
-                tooltip: '사진 찍기',
-                onPressed: _busy ? null : () => _pick(PickHow.photo),
-                icon: const Icon(Icons.photo_camera_outlined, color: _accent)),
-            IconButton(
-                tooltip: '영상 찍기',
-                onPressed: _busy ? null : () => _pick(PickHow.video),
-                icon: const Icon(Icons.videocam_outlined, color: _accent)),
-            IconButton(
-                tooltip: '사진첩에서 고르기',
-                onPressed: _busy ? null : () => _pick(PickHow.library),
-                icon: const Icon(Icons.photo_library_outlined, color: _accent)),
-            // 자판이 올라와 있을 때만 — 긴 글을 쓰다 바로 내린다
-            if (MediaQuery.viewInsetsOf(context).bottom > 0)
+        ),
+        if (widget.fixedTitle != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+            child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('이 글 끝에 이어 붙인다', style: _mono(11.5, _muted))),
+          ),
+        Divider(height: 1, indent: 20, endIndent: 20, color: _accent.withValues(alpha: .12)),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: TextField(
+              controller: _body,
+              autofocus: widget.autofocus,
+              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+              onChanged: (_) {
+                if (widget.onSaved != null) setState(() {}); // 버릴지 묻기(PopScope)를 새로 셈
+              },
+              maxLines: null,
+              expands: true,
+              keyboardType: TextInputType.multiline,
+              textAlignVertical: TextAlignVertical.top,
+              style: const TextStyle(fontSize: 16.5, height: 1.65, color: _text),
+              decoration: _bare.copyWith(hintText: '대충 적어도 된다 — 사진만 붙여도 된다'),
+            ),
+          ),
+        ),
+        // 고른 사진·영상 — 눌러서 뺀다
+        if (_picked.isNotEmpty)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: [
+                for (var i = 0; i < _picked.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: InputChip(
+                      avatar: const Icon(Icons.attach_file, size: 16, color: _accent),
+                      label: Text(_picked[i].uri.pathSegments.last, style: _mono(11, _text)),
+                      onDeleted: () => setState(() => _picked.removeAt(i)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        if (_say.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+            child: Row(children: [
+              Icon(_sayOk ? Icons.check_circle_outline : Icons.error_outline,
+                  size: 16, color: _sayOk ? _accent : _warn),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_say, style: TextStyle(color: _dim.withValues(alpha: .85), fontSize: 13))),
+            ]),
+          ),
+        // 도구줄 — 자판 바로 위에 붙는다. 저장도 여기서(엄지 닿는 자리).
+        Container(
+          decoration: BoxDecoration(
+            color: _panel,
+            border: Border(top: BorderSide(color: _accent.withValues(alpha: .14))),
+          ),
+          padding: EdgeInsets.fromLTRB(4, 4, 12, 4 + (keyboard ? 0 : MediaQuery.paddingOf(context).bottom)),
+          child: Row(children: [
+            ...tool,
+            const Spacer(),
+            if (keyboard)
               IconButton(
                   tooltip: '자판 내리기',
                   onPressed: () => FocusManager.instance.primaryFocus?.unfocus(),
                   icon: const Icon(Icons.keyboard_hide_outlined, color: _muted)),
-            if (widget.templates != null)
-              IconButton(
-                  tooltip: '서식 넣기',
-                  onPressed: _busy ? null : _pickTemplate,
-                  icon: const Icon(Icons.dashboard_customize_outlined, color: _accent)),
-            const SizedBox(width: 4),
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(children: [
-                  for (var i = 0; i < _picked.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InputChip(
-                        label: Text(_picked[i].uri.pathSegments.last, style: _mono(11, _text)),
-                        onDeleted: () => setState(() => _picked.removeAt(i)),
-                      ),
-                    ),
-                ]),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 4),
-          Expanded(
-            flex: 3,
-            child: TextField(
-              controller: _body,
-              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-              maxLines: null,
-              expands: true,
-              textAlignVertical: TextAlignVertical.top,
-              style: const TextStyle(fontSize: 15.5, height: 1.6),
-              decoration: const InputDecoration(hintText: '적을 것 — 폰에 먼저 저장하고, 연결되면 PC·맥에 보낸다'),
-            ),
-          ),
-          const SizedBox(height: 10),
-          if (_say.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(children: [
-                Icon(_sayOk ? Icons.check_circle_outline : Icons.error_outline,
-                    size: 16, color: _sayOk ? _accent : _warn),
-                const SizedBox(width: 8),
-                Expanded(child: Text(_say, style: TextStyle(color: _dim.withValues(alpha: .85), fontSize: 13))),
-              ]),
-            ),
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: FilledButton.icon(
+            FilledButton.icon(
               onPressed: _busy ? null : _save,
+              style: FilledButton.styleFrom(minimumSize: const Size(92, 44)),
               icon: _busy
                   ? const SizedBox(
-                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.north_east),
-              label: const Text('저장', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Icon(Icons.check, size: 18),
+              label: const Text('저장', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: ListenableBuilder(
-              listenable: widget.outbox,
-              builder: (context, _) {
-                final n = widget.outbox.pending;
-                return Column(children: [
-                  SectionLabel('보낸 기록', trailing: n == 0 ? '대기 없음' : '전송 대기 $n'),
-                  if (n > 0)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: _busy ? null : () => widget.onSend(),
-                        icon: const Icon(Icons.sync, size: 16, color: _accent),
-                        label: Text('지금 보내기', style: _mono(12, _accent)),
-                      ),
-                    ),
-                  Expanded(
-                    child: widget.outbox.items.isEmpty
-                        ? Center(child: Text('아직 쓴 글이 없다', style: _mono(12, _muted)))
-                        : ListView(children: [for (final it in widget.outbox.items) _item(it)]),
-                  ),
-                ]);
-              },
-            ),
-          ),
-        ]),
-      );
+          ]),
+        ),
+      ]),
+    );
+  }
 }
