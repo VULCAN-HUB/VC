@@ -209,6 +209,9 @@ def _쓰기막히면알림(돌려줄=None):
 
 
 class MainWindow(QWidget):
+    # AI 요약·번역이 끝나면(딴 실) — (제목, 머리, 글). ★ 신호 이름은 영문(한글이면 Qt 가 터진다)
+    assist_done = pyqtSignal(str, str, str)
+
     def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
         """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
         무엇이 무엇을 쓰는지 따라갈 수가 없다. 덩어리를 넘나드는 것은
@@ -239,6 +242,7 @@ class MainWindow(QWidget):
         self._apply_style()
 
         left = self._build_head()
+        self.assist_done.connect(lambda t, h, g: self._도움보이기(t, h, g))
         scroll, rescan = self._build_proposals()
         self._build_body(left, scroll, rescan)
 
@@ -2374,7 +2378,79 @@ class MainWindow(QWidget):
         self.more_menu.addAction(f"설정 · 내 정보  ({_키글('Ctrl+,')})",
                                  lambda: self._later(lambda: settings.open_dialog(self, self.notes)))
         self.more_menu.addAction("전체화면  (F11)", lambda: settings.toggle_full(self))
+        if self.editing is not None:
+            # 드물게 쓰는 AI 는 ⋯ 안에(결정 26)
+            ai = self.more_menu.addMenu("AI")
+            ai.addAction("요약", lambda: self._later(lambda: self._도움("summary")))
+            옮김 = ai.addMenu("번역")
+            for 말 in ("영어", "일본어", "중국어", "한국어"):
+                옮김.addAction(말, lambda _=False, l=말: self._later(lambda: self._도움("translate", l)))
         self.more_menu.addAction("문제 알리기 (진단 묶기)", self.make_report)
+
+    def _도움(self, what: str, lang: str = "영어") -> None:
+        """AI 요약·번역(편의 기능 1·3번) — 딴 실에서 서버에 묻고, 끝나면 `assist_done`."""
+        title = self.editing
+        if not title:
+            return
+        머리 = "AI 요약" if what == "summary" else f"AI 번역 ({lang})"
+        self.report(f"{머리} 하는 중… (몇 초 걸린다)", [title])
+        link = self.link
+
+        def 일() -> None:
+            import urllib.error
+            import urllib.request
+
+            요청 = urllib.request.Request(
+                f"{link.base}/eb/v1/assist", method="POST",
+                data=json.dumps({"action": what, "title": title, "lang": lang}, ensure_ascii=False).encode(),
+                headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
+            try:
+                # ★ 서버 부르기의 기본 기다림(0.35초)으로는 AI 답을 못 받는다 — 넉넉히
+                with urllib.request.urlopen(요청, timeout=180) as r:
+                    글 = json.loads(r.read().decode()).get("text", "")
+            except urllib.error.HTTPError as e:
+                try:
+                    글 = "⚠ " + json.loads(e.read().decode()).get("error", str(e))
+                except Exception:
+                    글 = f"⚠ {e}"
+            except Exception as e:
+                글 = f"⚠ 컴퓨터 VC 서버에 못 물었다 — {type(e).__name__}"
+            self.assist_done.emit(title, 머리, 글)
+
+        threading.Thread(target=일, daemon=True).start()
+
+    def _도움보이기(self, title: str, 머리: str, 글: str) -> None:
+        """AI 답을 창으로 — 복사 · 글 끝에 붙이기."""
+        if 글.startswith("⚠"):
+            self.report(글, [title])
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle(머리)
+        box.setText(f"{title} — {머리}")
+        box.setInformativeText(글)
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        붙이기 = box.addButton("글 끝에 붙이기", QMessageBox.AcceptRole)
+        복사 = box.addButton("복사", QMessageBox.ActionRole)
+        box.addButton("닫기", QMessageBox.RejectRole)
+
+        def 골랐다(b) -> None:
+            if b is 붙이기:
+                self._later(lambda: self._도움붙이기(title, 머리, 글))
+            elif b is 복사:
+                QApplication.clipboard().setText(글)
+        box.buttonClicked.connect(lambda b: 골랐다(b))
+        box.open()          # 창을 붙들지 않는다
+        self._도움창 = box
+
+    def _도움붙이기(self, title: str, 머리: str, 글: str) -> None:
+        try:
+            self.notes.append(title, f"## {머리}\n\n{글}")
+        except WriteBlocked:
+            self.report("못 붙였어 — 기록 폴더가 잠겼거나 읽기 전용이야.", [title])
+            return
+        self.report(f"글 끝에 붙였어 — {머리}", [title])
+        if self.editing == title:
+            self.show_note(title)
 
     def _put_template(self, name: str) -> None:
         # 차림표에서 불린다. 여기서 글을 갈아 끼우면 차림표가 제 밑을 파므로 미룬다.

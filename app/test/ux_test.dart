@@ -192,4 +192,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(saved.length, 1, reason: '안 바꿨는데 적었다');
   });
+
+  testWidgets('글 보기 ⋮ — AI 요약 결과를 보이고 글 끝에 붙인다 · 모델 없으면 까닭', (tester) async {
+    var hasModel = true;
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
+      if (req.url.path == '/eb/v1/assist') {
+        if (!hasModel) {
+          return http.Response.bytes(utf8.encode(jsonEncode({'error': '대화 모델이 없다'})), 503,
+              headers: {'content-type': 'application/json'});
+        }
+        return _json({'text': '- 정수기 받음'});
+      }
+      return _json({'title': '정수기', 'text': '긴 메모'});
+    }));
+    final saved = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: NotePage(api: api, onFail: (_) {}, title: '정수기', onSaveLine: (t, l) async => saved.add(l)),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+
+    Future<void> ask() async {
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AI 요약'));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pumpAndSettle();
+    }
+
+    await ask();
+    expect(find.text('- 정수기 받음'), findsOneWidget);
+    await tester.tap(find.text('글 끝에 붙이기'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(saved.single, startsWith('## AI 요약'));
+
+    hasModel = false;
+    await ask();
+    expect(find.text('대화 모델이 없다'), findsOneWidget, reason: '모델이 없는 까닭을 안 알린다');
+  });
 }

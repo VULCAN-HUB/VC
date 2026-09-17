@@ -337,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -927,6 +927,23 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/v1/chat/completions":
             return self._chat(body)
 
+        # 글 요약·번역(편의 기능 1·3번) — 폰 글 보기 ⋮ · PC 글 ⋯ 메뉴가 부른다. 로컬 모델이 먼저다.
+        if url.path == "/eb/v1/assist":
+            what = body.get("action")
+            title = body.get("title")
+            if what not in ("summary", "translate") or not isinstance(title, str) or not title.strip():
+                return self._send(400, {"error": "action 은 summary·translate, title 은 글 제목"})
+            lang = body.get("lang") if isinstance(body.get("lang"), str) and body.get("lang") else "영어"
+            글 = self.server.notes.read(title.strip())
+            if 글 is None:
+                return self._send(404, {"error": "없는 글", "title": title[:80]})
+            try:
+                return self._send(200, {"text": self.server.assist(what, 글.body, lang)})
+            except self.server.NoModel as 없음:
+                return self._send(503, {"error": str(없음)})
+            except Exception as e:
+                return self._send(502, {"error": f"AI 가 답을 못 했다 — {type(e).__name__}"})
+
         if url.path == "/eb/v1/log":
             try:
                 event = LogEvent(**body)
@@ -1451,6 +1468,27 @@ class EBServer(ThreadingHTTPServer):
 
         threading.Thread(target=loop, daemon=True).start()
 
+    class NoModel(RuntimeError):
+        """쓸 대화 모델이 없다."""
+
+    _도움말 = {
+        "summary": ("아래 메모를 읽고 무슨 일이 있었는지 한국어로 **새로 써서** 요약한다. 원문 줄을 그대로 옮기지 않는다. "
+                    "2~4줄 목록(- )으로 쓰고, 마지막 줄은 「- 지금: …」 으로 지금 상태를 쓴다. "
+                    "메모에 없는 것은 쓰지 않는다. 앞말 없이 목록만. /no_think"),
+        "translate": "아래 메모를 {lang}(으)로 옮긴다. 목록·표·줄바꿈 꼴은 그대로 둔다. `[[…]]` · `![[…]]` · `#태그` 는 그대로 둔다. 옮긴 글만 답한다. /no_think",
+    }
+
+    def assist(self, what: str, body: str, lang: str = "영어") -> str:
+        """글 한 장을 요약하거나 옮긴다. 모델이 없으면 NoModel."""
+        모델 = (self.picked.get("using") or {}).get("chat") or ""
+        if not 모델:
+            raise self.NoModel("대화 모델이 없다 — 설정 › 모델에서 받거나 바깥 AI 키를 넣는다")
+        말 = [{"role": "system", "content": self._도움말[what].format(lang=lang)},
+              {"role": "user", "content": body[:6000]}]
+        곁 = {"temperature": 0.2, "max_tokens": 900} if (self.cfg.get("backend") or {}).get("kind") == "local" else {}
+        답 = self.backend.chat(말, 모델, **곁)
+        return re.sub(r"(?s)<think>.*?</think>", "", 답 or "").strip()
+
     def consolidate_now(self) -> dict:
         """흩어진 메모를 정리 글로 모은다(편의 기능 1·5번 · 1겹 — AI 없이 서식 칸으로)."""
         import consolidate
@@ -1639,6 +1677,20 @@ def _self_check() -> None:
     _상, _몸 = call("GET", "/eb/v1/status")
     assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
     assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
+
+    # --- 글 요약·번역(편의 기능 1·3번) ---
+    call("POST", "/eb/v1/memory", {"title": "요약 시험", "text": "긴 회의 메모 [[회의]] #일"})
+    _옛 = server.picked
+    server.picked = {**_옛, "using": {**_옛["using"], "chat": ""}}
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"})[0] == 503, "모델 없는데 조용히 빈 답"
+    server.picked = {**_옛, "using": {**_옛["using"], "chat": "시험모델"}}
+    fake.fail = False
+    _상, _답 = call("POST", "/eb/v1/assist", {"action": "translate", "title": "요약 시험", "lang": "일본어"})
+    assert _상 == 200 and "긴 회의 메모" in _답["text"], (_상, _답)
+    assert call("POST", "/eb/v1/assist", {"action": "지우기", "title": "요약 시험"})[0] == 400
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "없는 글"})[0] == 404
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"}, token="wrong-token")[0] == 401
+    server.picked = _옛
 
     # --- 흩어진 메모 → 제품 정리 글(편의 기능 1·5번) ---
     call("POST", "/eb/v1/memory", {"title": "정리 시험 받음", "text": "- 제품명 : zz-1\n- 받은날 : 2026-10-01"})

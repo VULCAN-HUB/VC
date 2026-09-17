@@ -1030,6 +1030,22 @@ def run() -> None:
             win._칩골라(win._목록갈래)     # 다시 누르면 최근으로
             win.settle()
             assert win._목록갈래 == "", win._목록갈래
+        # AI 요약·번역(편의 기능 1·3번) — ⋯ 안에만 있다(결정 26). 답은 창으로, 붙이면 글 끝에.
+        win.notes.write(Note(title="AI 시험 글", body="긴 메모"))
+        win.show_note("AI 시험 글")
+        win.settle()
+        win._build_more()
+        ai = [a.menu() for a in win.more_menu.actions() if a.text() == "AI"]
+        assert ai and [x.text() for x in ai[0].actions()][:2] == ["요약", "번역"], "⋯ 에 AI 가 없다"
+        win.assist_done.emit("AI 시험 글", "AI 요약", "- 요점 하나")
+        win.settle()
+        assert win._도움창.isVisible() and "요점 하나" in win._도움창.informativeText()
+        win._도움창.close()
+        win._도움붙이기("AI 시험 글", "AI 요약", "- 요점 하나")
+        assert "## AI 요약" in win.notes.read("AI 시험 글").body, "붙이기가 안 됐다"
+        win.assist_done.emit("AI 시험 글", "AI 요약", "⚠ 대화 모델이 없다")
+        win.settle()
+        assert "모델이 없다" in win._say_text, win._say_text
         assert any("아이스" in w.text() for w in win.results.items if isinstance(w, QLabel)),             "걸린 자리가 안 보인다"
 
         # ★★ **찾은 것을 눌러 열 수 있어야 한다.** 사람이 제일 많이 하는 일인데

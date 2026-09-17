@@ -160,6 +160,12 @@ class VcApi {
     return saved;
   }
 
+  /// 글 요약·번역(편의 기능 1·3번) — 컴퓨터의 AI 가 한다. 모델이 없으면 VcError(503).
+  Future<String> assist(String action, String title, {String lang = '영어'}) async {
+    final j = await _call('POST', '/eb/v1/assist', body: {'action': action, 'title': title, 'lang': lang});
+    return '${j['text'] ?? ''}';
+  }
+
   /// 「상태·기록」(결정 17 ③) — 자국 끝줄 · 죽음 줄 수 · 켠 지(초). 글 이름·집 경로는 서버가 가린다.
   Future<Map<String, dynamic>> status() => _call('GET', '/eb/v1/status');
 

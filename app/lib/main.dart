@@ -1239,6 +1239,90 @@ class NotePage extends StatefulWidget {
 }
 
 class _NotePageState extends State<NotePage> {
+  bool _thinking = false;
+
+  /// AI 요약·번역 — 결과를 시트로 보이고, 원하면 글 끝에 붙인다.
+  Future<void> _assist(String action) async {
+    var lang = '영어';
+    if (action == 'translate') {
+      final got = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: _card,
+        builder: (c) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(padding: const EdgeInsets.all(16), child: Text('어느 말로 옮길까', style: _mono(12, _muted))),
+            for (final l in const ['영어', '일본어', '중국어', '한국어'])
+              ListTile(title: Text(l, style: const TextStyle(color: _text)), onTap: () => Navigator.pop(c, l)),
+          ]),
+        ),
+      );
+      if (got == null) return;
+      lang = got;
+    }
+    if (!mounted) return;
+    setState(() => _thinking = true);
+    String text;
+    try {
+      text = await widget.api.assist(action, widget.title, lang: lang);
+    } on VcError catch (e) {
+      text = '';
+      // 앞 알림 뒤에 줄 서지 않게 — 새 까닭은 바로 보인다
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (e) {
+      text = '';
+      widget.onFail(e);
+    } finally {
+      if (mounted) setState(() => _thinking = false);
+    }
+    if (text.isEmpty || !mounted) return;
+    final head = action == 'summary' ? 'AI 요약' : 'AI 번역 ($lang)';
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(head, style: _mono(12, _accent, weight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(c).height * .55),
+              child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(color: _text, height: 1.6))),
+            ),
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: text));
+                  Navigator.pop(c);
+                },
+                child: const Text('복사'),
+              ),
+              if (widget.onSaveLine != null)
+                FilledButton(
+                  onPressed: () async {
+                    Navigator.pop(c);
+                    await widget.onSaveLine!(widget.title, '## $head\n\n$text');
+                    if (mounted) {
+                      ScaffoldMessenger.of(context)
+                        ..hideCurrentSnackBar()
+                        ..showSnackBar(const SnackBar(content: Text('글 끝에 붙였어')));
+                    }
+                  },
+                  child: const Text('글 끝에 붙이기'),
+                ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
   late Future<Map<String, dynamic>> _note = _load();
 
   Future<Map<String, dynamic>> _load() =>
@@ -1251,7 +1335,20 @@ class _NotePageState extends State<NotePage> {
   Widget build(BuildContext context) => Backdrop(
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          appBar: AppBar(title: Text(widget.title, overflow: TextOverflow.ellipsis)),
+          appBar: AppBar(
+            title: Text(widget.title, overflow: TextOverflow.ellipsis),
+            // 드물게 쓰는 것은 ⋮ 안에(결정 26)
+            actions: [
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: _muted),
+                onSelected: _assist,
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'summary', child: Text('AI 요약')),
+                  PopupMenuItem(value: 'translate', child: Text('AI 번역')),
+                ],
+              ),
+            ],
+          ),
           floatingActionButton: widget.onAppend == null
               ? null
               : FloatingActionButton.extended(
@@ -1259,6 +1356,7 @@ class _NotePageState extends State<NotePage> {
                   icon: const Icon(Icons.add_comment_outlined),
                   label: const Text('이어 쓰기', style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
+          bottomNavigationBar: _thinking ? const LinearProgressIndicator(minHeight: 2) : null,
           body: FutureBuilder<Map<String, dynamic>>(
             future: _note,
             builder: (context, snap) {
