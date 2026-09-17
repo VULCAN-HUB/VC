@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:vc_app/main.dart';
 import 'package:vc_app/outbox.dart';
 import 'package:vc_app/prefs.dart';
+import 'package:vc_app/shortcuts.dart';
 import 'package:vc_app/vc_api.dart';
 
 // 편의성 손질(2026-09-18 · 오너: 번잡하고 찾기 힘들다) — 노션·에버노트 기준.
@@ -251,4 +252,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(EditorPage), findsOneWidget, reason: '켰는데 바로 새 메모로 안 열린다');
   });
+
+  testWidgets('홈 아이콘 길게 누르기 「새 메모」 — 편집기로 연다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_qa');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+        client: MockClient((req) async => _json({'results': [], 'store': {'notes': 0}})));
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    final fake = _FakeShortcuts();
+    await tester.pumpWidget(MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, shortcuts: fake)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditorPage), findsNothing);
+    fake.on!(HomeShortcuts.newMemo);
+    await tester.pumpAndSettle();
+    expect(find.byType(EditorPage), findsOneWidget, reason: '아이콘 「새 메모」로 편집기가 안 열린다');
+  });
+}
+
+class _FakeShortcuts implements AppShortcuts {
+  ShortcutHandler? on;
+
+  @override
+  void start(ShortcutHandler on) => this.on = on;
 }

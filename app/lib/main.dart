@@ -16,6 +16,7 @@ import 'vc_api.dart';
 import 'pick.dart';
 import 'templates.dart';
 import 'prefs.dart';
+import 'shortcuts.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -576,13 +577,15 @@ class Home extends StatefulWidget {
       required this.outbox,
       required this.onUnauthorized,
       required this.onUnpair,
-      this.prefs});
+      this.prefs,
+      this.shortcuts = const HomeShortcuts()});
 
   final VcApi api;
   final Outbox outbox;
   final VoidCallback onUnauthorized;
   final VoidCallback onUnpair;
   final AppPrefs? prefs;
+  final AppShortcuts shortcuts; // 홈 아이콘 길게 누르기
 
   @override
   State<Home> createState() => _HomeState();
@@ -602,6 +605,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _hello();
+    widget.shortcuts.start((type) {
+      if (!mounted) return;
+      if (type == HomeShortcuts.fromTemplate) {
+        _writeFromTemplate();
+      } else if (type == HomeShortcuts.newMemo) {
+        _write();
+      }
+    });
     // 열면 바로 새 메모(설정) — 첫 화면이 뜬 뒤에
     if (widget.prefs?.openNew == true) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
