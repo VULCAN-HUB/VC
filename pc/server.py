@@ -1455,8 +1455,20 @@ class EBServer(ThreadingHTTPServer):
         """흩어진 메모를 정리 글로 모은다(편의 기능 1·5번 · 1겹 — AI 없이 서식 칸으로)."""
         import consolidate
 
+        import ai_fill
+
         with self._정리잠금:
-            got = consolidate.run(self.notes)
+            # 2겹 — 로컬 대화 모델이 있으면 칸 없는 메모를 몇 장 짐작한다(없으면 쌓인 짐작만 쓴다)
+            모델 = (self.picked.get("using") or {}).get("chat") or ""
+            chat = None
+            if 모델 and (self.cfg.get("backend") or {}).get("kind") == "local":
+                chat = lambda 말: self.backend.chat(말, 모델, temperature=0, max_tokens=300)
+            try:
+                짐작 = ai_fill.run(self.notes, chat)
+            except Exception as e:
+                _알림(f"[정리 짐작 실패] {type(e).__name__}")
+                짐작 = {}
+            got = consolidate.run(self.notes, 짐작)
         if got.get("written"):
             _알림(f"[정리] 제품 {got['products']}개 · 새로 쓴 정리 글 {len(got['written'])}장")
         return got

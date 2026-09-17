@@ -109,8 +109,12 @@ def _is_summary(note: Note, path: str) -> bool:
     return FOLDER in Path(path).parts or TAG in parse_tags(note.body) or note.extra.get("정리") == "VC"
 
 
-def gather(store: Notes) -> tuple[list[Product], list[str]]:
-    """창고를 훑어 제품마다 모은다. (제품들, 확인 필요한 글 제목들)."""
+def gather(store: Notes, guesses: dict[str, dict] | None = None) -> tuple[list[Product], list[str]]:
+    """창고를 훑어 제품마다 모은다. (제품들, 확인 필요한 줄들).
+
+    `guesses` = AI 짐작(2겹, `ai_fill.run`) {글 경로: 칸}. 칸을 안 적은 글에만 쓴다.
+    확인 필요한 줄은 「제목」 또는 「제목 — 짐작: 이름?」.
+    """
     rows = store.conn.execute("SELECT path, title, created FROM notes ORDER BY created, title").fetchall()
     by: dict[str, Product] = {}
     unsure: list[str] = []
@@ -120,6 +124,14 @@ def gather(store: Notes) -> tuple[list[Product], list[str]]:
             continue
         p = props(note.body)
         tags = parse_tags(note.body)
+        짐작 = False
+        g = (guesses or {}).get(path)
+        if "이름" not in p and g:
+            if not g.get("확실"):
+                unsure.append(f"{title} — 짐작: {g.get('제품명', '')}?")
+                continue
+            p = {"이름": g["제품명"], **{k: g[k] for k in ("종류", "받은날", "보낸날", "업체", "상태") if g.get(k)}}
+            짐작 = True
         if "이름" not in p:
             # 제품 태그는 있는데 이름 칸이 없다 — 짐작하지 않고 확인으로 올린다(이름이면 바로 · 애매하면 확인 — 결정 19)
             if "제품" in tags:
@@ -137,11 +149,11 @@ def gather(store: Notes) -> tuple[list[Product], list[str]]:
         # 날짜 칸에 「보냈음」처럼 날짜 없이 적었으면 그 글을 쓴 날로
         wrote = str(created)[:10]
         if "받은날" in p:
-            prod.events.append(Event(got or wrote, "받음", p.get("업체", ""), title))
+            prod.events.append(Event(got or wrote, "받음" + (" (짐작)" if 짐작 else ""), p.get("업체", ""), title))
             prod.got = got or wrote
             prod.move_i, prod.move = i, HAVE
         if "보낸날" in p:
-            prod.events.append(Event(sent or wrote, "보냄", p.get("업체", ""), title))
+            prod.events.append(Event(sent or wrote, "보냄" + (" (짐작)" if 짐작 else ""), p.get("업체", ""), title))
             prod.sent = sent or wrote
             # 한 글에 받은날·보낸날이 둘 다 있으면 늦은 날이 지금이다
             if not ("받은날" in p and (got or wrote) > (sent or wrote)):
@@ -198,14 +210,14 @@ def _list_body(prods: list[Product], unsure: list[str]) -> str:
         parts += [f"## 그 밖 상태 ({len(other)})", ""] + table(other) + [""]
     parts += [f"## 보낸 것 ({len(gone)})", ""] + table(gone) + [""]
     if unsure:
-        parts += ["## 확인 필요 — 제품명 칸이 없다", "", "메모에 `- 제품명 : …` 을 적으면 다음 정리 때 들어간다.", ""]
-        parts += [f"- [[{t}]]" for t in unsure] + [""]
+        parts += ["## 확인 필요", "", "제품명 칸이 없거나, AI 가 짐작한 이름이 메모에 없다. 메모에 `- 제품명 : …` 을 적으면 다음 정리 때 들어간다.", ""]
+        parts += [f"- [[{t.split(' — ')[0]}]]" + (f" — {t.split(' — ', 1)[1]}" if ' — ' in t else "") for t in unsure] + [""]
     return "\n".join(parts)
 
 
-def run(store: Notes) -> dict:
+def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
     """정리 글을 새로 쓴다. 바뀐 글만 쓴다(같으면 안 건드려 이력·동기화가 안 흔들린다)."""
-    prods, unsure = gather(store)
+    prods, unsure = gather(store, guesses)
     folder = store.root / FOLDER
     written = []
 
