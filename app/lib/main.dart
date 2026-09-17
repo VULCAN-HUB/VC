@@ -656,13 +656,53 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   /// 새 메모 · 이어 쓰기 — 전체 화면 편집기. 저장하면 곧장 돌아오고, 보내기는 뒤에서 한다.
-  Future<void> _write({String? title}) async {
+  /// 「새 메모」를 길게 누르면 — 서식을 골라 채운 틀로 새 글(편의 기능 7번 · 단추를 늘리지 않는다 — 결정 26).
+  Future<void> _writeFromTemplate() async {
+    final (List<Tpl>, bool) got;
+    try {
+      got = await _book.load(widget.api);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    if (got.$1.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('서식이 없어 — 컴퓨터 VC 창고 _서식/ 에 md 로 만든다')));
+      return;
+    }
+    final chosen = await showModalBottomSheet<Tpl>(
+      context: context,
+      backgroundColor: _card,
+      builder: (c) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+            child: Text(got.$2 ? '서식으로 새 메모 — 지난번 받은 서식' : '서식으로 새 메모', style: _mono(12, _muted)),
+          ),
+          for (final t in got.$1)
+            ListTile(
+              leading: const Icon(Icons.dashboard_customize_outlined, color: _accent),
+              title: Text(t.name, style: const TextStyle(color: _text)),
+              onTap: () => Navigator.pop(c, t),
+            ),
+        ]),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    await _write(startBody: fillSlots(chosen.body));
+  }
+
+  Future<void> _write({String? title, String? startBody}) async {
     final item = await Navigator.push<OutboxItem>(
       context,
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (_) => EditorPage(
-            outbox: widget.outbox, onSend: _send, templates: () => _book.load(widget.api), fixedTitle: title),
+            outbox: widget.outbox,
+            onSend: _send,
+            templates: () => _book.load(widget.api),
+            fixedTitle: title,
+            startBody: startBody),
       ),
     );
     if (item == null || !mounted) return;
@@ -747,10 +787,15 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               ),
             ]),
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: _write,
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('새 메모', style: TextStyle(fontWeight: FontWeight.w700)),
+          // 누르면 빈 메모 · 길게 누르면 서식으로 새 메모
+          floatingActionButton: GestureDetector(
+            onLongPress: _writeFromTemplate,
+            child: FloatingActionButton.extended(
+              onPressed: _write,
+              // ★ 도움말(tooltip)을 달면 길게 누르기를 도움말이 먼저 가져가 서식 목록이 안 뜬다
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('새 메모', style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
           ),
         ),
       );
@@ -1442,12 +1487,14 @@ class NoteBody extends StatelessWidget {
 
 /// 새 메모 · 이어 쓰기 — 전체 화면 편집기(노션·에버노트처럼). 저장하면 곧장 닫히고 보내기는 뒤에서 한다.
 class EditorPage extends StatelessWidget {
-  const EditorPage({super.key, required this.outbox, required this.onSend, this.templates, this.fixedTitle});
+  const EditorPage(
+      {super.key, required this.outbox, required this.onSend, this.templates, this.fixedTitle, this.startBody});
 
   final Outbox outbox;
   final Future<void> Function() onSend;
   final Future<(List<Tpl>, bool)> Function()? templates;
   final String? fixedTitle;
+  final String? startBody; // 서식에서 새 글 — 채운 틀로 연다
 
   @override
   Widget build(BuildContext context) => Backdrop(
@@ -1463,6 +1510,7 @@ class EditorPage extends StatelessWidget {
             onSend: onSend,
             templates: templates,
             fixedTitle: fixedTitle,
+            startBody: startBody,
             autofocus: true,
             onSaved: (item) => Navigator.pop(context, item),
           ),
@@ -1478,6 +1526,7 @@ class WriteTab extends StatefulWidget {
       this.pick = pickMedia,
       this.templates,
       this.fixedTitle,
+      this.startBody,
       this.autofocus = false,
       this.onSaved});
 
@@ -1486,6 +1535,7 @@ class WriteTab extends StatefulWidget {
   final Picker pick; // 사진·영상 고르기(4단계). 시험에서는 가짜로 갈아 끼운다
   final Future<(List<Tpl>, bool)> Function()? templates; // 서식(5단계) — (틀 목록, 못 닿음)
   final String? fixedTitle; // 이어 쓰기 — 이 제목 글 끝에 붙는다(서버 기본이 덧붙이기)
+  final String? startBody; // 서식에서 새 글
   final bool autofocus;
   // 편집기로 쓸 때 — 저장하면 불린다(보내기는 기다리지 않는다)
   final void Function(OutboxItem item)? onSaved;
@@ -1511,6 +1561,7 @@ class _WriteTabState extends State<WriteTab> {
   void initState() {
     super.initState();
     if (widget.fixedTitle != null) _title.text = widget.fixedTitle!;
+    if (widget.startBody != null) _body.text = widget.startBody!;
     widget.outbox.addListener(_onOutbox);
   }
 

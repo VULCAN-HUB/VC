@@ -129,4 +129,38 @@ void main() {
     expect(find.textContaining('|---|'), findsNothing);
     expect(find.text('근거 정수기 받음 참고'), findsOneWidget);
   });
+
+  testWidgets('새 메모를 길게 누르면 서식으로 새 글 — 채운 틀로 편집기가 열린다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_tpl_new');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
+      if (req.url.path == '/eb/v1/templates') {
+        return _json({
+          'templates': [
+            {'name': '제품', 'body': '- 제품명 : \n- 받은날 : {{날짜}}'}
+          ]
+        });
+      }
+      if (req.url.path == '/eb/v1/hello') return _json({'store': {'notes': 0}});
+      return _json({'results': []});
+    }));
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pump();
+
+    await tester.longPress(find.text('새 메모'));
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('제품'));
+    await tester.pumpAndSettle();
+
+    final body = tester.widget<TextField>(find.byType(TextField).at(1)).controller!.text;
+    expect(body, contains('- 제품명 : '));
+    expect(body, contains('받은날 : ${DateTime.now().year}-'), reason: '서식 자리를 안 채웠다');
+    expect(find.text('새 메모'), findsWidgets);
+  });
 }
