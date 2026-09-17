@@ -47,7 +47,9 @@ String offlineReason(Object e) {
   final m = e.toString().toLowerCase();
   if (e is TimeoutException) return '시간 초과';
   if (m.contains('connection refused')) return 'VC 가 꺼져 있다';
-  if (m.contains('no route') || m.contains('network is unreachable') || m.contains('host is down') ||
+  if (m.contains('no route') ||
+      m.contains('network is unreachable') ||
+      m.contains('host is down') ||
       m.contains('failed host lookup')) {
     return '망이 달라 닿지 않는다';
   }
@@ -73,22 +75,22 @@ class VcError implements Exception {
 
 class VcApi {
   VcApi(this.pairing, {http.Client? client, this.timeout = const Duration(seconds: 10)})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   final Pairing pairing;
   final Duration timeout;
   final http.Client _client;
 
-  Future<Map<String, dynamic>> _call(String method, String path,
-      {Map<String, String>? query, Object? body}) async {
+  Future<Map<String, dynamic>> _call(String method, String path, {Map<String, String>? query, Object? body}) async {
     final uri = pairing.base.replace(path: path, queryParameters: query);
     final headers = {'Authorization': 'Bearer ${pairing.token}', 'Content-Type': 'application/json'};
     final http.Response r;
     try {
-      r = await (method == 'POST'
-              ? _client.post(uri, headers: headers, body: jsonEncode(body))
-              : _client.get(uri, headers: headers))
-          .timeout(timeout);
+      r =
+          await (method == 'POST'
+                  ? _client.post(uri, headers: headers, body: jsonEncode(body))
+                  : _client.get(uri, headers: headers))
+              .timeout(timeout);
     } on Exception catch (e) {
       throw VcOffline(offlineReason(e));
     }
@@ -130,18 +132,19 @@ class VcApi {
   /// 첨부 올리기(4단계) — 사진·영상·녹음을 바이트 그대로. 서버가 **본문에 쓸 이름**을 준다.
   /// 같은 `clientId` 로 다시 보내면 서버는 몸을 안 받고 같은 이름을 준다(대기함 재전송).
   Future<String> attach(String name, List<int> bytes, {String title = '', String? clientId}) async {
-    final uri = pairing.base.replace(path: '/eb/v1/attach', queryParameters: {
-      'name': name,
-      if (title.isNotEmpty) 'title': title,
-      'client_id': ?clientId,
-    });
+    final uri = pairing.base.replace(
+      path: '/eb/v1/attach',
+      queryParameters: {'name': name, if (title.isNotEmpty) 'title': title, 'client_id': ?clientId},
+    );
     final http.Response r;
     try {
       // 영상은 크다 — 글보다 넉넉히 기다린다.
       r = await _client
-          .post(uri,
-              headers: {'Authorization': 'Bearer ${pairing.token}', 'Content-Type': 'application/octet-stream'},
-              body: bytes)
+          .post(
+            uri,
+            headers: {'Authorization': 'Bearer ${pairing.token}', 'Content-Type': 'application/octet-stream'},
+            body: bytes,
+          )
           .timeout(timeout * 12);
     } on Exception catch (e) {
       throw VcOffline(offlineReason(e));
@@ -167,8 +170,11 @@ class VcApi {
   }
 
   /// 고정 · 보관 · 색(편의 기능 18·27·30번). 색 '' 은 지우기.
-  Future<void> mark(String title, {bool? pinned, bool? archived, String? color}) => _call('POST', '/eb/v1/memory/mark',
-      body: {'title': title, 'pinned': ?pinned, 'archived': ?archived, 'color': ?color});
+  Future<void> mark(String title, {bool? pinned, bool? archived, String? color}) => _call(
+    'POST',
+    '/eb/v1/memory/mark',
+    body: {'title': title, 'pinned': ?pinned, 'archived': ?archived, 'color': ?color},
+  );
 
   /// 지우기 — 휴지통으로(지난 판이 남아 되살릴 수 있다).
   Future<void> delete(String title) => _call('POST', '/eb/v1/memory/delete', body: {'title': title});
@@ -187,6 +193,14 @@ class VcApi {
     return f is List ? f.whereType<Map<String, dynamic>>().toList() : [];
   }
 
+  /// 확장 플러그인(편의 기능 31번 · 결정 23) — **보기만** 한다. [{name, version, note, on, error}]
+  ///
+  /// ★ 폰에서 켜고 끄는 길은 일부러 없다 — 코드는 컴퓨터에서 돌고, 켜는 일은 그 컴퓨터 앞에서 한다.
+  Future<List<Map<String, dynamic>>> plugins() async {
+    final p = (await _call('GET', '/eb/v1/plugins'))['plugins'];
+    return p is List ? p.whereType<Map<String, dynamic>>().toList() : [];
+  }
+
   /// 오늘 일지(편의 기능 23번) — 없으면 만들고 제목을 준다.
   Future<String> daily() async => '${(await _call('POST', '/eb/v1/daily', body: {}))['title'] ?? ''}';
 
@@ -200,21 +214,25 @@ class VcApi {
   /// 찾기 1단 — 몸은 안 온다. 빈 말이면 창고 앞머리.
   Future<List<Map<String, dynamic>>> search(String q, {int k = 20, bool archived = false}) async {
     // card=1 — 사람이 훑는 목록 카드(태그 · 첫 사진 · 미리보기). 보관한 글은 archived 일 때만.
-    final results = (await _call('GET', '/eb/v1/memory/search',
-        query: {'q': q, 'k': '$k', 'card': '1', if (archived) 'archived': '1'}))['results'];
+    final results = (await _call(
+      'GET',
+      '/eb/v1/memory/search',
+      query: {'q': q, 'k': '$k', 'card': '1', if (archived) 'archived': '1'},
+    ))['results'];
     return results is List ? results.whereType<Map<String, dynamic>>().toList() : [];
   }
 
   /// 찾기 2단 — 고른 글을 펼친다. q 를 주면 걸린 자리 둘레만.
   Future<Map<String, dynamic>> note(String title, {String q = '', String? folder, bool back = true}) => _call(
-      'GET', '/eb/v1/memory/note',
-      query: {'title': title, if (q.isNotEmpty) 'q': q, 'folder': ?folder, if (back) 'back': '1'});
+    'GET',
+    '/eb/v1/memory/note',
+    query: {'title': title, if (q.isNotEmpty) 'q': q, 'folder': ?folder, if (back) 'back': '1'},
+  );
 
   /// 적기 — 같은 제목이 있으면 뒤에 덧붙는다. 실제로 저장된 제목을 준다.
   /// `clientId` 가 같으면 서버는 한 번만 받는다(다시 보내도 안 겹친다).
   Future<String> write(String title, String text, {String? clientId}) async {
-    final j = await _call('POST', '/eb/v1/memory',
-        body: {'title': title, 'text': text, 'client_id': ?clientId});
+    final j = await _call('POST', '/eb/v1/memory', body: {'title': title, 'text': text, 'client_id': ?clientId});
     return '${j['saved_as'] ?? j['title'] ?? title}';
   }
 }

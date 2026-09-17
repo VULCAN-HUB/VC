@@ -332,13 +332,23 @@ def _dialog_css(theme) -> str:
         QComboBox#pick {{ min-height: 22px; }}
         QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}   /* 안 입히면 체크무늬로 그려졌다 */
         QLabel#note {{ color: {css(T.DIM, 0.45)}; font-size:{글자(10)}; }}
+        /* ★★ **켜고 끄는 네모를 그린다.** 안 그리면 켠 것만 ✓ 로 보이고 **꺼진 줄에는 아무
+           표시가 없어** 여기가 누르는 자리인지 모른다(맥에서 눈으로 보고 잡았다). */
+        QCheckBox {{ color: {T.TEXT.name()}; font-size:{글자(12)}; spacing: 8px; padding: 2px 0; }}
+        QCheckBox::indicator {{ width: 13px; height: 13px; border-radius: 3px;
+                                border: 1px solid {css(T.ACCENT, 0.40)}; background: {css(T.ACCENT, 0.05)}; }}
+        QCheckBox::indicator:hover {{ border-color: {T.ACCENT.name()}; background: {css(T.ACCENT, 0.12)}; }}
+        QCheckBox::indicator:checked {{ background: {T.ACCENT.name()}; border-color: {T.ACCENT.name()}; }}
+        QCheckBox::indicator:disabled {{ border-color: {css(T.DIM, 0.35)}; background: transparent; }}
+        /* 못 실은 확장 · 「코드가 돈다」 경고 — 흐린 설명 색이면 안 읽고 켠다(경고색으로) */
+        QCheckBox[vc_bad="true"], QLabel[vc_bad="true"] {{ color: {T.WARN.name()}; }}
         QLabel#say {{ color: {T.TEXT.name()}; font-size:{글자(11)}; padding: 8px 12px;
                       background: {css(T.ACCENT, 0.05)}; border-left: 2px solid {T.ACCENT.name()}; }}
     """
 
 
 def open_dialog(win, notes: Notes):
-    from PyQt5.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                  QListWidget, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
                                  QVBoxLayout, QWidget)
 
@@ -592,6 +602,94 @@ def open_dialog(win, notes: Notes):
     폰틀.addWidget(창.폰QR)
     폰틀.addStretch(1)
 
+    # ── 확장(오너 결정 23 · 편의 기능 31번). **기본은 다 꺼짐** — 켜는 일은 이 컴퓨터 앞에서만 한다.
+    확장틀, _ = 쪽("확장", "확장 하나 = 앱 자리 `plugins/이름/` 폴더(`plugin.json` + `main.py`). "
+                        "켠 것만 돌고, 하나가 터져도 VC 는 그 확장만 끄고 계속 산다.")
+    import plugins as 확장들
+
+    확장경고 = QLabel("⚠ 확장은 이 컴퓨터에서 코드로 돈다. 만든 사람을 알거나 직접 읽어 본 것만 켠다. "
+                   "폰 앱에서는 확장이 돌지 않는다(폰에서 코드를 돌리지 않는다는 안전 원칙).")
+    확장경고.setObjectName("note")
+    확장경고.setProperty("vc_bad", True)     # 흐린 설명 색이면 이 줄을 안 읽고 켠다
+    확장경고.setWordWrap(True)
+    확장틀.addWidget(확장경고)
+
+    창.확장칸들: dict[str, QCheckBox] = {}
+    확장목록 = QVBoxLayout()
+    확장목록.setSpacing(6)
+    확장틀.addLayout(확장목록)
+    확장안내 = QLabel("")
+    확장안내.setObjectName("note")
+    확장안내.setWordWrap(True)
+    확장틀.addWidget(확장안내)
+
+    def _확장켜기(이름: str, 켬: bool) -> None:
+        확장들.enable(이름, 켬)
+        # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다.
+        말 = "켰다" if 켬 else "껐다"
+        try:
+            import server as _서버
+
+            if _서버.RUNNING is not None:
+                _서버.RUNNING.reload_plugins()
+                말 += " — 저장 알림·명령은 지금부터, 지시에 반응하는 부품은 VC 를 다시 켤 때 붙는다"
+            else:
+                말 += " — VC 를 다시 켜면 돈다"
+        except Exception as e:      # 서버가 없는 채로 창만 띄운 때(시험·--no-server)
+            말 += f" — 지금은 못 실었다({type(e).__name__}) · 다시 켜면 돈다"
+        확장안내.setText(f"「{이름}」 을 {말}.")
+
+    def _확장그리기() -> None:
+        for 칸 in 창.확장칸들.values():
+            칸.setParent(None)
+        창.확장칸들.clear()
+        찾음 = 확장들.find()
+        for 정보 in 찾음:
+            꼬리 = f" · v{정보.version}" if 정보.version else ""
+            칸 = QCheckBox(f"{정보.name}{꼬리} — {정보.note or '설명 없음'}")
+            칸.setChecked(정보.enabled)
+            if 정보.error:
+                칸.setEnabled(False)
+                칸.setText(f"{정보.name}{꼬리} — 못 실었다: {정보.error}")
+                칸.setProperty("vc_bad", True)
+            else:
+                칸.toggled.connect(lambda 켬, 이=정보.name: _확장켜기(이, 켬))
+            창.확장칸들[정보.name] = 칸
+            확장목록.addWidget(칸)
+        확장안내.setText("" if 찾음 else
+                      f"확장이 없다. 「예제 깔기」를 누르면 {확장들.root()} 에 예제 하나가 생긴다(꺼진 채로).")
+
+    확장단추줄 = QHBoxLayout()
+    확장폴더단추 = QPushButton("확장 폴더 열기")
+    확장예제단추 = QPushButton("예제 깔기")
+    확장다시단추 = QPushButton("다시 읽기")
+    확장예제단추.setObjectName("primary")
+
+    def _확장폴더() -> None:
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+
+        자리 = 확장들.root()
+        자리.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(자리)))
+
+    def _확장예제() -> None:
+        자리 = 확장들.write_sample()
+        _확장그리기()
+        확장안내.setText(f"예제를 깔았다 — {자리} · 꺼진 채로 있다. 열어 읽어 보고 켠다.")
+
+    확장폴더단추.clicked.connect(lambda: _확장폴더())
+    확장예제단추.clicked.connect(lambda: _확장예제())
+    확장다시단추.clicked.connect(lambda: _확장그리기())
+    for 단추 in (확장폴더단추, 확장예제단추, 확장다시단추):
+        확장단추줄.addWidget(단추)
+    확장단추줄.addStretch(1)
+    확장틀.addLayout(확장단추줄)
+    확장틀.addStretch(1)
+    창.확장그리기 = _확장그리기
+    창.확장예제깔기 = _확장예제
+    _확장그리기()
+
     # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
     답, _옛남2 = from_body(옛.body if 옛 else "")
@@ -812,6 +910,31 @@ def _self_check() -> None:
             다시.칸들["음식"]["좋아하는 음식"].setText("")
             다시.저장()
             assert "좋아하는 음식" not in n.read(PROFILE_TITLE).body, "비운 답이 남는다"
+            # ★★ 확장(결정 23 · 편의 기능 31번) — **깔아도 꺼진 채**고, 켜면 설정에 남는다.
+            import plugins as 확장들
+
+            확장창 = open_dialog(win, n)
+            assert not 확장창.확장칸들, "빈 창고에 확장이 있다고 나온다"
+            확장창.확장예제깔기()
+            assert list(확장창.확장칸들) == ["글자수"], list(확장창.확장칸들)
+            칸 = 확장창.확장칸들["글자수"]
+            assert 칸.isEnabled() and not 칸.isChecked(), "깔자마자 켜져 있다 — 코드가 묻지 않고 돈다"
+            assert not 확장들.enabled_names(), 확장들.enabled_names()
+            칸.setChecked(True)      # 사람이 눌렀을 때와 같은 길
+            assert 확장들.enabled_names() == {"글자수"}, paths.load_config().get("확장")
+            칸.setChecked(False)
+            assert not 확장들.enabled_names(), "끈 것이 설정에 남는다"
+            # 깨진 확장은 목록에 뜨지만 **못 켠다** — 까닭이 이름 자리에 적힌다
+            (확장들.root() / "깨진것").mkdir(parents=True, exist_ok=True)
+            (확장들.root() / "깨진것" / "plugin.json").write_text("{깨진", encoding="utf-8")
+            확장창.확장그리기()
+            깨진 = 확장창.확장칸들["깨진것"]
+            assert not 깨진.isEnabled() and "못 실었다" in 깨진.text(), 깨진.text()
+            # ★ **꺼진 줄에도 네모가 보여야 한다** — 안 그리면 켠 것만 ✓ 로 보여 누르는 자리인 줄
+            #   모른다(맥에서 눈으로 보고 잡았다). 옷에 네모가 들었는지 여기서 지킨다.
+            assert "QCheckBox::indicator" in _dialog_css(__import__("theme")), "켜고 끄는 네모를 안 그린다"
+            확장창.deleteLater()
+
             # 저장이 막히면 창을 안 닫고 알린다 — 적은 것이 사라지지 않게
             막힘 = open_dialog(win, n)
             막힘.칸들["음식"]["좋아하는 음식"].setText("라면")

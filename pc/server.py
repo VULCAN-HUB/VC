@@ -34,6 +34,7 @@ import brain
 import model_store
 import models_config
 import notes
+import plugins as 확장들
 import remote
 import skills
 from eb_protocol import PROTOCOL_VERSION, Hello, LogEvent
@@ -272,11 +273,17 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # 벡터를 못 만들어도 저장은 끝났다. 다만 **방금 쓴 글이 뜻으로 안 찾히는 것**이라 남긴다.
             _알림(f"[뜻 벡터] 방금 쓴 글을 못 만들었다 — {type(e).__name__}: {e}")
+        # 확장에 「글이 저장됐다」고 알린다(결정 23). **확장이 터져도 저장은 이미 끝났다** —
+        # 예외는 `fire_saved` 안에서 잡혀 자국으로만 간다.
+        저장제목 = notes.제목맞춤(title)
+        실림 = getattr(self.server, "plugins", None)
+        if 실림:
+            실림.fire_saved(저장제목, log=_알림)
         # ★ 절대 경로는 안 싣는다 — 집 폴더(사용자 이름)가 들어 있고, AI 는 제목으로 부르므로 쓸 데가 없다(쓸 때마다 글자만 탄다).
         답 = {"title": title, "mode": mode}
         # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
         #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
-        if (저장제목 := notes.제목맞춤(title)) != title:
+        if 저장제목 != title:
             답["saved_as"] = 저장제목
         # ★ **쓴 자리에서 뜻이 가까운 글을 알려 준다**(제목 셋, 60자쯤). 잇기는 **선택**이다 —
         #   저장소 규칙 1조가 「[[링크]] 를 일부러 넣을 필요 없다, 뜻 검색·비슷한 것 줄이 대신한다」
@@ -353,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/plugins", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task")
@@ -454,6 +461,16 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/templates":
             n = self.server.notes
             return self._send(200, {"templates": [{"name": t, "body": n.template(t)} for t in n.templates()]})
+
+        # 확장 플러그인(결정 23 · 편의 기능 31번) — **보기만** 한다.
+        # ★ 폰에서 확장을 켜고 끄는 길은 일부러 안 낸다 — 코드가 도는 곳은 컴퓨터이고,
+        #   「이 컴퓨터에서 코드가 돈다」 경고를 보고 켜는 일은 그 컴퓨터 앞에서 한다(안전 원칙).
+        if url.path == "/eb/v1/plugins":
+            실림 = getattr(self.server, "plugins", None)
+            정보 = 실림.infos if 실림 else 확장들.find(cfg=self.server.cfg)
+            return self._send(200, {"plugins": [
+                {"name": i.name, "version": i.version, "note": i.note,
+                 "on": i.enabled, "error": i.error} for i in 정보]})
 
         # 「상태·기록」(결정 17 ③) — 폰 ⋮ 메뉴가 부른다. 기록 내용·글 이름·집 경로는 가린다.
         if url.path == "/eb/v1/status":
@@ -1393,6 +1410,11 @@ def _모델자리(설정된: str) -> str:
     return str(paths.gguf_dir())
 
 
+#: 지금 떠 있는 서버. **설정 창이 확장을 켜고 끈 뒤 곧바로 다시 싣기 위해서만** 쓴다
+#: (창 쪽은 서버 객체를 안 들고 있었다 — 없으면 「다시 켜야 적용된다」밖에 할 말이 없다).
+RUNNING: "EBServer | None" = None
+
+
 class EBServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -1427,12 +1449,52 @@ class EBServer(ThreadingHTTPServer):
         self.artifacts = Path(cfg.get("artifact_dir") or paths.기계자리("data/artifacts"))
         self.artifacts.mkdir(parents=True, exist_ok=True)
 
+        # ★★ 확장 플러그인(결정 23 · 편의 기능 31번) — **켜 둔 것만** 싣는다.
+        #   싣다가 터진 확장은 그것만 안 실리고 까닭이 자국에 남는다(VC 는 산다).
+        #   ※ `plugins_dir` 은 검사용 — 평소에는 앱 자리 `plugins/` 를 본다.
+        self.plugins = 확장들.load(cfg.get("plugins_dir") or None, store=note_store, cfg=cfg, log=_알림)
+
         # 원격에서 들어온 지시를 처리할 오케스트레이터. 폰과 같은 부품·같은 1단 모델을 쓴다.
         mods = build_modules(self.backend, self.picked["using"]["vision"]
                              or self.picked["using"]["chat"])
+        mods += self._확장부품(self.plugins)
         self.eb = Orchestrator(mods, brain=brain.build(mods, self.skills.all()),
                                log=self.store.add_log)
         self.eb.load_skills(self.skills.all())
+
+        global RUNNING
+        RUNNING = self
+
+    def reload_plugins(self) -> "확장들.Loaded":
+        """설정에서 켜고 끈 뒤 다시 싣는다 — VC 를 다시 켜지 않아도 저장 알림·명령이 바로 바뀐다.
+
+        ※ **지시에 반응하는 부품은 다시 켤 때 붙는다** — 오케스트레이터는 켤 때 한 번 짜인다.
+          설정 창이 그렇게 적어 준다(할 수 없는 것을 된다고 말하지 않는다).
+        """
+        self.plugins = 확장들.load(self.cfg.get("plugins_dir") or None,
+                                 store=self.notes, cfg=None, log=_알림)
+        return self.plugins
+
+    @staticmethod
+    def _확장부품(실림: 확장들.Loaded) -> list:
+        """확장이 낸 부품을 오케스트레이터의 `ModuleSpec` 으로 옮긴다.
+
+        ★ **부품이 터져도 지시 처리는 계속된다** — 확장 함수를 감싸 까닭만 답한다.
+          감싸지 않으면 확장 하나의 오타가 「지시를 못 받는 VC」가 된다.
+        """
+        from orchestrator import ModuleSpec
+
+        만든것 = []
+        for 확장, m in 실림.modules:
+            def 감싸기(글, _m=m, _확장=확장):
+                try:
+                    return str(_m.run(getattr(글, "text", 글)))
+                except Exception as e:
+                    _알림(f"[확장 {_확장}] 부품 「{_m.name}」 이 터졌다 — {type(e).__name__}: {e}")
+                    return f"확장 「{_확장}」 이 답을 못 냈다"
+            만든것.append(ModuleSpec(name=f"확장:{m.name}", triggers=m.triggers,
+                                    run=감싸기, tiers=["pc"]))
+        return 만든것
 
     def set_model(self, role: str, name: str) -> bool:
         """사용자가 고른 모델을 저장하고 바로 반영한다.
@@ -1724,6 +1786,8 @@ def _self_check() -> None:
     note_store = Notes(Path(tmp.name) / "notes")
     # ★ 결과물 자리를 준다 — 안 주면 진짜 기록 자리에 `data/artifacts/*.txt` 가 검사마다 쌓였다(2026-09-15, 33개).
     cfg["artifact_dir"] = str(Path(tmp.name) / "artifacts")
+    # 확장도 검사 자리에서만 본다 — 진짜 앱 자리의 확장이 검사에 끼면 안 된다
+    cfg["plugins_dir"] = str(Path(tmp.name) / "plugins")
     server = EBServer(("127.0.0.1", 0), cfg, store, note_store)
     assert paths.data_dir() not in server.artifacts.parents, "자체점검이 진짜 기록 자리에 결과물을 남긴다"
 
@@ -1836,6 +1900,44 @@ def _self_check() -> None:
     assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
     assert sum(f["notes"] for f in _폴) >= 1
     assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
+
+    # --- 확장 플러그인(결정 23 · 편의 기능 31번) ---
+    _확장자리 = Path(tmp.name) / "plugins"
+    확장들.write_sample(_확장자리)
+    # ★ 폴더에 있는 것만으로는 **안 돈다.** 목록에는 뜨고 `on` 은 거짓이다.
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={}, log=lambda _: None)
+    _확 = call("GET", "/eb/v1/plugins")[1]["plugins"]
+    assert [x["name"] for x in _확] == ["글자수"] and _확[0]["on"] is False, _확
+    assert _확[0]["note"] and not _확[0]["error"], _확
+    assert call("GET", "/eb/v1/plugins", token="wrong-token")[0] == 401
+    # 켜면 저장 뒤 알림이 온다
+    _확말 = []
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={"확장": {"글자수": True}}, log=_확말.append)
+    assert call("GET", "/eb/v1/plugins")[1]["plugins"][0]["on"] is True
+    _확말.clear()
+    assert call("POST", "/eb/v1/memory", {"title": "확장 알림 시험", "text": "한 줄"})[0] == 201
+    assert any("저장됨 — 확장 알림 시험" in x for x in _확말), _확말
+    # ★★ **확장이 터져도 저장은 된다.** 확장 하나가 글 쓰기를 막으면 안 된다.
+    _터짐자리 = _확장자리 / "터지는것"
+    _터짐자리.mkdir(parents=True, exist_ok=True)
+    (_터짐자리 / "plugin.json").write_text('{"name": "터지는것"}', encoding="utf-8")
+    (_터짐자리 / "main.py").write_text(
+        "def register(vc):\n    vc.on_saved(lambda 제목: 1 / 0)\n", encoding="utf-8")
+    server.plugins = 확장들.load(_확장자리, store=server.notes,
+                              cfg={"확장": {"글자수": True, "터지는것": True}}, log=_확말.append)
+    assert call("POST", "/eb/v1/memory", {"title": "확장 터짐 시험", "text": "두 줄"})[0] == 201, "확장이 터져 저장이 막혔다"
+    assert server.notes.read("확장 터짐 시험") is not None
+    # 확장이 낸 부품은 `확장:` 이름으로 오케스트레이터에 붙는다(터지면 까닭만 답한다)
+    _부품자리 = _확장자리 / "부품낸것"
+    _부품자리.mkdir(parents=True, exist_ok=True)
+    (_부품자리 / "plugin.json").write_text('{"name": "부품낸것"}', encoding="utf-8")
+    (_부품자리 / "main.py").write_text(
+        "def register(vc):\n    vc.module('나쁜부품', ['부품시험'], lambda 글: 1 / 0)\n", encoding="utf-8")
+    _실림 = 확장들.load(_확장자리, store=server.notes, cfg={"확장": {"부품낸것": True}}, log=_확말.append)
+    _옮김 = EBServer._확장부품(_실림)
+    assert [m.name for m in _옮김] == ["확장:나쁜부품"] and _옮김[0].matches("부품시험 해줘"), _옮김
+    assert "답을 못 냈다" in _옮김[0].run("부품시험"), "부품이 터져 지시 처리가 멈춘다"
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={}, log=lambda _: None)  # 뒤 검사에 끼지 않게 다 끈다
 
     # --- 오늘 일지 · 할 일 체크(편의 기능 23·26번) ---
     _상, _오늘 = call("POST", "/eb/v1/daily", {})

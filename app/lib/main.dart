@@ -152,21 +152,20 @@ class VcApp extends StatelessWidget {
   const VcApp({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      MaterialApp(
-        title: 'VC',
-        debugShowCheckedModeBanner: false,
-        theme: _theme(),
-        // 날짜·때 고르개 단추가 영어(OK·Cancel)로 떴다 — 한국어로
-        locale: const Locale('ko'),
-        supportedLocales: const [Locale('ko'), Locale('en')],
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        home: const Root(),
-      );
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'VC',
+    debugShowCheckedModeBanner: false,
+    theme: _theme(),
+    // 날짜·때 고르개 단추가 영어(OK·Cancel)로 떴다 — 한국어로
+    locale: const Locale('ko'),
+    supportedLocales: const [Locale('ko'), Locale('en')],
+    localizationsDelegates: const [
+      GlobalMaterialLocalizations.delegate,
+      GlobalWidgetsLocalizations.delegate,
+      GlobalCupertinoLocalizations.delegate,
+    ],
+    home: const Root(),
+  );
 }
 
 // ── 공용 조각 ────────────────────────────────────────────────────────────────
@@ -926,7 +925,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       } else if (v == 'settings') {
                         final pr = widget.prefs;
                         if (pr != null) {
-                          Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsPage(prefs: pr, alarms: widget.alarms)));
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => SettingsPage(prefs: pr, alarms: widget.alarms),
+                            ),
+                          );
                         }
                       } else if (v == 'send') {
                         _send();
@@ -1200,6 +1204,8 @@ class StatusPage extends StatefulWidget {
 class _StatusPageState extends State<StatusPage> {
   Map<String, dynamic>? _s;
   String? _why;
+  // 컴퓨터에서 도는 확장(편의 기능 31번 · 결정 23). 폰은 **보기만** 한다 — 단추를 새로 달지 않는다(결정 26).
+  List<Map<String, dynamic>> _plugins = const [];
 
   @override
   void initState() {
@@ -1210,9 +1216,17 @@ class _StatusPageState extends State<StatusPage> {
   Future<void> _load() async {
     try {
       final s = await widget.api.status();
+      // 확장 목록은 곁가지다 — 못 받아도 상태 화면은 그대로 뜬다(옛 VC 는 이 길이 없어 404 를 준다).
+      List<Map<String, dynamic>> ext = const [];
+      try {
+        ext = await widget.api.plugins();
+      } on VcError {
+        ext = const [];
+      }
       if (mounted) {
         setState(() {
           _s = s;
+          _plugins = ext;
           _why = null;
         });
       }
@@ -1281,6 +1295,15 @@ class _StatusPageState extends State<StatusPage> {
               SectionLabel('컴퓨터', trailing: up == null ? '—' : '켠 지 ${up ~/ 60}분'),
               if (_why != null) Text(_why!, style: _mono(11, _warn)),
               if (deaths > 0) Text('⚠ 죽음 기록 $deaths줄 — 컴퓨터 VC 에서 「문제 알리기」', style: _mono(11, _warn)),
+              if (_plugins.isNotEmpty)
+                SectionLabel('확장', trailing: '${_plugins.where((p) => p['on'] == true).length}개 켜짐'),
+              for (final p in _plugins)
+                Text(
+                  '${p['on'] == true ? '● ' : '○ '}${p['name']}'
+                  '${(p['error'] as String?)?.isNotEmpty == true ? ' — 못 실었어' : ''}',
+                  style: _mono(11, p['on'] == true ? _text : _muted),
+                ),
+              if (_plugins.isNotEmpty) Text('확장은 컴퓨터에서만 돌아 — 켜고 끄는 건 컴퓨터 VC 설정 「확장」', style: _mono(10, _muted)),
               SectionLabel('최근 기록', trailing: '${trail.length}줄'),
               for (final t in trail.reversed) Text('$t', style: _mono(10, _muted)),
             ],
@@ -1588,7 +1611,7 @@ class _BrowseTabState extends State<BrowseTab> {
       ),
     );
     // ★ 창이 닫히는 애니메이션이 끝나기 전에 없애면 「disposed 된 것을 썼다」로 터진다 — 한 박자 뒤에
-  Future<void>.delayed(const Duration(milliseconds: 400), ctl.dispose);
+    Future<void>.delayed(const Duration(milliseconds: 400), ctl.dispose);
     if (name == null || name.trim().isEmpty || !mounted) return;
     await book.addSmart(SmartFolder(name: name.trim(), q: _q.text.trim(), filter: _filter));
     if (!mounted) return;
@@ -1776,7 +1799,7 @@ class _BrowseTabState extends State<BrowseTab> {
                             folder: h['folder'] as String?,
                             onAppend: widget.onAppend,
                             onSaveLine: widget.onSaveLine,
-                        alarms: widget.alarms,
+                            alarms: widget.alarms,
                           ),
                         ),
                       ),
@@ -2117,7 +2140,9 @@ class _NotePageState extends State<NotePage> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return const Center(child: Text('못 열었어', style: TextStyle(color: _muted)));
+            return const Center(
+              child: Text('못 열었어', style: TextStyle(color: _muted)),
+            );
           }
           final j = snap.data ?? {};
           return RefreshIndicator(
@@ -2259,14 +2284,7 @@ Future<String?> editProp(BuildContext context, String key, String value) async {
 /// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
-  const NoteBody({
-    super.key,
-    required this.text,
-    required this.api,
-    this.onEditProp,
-    this.onLink,
-    this.onTask,
-  });
+  const NoteBody({super.key, required this.text, required this.api, this.onEditProp, this.onLink, this.onTask});
 
   final String text;
   final VcApi api;
@@ -2513,20 +2531,26 @@ class NoteBody extends StatelessWidget {
             onTap: onTask == null ? null : () => onTask(nth, !done),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Icon(done ? Icons.check_box : Icons.check_box_outline_blank,
-                    size: 20, color: done ? _accent : _muted),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label(task.group(2)!),
-                    style: _style.copyWith(
-                      color: done ? _muted : _text,
-                      decoration: done ? TextDecoration.lineThrough : null,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    done ? Icons.check_box : Icons.check_box_outline_blank,
+                    size: 20,
+                    color: done ? _accent : _muted,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      label(task.group(2)!),
+                      style: _style.copyWith(
+                        color: done ? _muted : _text,
+                        decoration: done ? TextDecoration.lineThrough : null,
+                      ),
                     ),
                   ),
-                ),
-              ]),
+                ],
+              ),
             ),
           ),
         );
@@ -2574,9 +2598,8 @@ class NoteBody extends StatelessWidget {
   static final _comment = RegExp(r'%%[\s\S]*?%%');
 
   /// 글 앞쪽(`upto` 전)에 할 일이 몇 개인지 — 서버가 세는 차례와 맞춘다.
-  static int _tasksBefore(String text, int upto) => _task
-      .allMatches(text.substring(0, upto).split('\n').join('\n'))
-      .length;
+  static int _tasksBefore(String text, int upto) =>
+      _task.allMatches(text.substring(0, upto).split('\n').join('\n')).length;
 
   @override
   Widget build(BuildContext context) {
