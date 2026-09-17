@@ -111,6 +111,11 @@ class VcApi {
     return store is Map ? store['notes'] as int? : null;
   }
 
+  /// 첨부 받아 보기(글 보기의 사진). 열쇠는 **머리에만** 싣는다 — 주소에 넣으면 기록·캐시에 남는다.
+  Uri attachmentUri(String name) => pairing.base.replace(path: '/eb/v1/attach', queryParameters: {'name': name});
+
+  Map<String, String> get authHeaders => {'Authorization': 'Bearer ${pairing.token}'};
+
   /// 서식(5단계) — 창고 `_서식/` 의 틀. 자리(`{{날짜}}`)는 안 채운 채로 온다.
   Future<List<({String name, String body})>> templates() async {
     final list = (await _call('GET', '/eb/v1/templates'))['templates'];

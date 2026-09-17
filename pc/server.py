@@ -331,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates","/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach")
@@ -384,6 +384,26 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        # 첨부 받아 보기 — 폰 글 보기가 사진을 그린다(오너 실기 2026-09-16: 앱에서 사진이 안 보였다).
+        # 이름만 받는다 — 경로 성분은 버리고 첨부 꼴만, 창고 안에서만 찾는다.
+        if url.path == "/eb/v1/attach":
+            name = (parse_qs(url.query).get("name") or [""])[0]
+            path = self.server.notes.attachment_path(Path(name).name) if name else None
+            if path is None or not path.is_file():
+                return self._send(404, {"error": "없는 첨부", "name": name[:80]})
+            import mimetypes
+
+            data = path.read_bytes()
+            꼴 = ("image/heic" if path.suffix.lower() in (".heic", ".heif")
+                 else mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", 꼴)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+            return None
 
         # 서식을 폰까지(5단계 · 결정 19) — 폰 적기 탭이 부른다. `{{날짜}}` 같은 자리는 폰이 **적는 순간** 채운다.
         if url.path == "/eb/v1/templates":
@@ -1588,6 +1608,15 @@ def _self_check() -> None:
     assert _s2 == 200 and _a2.get("duplicate") and _a2["name"] == _a1["name"], "폰이 다시 보내면 사진이 두 장 생긴다"
     call("POST", "/eb/v1/memory", {"title": "사진 시험", "text": f"받은 제품\n\n![[{_a1['name']}]]"})
     assert _a1["name"] in server.notes.read("사진 시험").attachments(), "받은 이름으로 쓴 글이 첨부를 안 가리킨다"
+    # 폰 글 보기가 사진을 받아 그린다 — 열쇠가 있어야 하고, 올린 바이트 그대로, 창고 밖은 못 연다
+    import urllib.parse
+    _req = urllib.request.Request(base + "/eb/v1/attach?" + urllib.parse.urlencode({"name": _a1["name"]}),
+                                  headers={"Authorization": "Bearer test-token"})
+    with urllib.request.urlopen(_req, timeout=5) as _r:
+        assert _r.read() == b"heic-bytes", "올린 사진과 받은 사진이 다르다"
+        assert _r.headers["Content-Type"] == "image/heic", _r.headers["Content-Type"]
+    assert call("GET", "/eb/v1/attach?" + urllib.parse.urlencode({"name": _a1["name"]}), token="wrong-token")[0] == 401
+    assert call("GET", "/eb/v1/attach?name=..%2F..%2Feb_config.json")[0] == 404, "창고 밖 파일을 연다"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을

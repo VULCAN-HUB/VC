@@ -1007,10 +1007,7 @@ class _NotePageState extends State<NotePage> {
               return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
                 if (widget.folder != null) Text('// ${widget.folder}', style: _mono(11, _muted)),
                 const SizedBox(height: 8),
-                _Panel(
-                  child: SelectableText('${j['text'] ?? ''}',
-                      style: const TextStyle(color: _text, fontSize: 15.5, height: 1.7)),
-                ),
+                _Panel(child: NoteBody(text: '${j['text'] ?? ''}', api: widget.api)),
                 if (j['cut'] == true)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
@@ -1020,6 +1017,71 @@ class _NotePageState extends State<NotePage> {
             },
           ),
         ),
+      );
+}
+
+/// 글 몸 — `![[사진.heic]]` 는 사진으로, 영상·녹음·pdf 는 📎 칸으로.
+/// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
+class NoteBody extends StatelessWidget {
+  const NoteBody({super.key, required this.text, required this.api});
+
+  final String text;
+  final VcApi api;
+
+  static final _embed = RegExp(r'!\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]');
+  static const _imageExt = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif'};
+  static const _fileExt = {'.pdf', '.mov', '.mp4', '.m4v', '.m4a', '.aac', '.mp3', '.wav', '.svg'};
+  static const _style = TextStyle(color: _text, fontSize: 15.5, height: 1.7);
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <Widget>[];
+    var at = 0;
+    void words(String s) {
+      if (s.trim().isNotEmpty) parts.add(SelectableText(s.trim(), style: _style));
+    }
+
+    for (final m in _embed.allMatches(text)) {
+      final name = m.group(1)!.trim();
+      final dot = name.lastIndexOf('.');
+      final ext = dot < 0 ? '' : name.substring(dot).toLowerCase();
+      if (!_imageExt.contains(ext) && !_fileExt.contains(ext)) continue; // 글 끼움은 글자 그대로 둔다
+      words(text.substring(at, m.start));
+      if (_imageExt.contains(ext)) {
+        parts.add(Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.network(api.attachmentUri(name).toString(),
+                headers: api.authHeaders,
+                fit: BoxFit.contain,
+                semanticLabel: name,
+                errorBuilder: (_, _, _) => _fileTile(name, '사진을 못 불러왔어 — 컴퓨터 연결을 봐 줘')),
+          ),
+        ));
+      } else {
+        parts.add(_fileTile(name, '영상·녹음·문서는 컴퓨터 VC 에서 연다'));
+      }
+      at = m.end;
+    }
+    words(text.substring(at));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: parts);
+  }
+
+  static Widget _fileTile(String name, String hint) => Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(10)),
+        child: Row(children: [
+          const Icon(Icons.attach_file, size: 18, color: _accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name, style: const TextStyle(color: _text)),
+              Text(hint, style: _mono(10, _muted)),
+            ]),
+          ),
+        ]),
       );
 }
 
@@ -1215,6 +1277,8 @@ class _WriteTabState extends State<WriteTab> {
           const SectionLabel('새 글'),
           TextField(
             controller: _title,
+            // 글칸 밖을 누르면 자판이 내려간다(노트앱이 다 그렇다) — 전에는 제목을 눌러 ✓ 를 눌러야 내려갔다(오너 실기).
+            onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
             decoration: const InputDecoration(
                 hintText: '제목 — 비우면 오늘 날짜', prefixIcon: Icon(Icons.title, color: _muted)),
           ),
@@ -1233,6 +1297,12 @@ class _WriteTabState extends State<WriteTab> {
                 tooltip: '사진첩에서 고르기',
                 onPressed: _busy ? null : () => _pick(PickHow.library),
                 icon: const Icon(Icons.photo_library_outlined, color: _accent)),
+            // 자판이 올라와 있을 때만 — 긴 글을 쓰다 바로 내린다
+            if (MediaQuery.viewInsetsOf(context).bottom > 0)
+              IconButton(
+                  tooltip: '자판 내리기',
+                  onPressed: () => FocusManager.instance.primaryFocus?.unfocus(),
+                  icon: const Icon(Icons.keyboard_hide_outlined, color: _muted)),
             if (widget.templates != null)
               IconButton(
                   tooltip: '서식 넣기',
@@ -1260,6 +1330,7 @@ class _WriteTabState extends State<WriteTab> {
             flex: 3,
             child: TextField(
               controller: _body,
+              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
               maxLines: null,
               expands: true,
               textAlignVertical: TextAlignVertical.top,
