@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:vc_app/main.dart';
 import 'package:vc_app/outbox.dart';
+import 'package:vc_app/prefs.dart';
 import 'package:vc_app/vc_api.dart';
 
 // 편의성 손질(2026-09-18 · 오너: 번잡하고 찾기 힘들다) — 노션·에버노트 기준.
@@ -230,5 +231,24 @@ void main() {
     hasModel = false;
     await ask();
     expect(find.text('대화 모델이 없다'), findsOneWidget, reason: '모델이 없는 까닭을 안 알린다');
+  });
+
+  testWidgets('설정 「열면 바로 새 메모」 — 켜면 앱이 편집기로 열리고, 설정은 남는다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_prefs');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+        client: MockClient((req) async => _json({'results': [], 'store': {'notes': 0}})));
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    final prefs = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
+    expect(prefs.openNew, isFalse);
+    await tester.runAsync(() => prefs.setOpenNew(true));
+    final again = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
+    expect(again.openNew, isTrue, reason: '설정이 안 남는다');
+
+    await tester.pumpWidget(MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, prefs: again)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditorPage), findsOneWidget, reason: '켰는데 바로 새 메모로 안 열린다');
   });
 }

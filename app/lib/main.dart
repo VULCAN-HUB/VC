@@ -15,6 +15,7 @@ import 'outbox.dart';
 import 'vc_api.dart';
 import 'pick.dart';
 import 'templates.dart';
+import 'prefs.dart';
 
 // 불칸 테마(pc/theme.py "vulcan")
 const _bg = Color(0xFF0A0A0B);
@@ -230,6 +231,7 @@ class Root extends StatefulWidget {
 class _RootState extends State<Root> {
   Pairing? _pairing;
   Outbox? _outbox;
+  AppPrefs? _prefs;
   bool _ready = false;
 
   @override
@@ -255,11 +257,13 @@ class _RootState extends State<Root> {
       where = await getApplicationDocumentsDirectory();
     }
     final outbox = await Outbox.open(File('${where.path}/vc_outbox.json'));
+    final prefs = await AppPrefs.open(File('${where.path}/vc_settings.json'));
     await atLeast;
     if (!mounted) return;
     setState(() {
       _pairing = saved == null ? null : Pairing.parse(saved);
       _outbox = outbox;
+      _prefs = prefs;
       _ready = true;
     });
   }
@@ -308,6 +312,7 @@ class _RootState extends State<Root> {
                 key: ValueKey(p.label),
                 api: VcApi(p),
                 outbox: _outbox!,
+                prefs: _prefs,
                 onUnauthorized: () => _unpair('열쇠가 안 맞아 — QR 을 다시 찍어 줘'),
                 onUnpair: () => _unpair('연결을 지웠어'),
               );
@@ -566,12 +571,18 @@ typedef OnFail = void Function(Object error);
 
 class Home extends StatefulWidget {
   const Home(
-      {super.key, required this.api, required this.outbox, required this.onUnauthorized, required this.onUnpair});
+      {super.key,
+      required this.api,
+      required this.outbox,
+      required this.onUnauthorized,
+      required this.onUnpair,
+      this.prefs});
 
   final VcApi api;
   final Outbox outbox;
   final VoidCallback onUnauthorized;
   final VoidCallback onUnpair;
+  final AppPrefs? prefs;
 
   @override
   State<Home> createState() => _HomeState();
@@ -591,6 +602,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _hello();
+    // 열면 바로 새 메모(설정) — 첫 화면이 뜬 뒤에
+    if (widget.prefs?.openNew == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _write();
+      });
+    }
   }
 
   @override
@@ -763,6 +780,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     onSelected: (v) {
                       if (v == 'status') {
                         _openStatus(context);
+                      } else if (v == 'settings') {
+                        final pr = widget.prefs;
+                        if (pr != null) {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsPage(prefs: pr)));
+                        }
                       } else if (v == 'send') {
                         _send();
                       } else {
@@ -772,6 +794,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'send', child: Text('지금 보내기')),
                       PopupMenuItem(value: 'status', child: Text('상태·기록')),
+                      PopupMenuItem(value: 'settings', child: Text('설정')),
                       PopupMenuItem(value: 'unpair', child: Text('연결 지우기')),
                     ],
                   ),
@@ -808,6 +831,34 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       context, MaterialPageRoute(builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox)));
 }
 
+
+/// 설정 — ⋮ 안(결정 26). 늘어나는 켜고 끄기는 여기에 모은다.
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key, required this.prefs});
+
+  final AppPrefs prefs;
+
+  @override
+  Widget build(BuildContext context) => Backdrop(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(title: const Text('설정')),
+          body: ListenableBuilder(
+            listenable: prefs,
+            builder: (_, _) => ListView(children: [
+              const SectionLabel('적기'),
+              SwitchListTile(
+                value: prefs.openNew,
+                onChanged: prefs.setOpenNew,
+                activeThumbColor: _accent,
+                title: const Text('앱을 열면 바로 새 메모', style: TextStyle(color: _text)),
+                subtitle: const Text('목록 대신 빈 메모로 시작한다(구글 킵처럼)', style: TextStyle(color: _muted)),
+              ),
+            ]),
+          ),
+        ),
+      );
+}
 
 /// 눌러야 펴지는 「상태·기록」(결정 17 ③). 늘 보이는 한 줄에 못 담는 자세한 것 —
 /// 보낼 글과 그 까닭, 컴퓨터가 켜진 지, 죽음 기록, 최근 자국. 컴퓨터 쪽 글 이름·집 경로는 서버가 가려서 준다.
