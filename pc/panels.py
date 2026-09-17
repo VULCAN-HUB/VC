@@ -207,11 +207,15 @@ class NoteView(QTextBrowser):
             from PyQt5.QtGui import QDesktopServices
             QDesktopServices.openUrl(url)
 
+    # `- 제품명 : vcis-689` 같은 항목 줄 — 목록 점 대신 **굵은 이름 · 값** 으로(2026-09-18 창 점검)
+    _항목꼴 = re.compile(r"^[ \t]*[-*][ \t]+([^:：\n\[\]]{1,24}?)[ \t]*[:：][ \t]*(.*)$", re.M)
+
     def to_markdown(self, body: str) -> str:
         """우리 표기를 마크다운으로 바꾼다. 순서가 중요하다 — 끼움이 링크를 품는다.
 
         첨부는 **진짜 그림**으로 넣는다. 이름만 보여주면 사진을 붙인 의미가 없다.
         """
+        body = self._항목꼴.sub(lambda m: f"**{m.group(1).strip()}** · {m.group(2).strip() or '—'}  ", body)
         def embed(m):
             name, head = m.group(1).strip(), (m.group(2) or "").strip()
             if notes.is_attachment(name):
@@ -1525,6 +1529,9 @@ def _self_check() -> None:
         v3 = NoteView(find_file=lambda nm: 영상 if nm == "IMG_0001.mov" else None)
         md3 = v3.to_markdown("받은 제품 ![[IMG_0001.mov]]")
         assert "[📎 IMG_0001.mov](file:" in md3 and "![IMG_0001.mov]" not in md3, md3
+        # 항목 줄은 목록 점 대신 굵은 이름 · 값(2026-09-18 창 점검)
+        md4 = v3.to_markdown("- 제품명 : vcis-689\n- 보낸날 : \n- [[회의]] 보기")
+        assert "**제품명** · vcis-689" in md4 and "**보낸날** · —" in md4, md4
 
         # 큰 사진은 칸 폭에 맞춰 줄인다. 원래 크기로 두면 칸을 뚫고 나간다.
         v2.resize(320, 240)

@@ -361,6 +361,28 @@ class Ask:
 HEX_COLOR = re.compile(r"(?i)[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8}")
 
 
+def 카드미리보기(몸: str, 길이: int = 140) -> str:
+    """폰 목록 카드의 두 줄 — 끼움(`![[…]]`) · 태그만 있는 줄 · 앞머리 · 목록 기호를 걷고 줄을 ` · ` 로 잇는다.
+
+    ★ 그냥 첫 줄을 쓰면 서식으로 쓴 글이 모두 「- 제품명 : …」 한 줄로만 보였다(시뮬레이터 점검 2026-09-18).
+    """
+    몸 = re.sub(r"(?s)^---\n.*?\n---\n", "", 몸)
+    몸 = re.sub(r"!\[\[[^\]]*\]\]", " ", 몸)
+    # `[[제목]]` · `[[제목#소제목|보일 말]]` 은 보일 말만 — 미리보기에 기호가 그대로 남았다(시뮬레이터 점검)
+    몸 = re.sub(r"\[\[([^\]|#]*)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]", lambda m: m.group(2) or m.group(1), 몸)
+    조각 = []
+    for 줄 in 몸.splitlines():
+        줄 = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", "", 줄).strip()
+        줄 = re.sub(r"^#+\s+", "", 줄)
+        if not 줄 or re.fullmatch(r"(?:#[^\s#]+\s*)+", 줄):
+            continue
+        조각.append(re.sub(r"\s*:\s*", ": ", 줄, count=1) if " : " in 줄 else 줄)
+        if sum(len(c) for c in 조각) > 길이:
+            break
+    글 = " · ".join(조각)
+    return 글[:길이] + ("…" if len(글) > 길이 else "")
+
+
 def is_attachment(name: str) -> bool:
     return Path(name).suffix.lower() in ATTACH_EXT
 

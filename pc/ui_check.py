@@ -1014,6 +1014,22 @@ def run() -> None:
         win.ask("아이스")
         assert win.results.items, "찾은 것 목록이 비어 있다"
         assert not win.results.isHidden(), "찾았는데 목록 칸이 접혀 있다"
+        # ★ 최근 글은 옵시디언 파일 목록처럼 늘 보인다(2026-09-18) — 칩으로 태그만 골라 본다.
+        win.refresh(scan=False)
+        최근 = [w.text() for w in win.recent.items if isinstance(w, QPushButton)]
+        assert 최근 and ROOT not in 최근, 최근
+        assert not win.recent.isHidden(), "최근 글이 접혀 있다"
+        칩 = {b.text(): b for b in win.recent_chips.findChildren(QPushButton)}
+        assert "최근" in 칩 and "사진" in 칩, list(칩)
+        태그칩 = [k for k in 칩 if k.startswith("#")]
+        if 태그칩:
+            칩[태그칩[0]].click()
+            win.settle()
+            골라 = [w.text() for w in win.recent.items if isinstance(w, QPushButton)]
+            assert 골라 and set(골라) <= set(win.notes.by_tag(태그칩[0][1:].rstrip("…"))) | set(골라[:0]), 골라
+            win._칩골라(win._목록갈래)     # 다시 누르면 최근으로
+            win.settle()
+            assert win._목록갈래 == "", win._목록갈래
         assert any("아이스" in w.text() for w in win.results.items if isinstance(w, QLabel)),             "걸린 자리가 안 보인다"
 
         # ★★ **찾은 것을 눌러 열 수 있어야 한다.** 사람이 제일 많이 하는 일인데
@@ -1410,9 +1426,10 @@ def run() -> None:
              if "글자(" in w.styleSheet()]
     assert not 남은것, f"스타일시트에 치환 안 된 글자 크기가 남았다: {남은것[:5]}"
     앞 = _theme.글자(12)
+    앞배율 = _theme.배율()      # 맥은 기본 1.2 로 켜진다
     _theme.배율바꾸기(1.5)
     assert _theme.글자(12) == "18px", _theme.글자(12)
-    _theme.배율바꾸기(1.0)
+    _theme.배율바꾸기(앞배율)
     assert _theme.글자(12) == 앞, "배율을 되돌려도 안 돌아온다"
     # ★ **키운 글자가 다음에 켤 때 그대로여야 한다.** 켤 때마다 다시 키워야 하면 있으나 마나다.
     import paths as _paths
@@ -1425,9 +1442,9 @@ def run() -> None:
         os.environ["VC_DATA"] = _잠깐
         try:
             win.글자키우기(0.2)
-            assert abs(_paths.load_config().get("글자배율", 0) - 1.2) < 0.001,                 f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
+            assert abs(_paths.load_config().get("글자배율", 0) - round(앞배율 + 0.2, 2)) < 0.001,                 f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
             win.글자키우기(0)                     # 제자리로
-            assert abs(_theme.배율() - 1.0) < 0.001, _theme.배율()
+            assert abs(_theme.배율() - _theme.기본배율) < 0.001, _theme.배율()
         finally:
             if _옛 is None:
                 os.environ.pop("VC_DATA", None)

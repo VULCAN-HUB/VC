@@ -233,9 +233,9 @@ class MainWindow(QWidget):
         # ★ 지난번에 키워 둔 글자 크기를 그대로 되살린다 — 켤 때마다 다시 키워야 하면
         #   있으나 마나다. 값이 없거나 깨졌으면 1.0 이다(설정 한 줄에 창이 안 죽는다).
         try:
-            theme.배율바꾸기(float(paths.load_config().get("글자배율", 1.0)))
+            theme.배율바꾸기(float(paths.load_config().get("글자배율", theme.기본배율)))
         except (TypeError, ValueError):
-            theme.배율바꾸기(1.0)
+            theme.배율바꾸기(theme.기본배율)
         self._apply_style()
 
         left = self._build_head()
@@ -275,7 +275,7 @@ class MainWindow(QWidget):
         # 엔진 상태. 어떤 모델이 지금 올라와 있는지 화면에서 바로 보이게 한다(결정 36).
         self.engine_label = QLabel()
         self.engine_label.setStyleSheet(
-            f"color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
+            f"color:{theme.css(theme.T.DIM, 0.55)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
         engine_timer = QTimer(self)
         engine_timer.timeout.connect(self.refresh_engine)
         engine_timer.start(4000)
@@ -340,7 +340,8 @@ class MainWindow(QWidget):
         head_left = QVBoxLayout()
         head_left.setSpacing(3)
         head_left.addWidget(wordmark)
-        head_left.addWidget(tagline)
+        # ★ 소개 글은 빼 둔다 — 늘 잘려 「Local-firs」로 보였고 아무것도 안 알렸다(2026-09-18 창 점검).
+        tagline.hide()
         head_left.addWidget(self.engine_label)
 
         # 검색·지시가 한 칸이다. 음성 지시도 결국 같은 문(ask)으로 들어온다.
@@ -622,6 +623,18 @@ class MainWindow(QWidget):
         self.results.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
         self.results.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
         self.results_head = theme.section("찾은 것", "검색·태그로 걸린 항목. 눌러서 연다")
+        # ★★ 최근 글 — 옵시디언의 파일 목록처럼 **늘 보인다.** 첫 화면이 그래프 점뿐이라
+        #   무슨 글이 있는지 안 보였다(오너 2026-09-18: 번잡하고 보기 불편하다). 칩으로 골라 본다.
+        self.recent = Results(limit=12)
+        self.recent.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
+        self.recent.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
+        self.recent_head = theme.section("최근 글", "눌러서 연다. 칩으로 사진·태그만 골라 본다")
+        self.recent_chips = QWidget()
+        self._칩줄 = QHBoxLayout(self.recent_chips)
+        self._칩줄.setContentsMargins(0, 0, 0, 0)
+        self._칩줄.setSpacing(4)
+        self._목록갈래 = ""          # "" 최근 · "@사진" · 그 밖은 태그
+        self._칩들: list[str] = []
         self.results_head.hide()
         self.results.hide()
 
@@ -747,12 +760,15 @@ class MainWindow(QWidget):
         side.addWidget(self.gate_card)
         side.addWidget(self.results_head)
         side.addWidget(self.results)
-        side.addWidget(theme.section("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다"))
-        side.addWidget(self.gaps)
+        side.addWidget(self.recent_head)
+        side.addWidget(self.recent_chips)
+        side.addWidget(self.recent)
         side.addWidget(theme.Divider())
-        side.addWidget(theme.section("언제", "해마다 적은 것. 눌러서 그해를 훑는다"))
-        side.addWidget(self.years)
-        side.addWidget(theme.Divider())
+        # 가끔 보는 것은 접어 둔다 — 늘 펴 두니 오른쪽 칸이 번잡했다.
+        self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
+        self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
+        side.addWidget(self.gaps_fold)
+        side.addWidget(self.years_fold)
         side.addWidget(self.proposals_fold)
         side.addWidget(self.feed_fold)
         side.addWidget(self.models_fold)
@@ -985,6 +1001,7 @@ class MainWindow(QWidget):
             f"제안 {len(self.proposal_cards):02d}"
         )
         self.years.show_years(self.notes.by_year())
+        self._최근채우기()
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
@@ -1221,7 +1238,7 @@ class MainWindow(QWidget):
         눈이 불편한 사람은 쓸 수가 없다. 옵시디언은 `Ctrl +/-` 로 된다.
         바꾼 값은 설정에 남겨 다음에 켤 때 그대로 뜬다.
         """
-        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else 1.0)
+        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else theme.기본배율)
         self._apply_style()
         for 아이 in self.findChildren(QWidget):
             아이.style().unpolish(아이)
@@ -1762,6 +1779,65 @@ class MainWindow(QWidget):
             self.report(f"#{tag} 붙은 게 {len(titles)}개야.", titles[:3])
         else:
             self.report(f"#{tag} 붙은 게 없어.", [ROOT])
+
+    _사진꼴 = notes_module.IMAGE_EXT | {".heic", ".heif"}
+
+    def _최근채우기(self) -> None:
+        """오른쪽 「최근 글」 — 고른 칩(최근 · 사진 · #태그)대로 채운다."""
+        갈래 = self._목록갈래
+        if 갈래 and 갈래 != "@사진":
+            rows = []
+            for t in self.notes.by_tag(갈래)[:12]:
+                g = self.notes.read(t)
+                rows.append((t, notes_module.카드미리보기(g.body) if g else ""))
+        else:
+            rows = []
+            for r in self.notes.search("", 80 if 갈래 else 13):
+                if r["title"] in (ROOT, OLD_ROOT):
+                    continue
+                몸 = r["body"] if "body" in r.keys() else ((self.notes.read(r["title"]) or Note(title="", body="")).body)
+                if 갈래 == "@사진" and not any(
+                        Path(a).suffix.lower() in self._사진꼴 for a in notes_module.parse_attachments(몸)):
+                    continue
+                # 기호(`- 제품명 :`·`![[…]]`·태그 줄)를 걷은 미리보기로 — 폰 카드와 같은 말
+                rows.append((r["title"], notes_module.카드미리보기(몸), r["path"], r["kind"]))
+            rows = rows[:12]
+        self.recent.show_hits(rows, "")
+        이름 = {"": "최근 글", "@사진": "사진 붙은 글"}.get(갈래, f"#{갈래}")
+        머리 = self.recent_head.findChild(QLabel)
+        if 머리 is not None and 머리.text() != 이름:
+            머리.setText(이름)
+        # 칩 — 많이 쓴 태그 넷. 바뀌었을 때만 다시 짓는다(누른 단추가 제 신호 안에서 지워지면 죽는다 — 미뤄서 부른다)
+        칩들 = ["", "@사진"] + [t for t, _ in self.notes.all_tags()[:4]]
+        if 칩들 != self._칩들 or any(
+                b.property("vc_chip") == 갈래 and not b.isChecked()
+                for b in self.recent_chips.findChildren(QPushButton)):
+            self._칩들 = 칩들
+            while self._칩줄.count():
+                w = self._칩줄.takeAt(0).widget()
+                if w is not None:
+                    w.setParent(None)
+                    w.deleteLater()
+            for 값 in 칩들:
+                말 = {"": "최근", "@사진": "사진"}.get(값, "#" + (값 if len(값) <= 8 else 값[:7] + "…"))
+                b = QPushButton(말)
+                b.setCheckable(True)
+                b.setChecked(값 == 갈래)
+                b.setProperty("vc_chip", 값)  # ★ Qt 속성 이름은 영문만 — 한글이면 UnicodeEncodeError
+                b.setCursor(Qt.PointingHandCursor)
+                b.setStyleSheet(
+                    "QPushButton{border:1px solid " + theme.css(theme.T.ACCENT, 0.25) + "; border-radius:10px;"
+                    f"padding:2px 9px; color:{theme.T.DIM.name()}; font-size:{theme.글자(11)};"
+                    "background:transparent;}"
+                    "QPushButton:checked{background:" + theme.css(theme.T.ACCENT, 0.28) + ";"
+                    f"color:{theme.T.TEXT.name()}; border-color:" + theme.css(theme.T.ACCENT, 0.8) + ";}")
+                b.clicked.connect(lambda _=False, v=값: self._later(lambda: self._칩골라(v)))
+                self._칩줄.addWidget(b)
+            self._칩줄.addStretch(1)
+
+    def _칩골라(self, 값: str) -> None:
+        self._목록갈래 = "" if self._목록갈래 == 값 else 값
+        self._최근채우기()
 
     def show_results(self, hits: list[tuple[str, str]], query: str = "") -> None:
         """찾은 것을 옆에 늘어놓는다. 없으면 칸 자체를 접는다 — 빈 상자는 자리만 먹는다."""
