@@ -434,6 +434,62 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('정수기 몸'), findsOneWidget, reason: '링크를 눌러도 안 열린다');
   });
+
+  testWidgets('할 일 — 누르면 체크되고 컴퓨터 원문이 바뀐다 · ⋮ 오늘 일지', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_task');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final calls = <String>[];
+    var done = false;
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        final path = req.url.path;
+        if (path == '/eb/v1/memory/task') {
+          final b = jsonDecode(req.body) as Map;
+          calls.add('task ${b['title']} ${b['nth']}');
+          done = true;
+          return _json({'done': true});
+        }
+        if (path == '/eb/v1/daily') {
+          calls.add('daily');
+          return _json({'title': '2026-09-18'});
+        }
+        if (path == '/eb/v1/memory/note') {
+          return _json({
+            'title': req.url.queryParameters['title'],
+            'text': '- [ ] 우유 사기\n- [${done ? 'x' : ' '}] 필터 갈기',
+          });
+        }
+        return _json({'results': [], 'store': {'notes': 0}});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '할 일')));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.check_box_outline_blank), findsNWidgets(2));
+
+    await tester.tap(find.text('필터 갈기'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(calls, contains('task 할 일 1'), reason: '두 번째 할 일을 안 뒤집었다');
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byIcon(Icons.check_box), findsOneWidget, reason: '체크가 화면에 안 보인다');
+
+    final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
+    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('오늘 일지'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(calls, contains('daily'));
+    expect(find.text('2026-09-18'), findsWidgets, reason: '오늘 일지가 안 열린다');
+  });
 }
 
 class _FakeShortcuts implements AppShortcuts {

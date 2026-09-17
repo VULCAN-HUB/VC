@@ -878,6 +878,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     onSelected: (v) {
                       if (v == 'status') {
                         _openStatus(context);
+                      } else if (v == 'daily') {
+                        _openDaily();
                       } else if (v == 'archive') {
                         Navigator.push(
                           context,
@@ -911,6 +913,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     },
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'send', child: Text('지금 보내기')),
+                      PopupMenuItem(value: 'daily', child: Text('오늘 일지')),
                       PopupMenuItem(value: 'archive', child: Text('보관함')),
                       PopupMenuItem(value: 'trash', child: Text('휴지통')),
                       PopupMenuItem(value: 'status', child: Text('상태·기록')),
@@ -949,6 +952,34 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       ),
     ),
   );
+
+  /// 오늘 일지(편의 기능 23번) — 없으면 컴퓨터가 만들고 그 글을 연다.
+  Future<void> _openDaily() async {
+    String title;
+    try {
+      title = await widget.api.daily();
+    } catch (e) {
+      _fail(e);
+      return;
+    }
+    if (title.isEmpty || !mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NotePage(
+          api: widget.api,
+          onFail: _fail,
+          title: title,
+          onAppend: (x) => _write(title: x),
+          onSaveLine: (x, line) async {
+            await widget.outbox.add(x, line);
+            _send();
+          },
+        ),
+      ),
+    );
+    if (mounted) _list.currentState?._find();
+  }
 
   void _openStatus(BuildContext context) => Navigator.push(
     context,
@@ -1876,7 +1907,10 @@ class _NotePageState extends State<NotePage> {
             color: _accent,
             backgroundColor: _card,
             onRefresh: () async {
-              setState(() => _note = _load());
+              // ★ 화살표로 쓰면 대입 값(Future)이 돌아가 Flutter 가 다시 그리기를 거부한다 — 블록으로
+              setState(() {
+                _note = _load();
+              });
               await _note;
             },
             child: ListView(
@@ -1889,6 +1923,19 @@ class _NotePageState extends State<NotePage> {
                     text: '${j['text'] ?? ''}',
                     api: widget.api,
                     onLink: _open,
+                    onTask: (nth, want) async {
+                      try {
+                        await widget.api.flipTask(widget.title, nth);
+                      } catch (e) {
+                        widget.onFail(e);
+                        return;
+                      }
+                      if (mounted) {
+                        setState(() {
+                          _note = _load();
+                        });
+                      }
+                    },
                     onEditProp: widget.onSaveLine == null
                         ? null
                         : (k, v) async {
@@ -1994,7 +2041,14 @@ Future<String?> editProp(BuildContext context, String key, String value) async {
 /// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
-  const NoteBody({super.key, required this.text, required this.api, this.onEditProp, this.onLink});
+  const NoteBody({
+    super.key,
+    required this.text,
+    required this.api,
+    this.onEditProp,
+    this.onLink,
+    this.onTask,
+  });
 
   final String text;
   final VcApi api;
@@ -2002,10 +2056,13 @@ class NoteBody extends StatelessWidget {
   final void Function(String key, String value)? onEditProp;
   // `[[링크]]` 를 누르면(편의 기능 19번). 없으면 글자만.
   final void Function(String title)? onLink;
+  // `- [ ]` 를 누르면 체크(편의 기능 26번). 몇 번째 할 일인지 준다.
+  final void Function(int nth, bool done)? onTask;
 
   static final _embed = RegExp(r'!\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]');
   static final _prop = RegExp(r'^\s*[-*]\s+([^:：\n]{1,24}?)\s*[:：]\s*(.*)$');
   static final _tagLine = RegExp(r'^\s*(#[^\s#]+\s*)+$');
+  static final _task = RegExp(r'^\s*[-*]\s+\[([ xX])\]\s?(.*)$');
   static const _imageExt = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif'};
   static const _fileExt = {'.pdf', '.mov', '.mp4', '.m4v', '.m4a', '.aac', '.mp3', '.wav', '.svg'};
   static const _style = TextStyle(color: _text, fontSize: 15.5, height: 1.7);
@@ -2027,7 +2084,13 @@ class NoteBody extends StatelessWidget {
       .toList();
 
   /// 글 조각을 항목표 · 표 · 소제목 · 태그 칩 · 글로 가른다.
-  static List<Widget> _words(String s, [void Function(String, String)? onEdit, void Function(String)? onLink]) {
+  static List<Widget> _words(
+    String s, [
+    void Function(String, String)? onEdit,
+    void Function(String)? onLink,
+    void Function(int, bool)? onTask,
+    int taskFrom = 0,
+  ]) {
     final out = <Widget>[];
     final plain = <String>[];
     final props = <(String, String)>[];
@@ -2135,6 +2198,7 @@ class NoteBody extends StatelessWidget {
 
     var inCode = false;
     final code = <String>[];
+    var seen = 0; // 이 조각에서 지나온 할 일 수
     for (final line in s.split('\n')) {
       final t = line.trim();
       // 코드 울타리 — 안은 그대로, 고정폭으로
@@ -2220,6 +2284,36 @@ class NoteBody extends StatelessWidget {
         );
         continue;
       }
+      final task = _task.firstMatch(line);
+      if (task != null) {
+        flushPlain();
+        flushProps();
+        final done = task.group(1)!.toLowerCase() == 'x';
+        final nth = taskFrom + seen++;
+        out.add(
+          InkWell(
+            onTap: onTask == null ? null : () => onTask(nth, !done),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(done ? Icons.check_box : Icons.check_box_outline_blank,
+                    size: 20, color: done ? _accent : _muted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label(task.group(2)!),
+                    style: _style.copyWith(
+                      color: done ? _muted : _text,
+                      decoration: done ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        );
+        continue;
+      }
       final p = _prop.firstMatch(line);
       if (p != null) {
         flushPlain();
@@ -2261,6 +2355,11 @@ class NoteBody extends StatelessWidget {
 
   static final _comment = RegExp(r'%%[\s\S]*?%%');
 
+  /// 글 앞쪽(`upto` 전)에 할 일이 몇 개인지 — 서버가 세는 차례와 맞춘다.
+  static int _tasksBefore(String text, int upto) => _task
+      .allMatches(text.substring(0, upto).split('\n').join('\n'))
+      .length;
+
   @override
   Widget build(BuildContext context) {
     final parts = <Widget>[];
@@ -2272,7 +2371,7 @@ class NoteBody extends StatelessWidget {
       final dot = name.lastIndexOf('.');
       final ext = dot < 0 ? '' : name.substring(dot).toLowerCase();
       if (!_imageExt.contains(ext) && !_fileExt.contains(ext)) continue; // 글 끼움은 글자 그대로 둔다
-      parts.addAll(_words(text.substring(at, m.start), onEditProp, onLink));
+      parts.addAll(_words(text.substring(at, m.start), onEditProp, onLink, onTask, _tasksBefore(text, m.start)));
       if (_imageExt.contains(ext)) {
         parts.add(
           Padding(
@@ -2294,7 +2393,7 @@ class NoteBody extends StatelessWidget {
       }
       at = m.end;
     }
-    parts.addAll(_words(text.substring(at), onEditProp, onLink));
+    parts.addAll(_words(text.substring(at), onEditProp, onLink, onTask, _tasksBefore(text, at)));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: parts);
   }
 

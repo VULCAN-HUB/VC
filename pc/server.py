@@ -356,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1086,6 +1086,27 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, {"title": 제목, "restored": True})
             return self._send(404, {"error": "휴지통에 없다"})
 
+        # 오늘 일지(편의 기능 23번 · 옵시디언 일일 노트) — 없으면 서식 `_서식/일지` 로 만든다
+        if url.path == "/eb/v1/daily":
+            day = body.get("day") if isinstance(body.get("day"), str) else ""
+            글 = self.server.notes.daily(day.strip())
+            return self._send(200, {"title": 글.title})
+
+        # 할 일 체크(편의 기능 26번) — 보이는 줄이 아니라 **원문**을 뒤집는다
+        if url.path == "/eb/v1/memory/task":
+            title, nth = body.get("title"), body.get("nth")
+            if not isinstance(title, str) or not title.strip() or not isinstance(nth, int) or nth < 0:
+                return self._send(400, {"error": "title 과 nth(0부터)가 필요하다"})
+            글 = self.server.notes.read(title.strip())
+            if 글 is None:
+                return self._send(404, {"error": "no such note", "title": title[:80]})
+            바뀜 = notes.flip_task(글.body, nth)
+            if 바뀜 is None:
+                return self._send(404, {"error": "그 자리에 할 일 표가 없다", "nth": nth})
+            글.body, 한일 = 바뀜
+            self.server.notes.write(글)
+            return self._send(200, {"title": 글.title, "nth": nth, "done": 한일})
+
         if url.path == "/eb/v1/memory/delete":
             title = body.get("title", "")
             if not isinstance(title, str) or not title.strip():
@@ -1790,6 +1811,17 @@ def _self_check() -> None:
     _정리 = server.consolidate_now()
     assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
     assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
+
+    # --- 오늘 일지 · 할 일 체크(편의 기능 23·26번) ---
+    _상, _오늘 = call("POST", "/eb/v1/daily", {})
+    assert _상 == 200 and len(_오늘["title"]) == 10 and _오늘["title"][4] == "-", _오늘
+    assert call("POST", "/eb/v1/daily", {})[1]["title"] == _오늘["title"], "부를 때마다 새로 만든다"
+    call("POST", "/eb/v1/memory", {"title": "할 일 시험", "text": "- [ ] 우유 사기\n- [ ] 필터 갈기"})
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 1})[1]["done"] is True
+    assert "- [x] 필터 갈기" in server.notes.read("할 일 시험").body, server.notes.read("할 일 시험").body
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 1})[1]["done"] is False, "다시 누르면 풀려야 한다"
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 9})[0] == 404
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험"})[0] == 400
 
     # --- 백링크(편의 기능 19번) — back=1 일 때만 ---
     call("POST", "/eb/v1/memory", {"title": "가리키는 글", "text": "[[백링크 대상]] 참고"})

@@ -181,6 +181,13 @@ class VcApi {
 
   Future<void> restore(String id) => _call('POST', '/eb/v1/trash/restore', body: {'id': id});
 
+  /// 오늘 일지(편의 기능 23번) — 없으면 만들고 제목을 준다.
+  Future<String> daily() async => '${(await _call('POST', '/eb/v1/daily', body: {}))['title'] ?? ''}';
+
+  /// 할 일 체크(편의 기능 26번) — 글 안 `nth` 번째 `- [ ]` 를 뒤집는다. 뒤집힌 뒤 상태.
+  Future<bool> flipTask(String title, int nth) async =>
+      (await _call('POST', '/eb/v1/memory/task', body: {'title': title, 'nth': nth}))['done'] == true;
+
   /// 「상태·기록」(결정 17 ③) — 자국 끝줄 · 죽음 줄 수 · 켠 지(초). 글 이름·집 경로는 서버가 가린다.
   Future<Map<String, dynamic>> status() => _call('GET', '/eb/v1/status');
 
