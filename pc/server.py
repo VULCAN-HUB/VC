@@ -716,6 +716,10 @@ class Handler(BaseHTTPRequestHandler):
             #   `[[제목]]` 을 넣으면 그물이 자란다. 있을 때만 싣는다(제목 다섯 개).
             if 언급 := [t for t, _ in self.server.notes.언급(note.title, k=5)]:
                 답["unlinked"] = 언급
+            # 이 글을 가리키는 글(편의 기능 19번 · 옵시디언 백링크) — 사람이 보는 폰 글 보기용. 열두 장까지.
+            if (args.get("back") or ["0"])[0] not in ("0", "", "false"):
+                if 뒤 := list(dict.fromkeys(t for t, _ in self.server.notes.backlinks(note.title)))[:12]:
+                    답["backlinks"] = 뒤
             return self._send(200, 답)
 
         if url.path == "/eb/v1/graph":
@@ -1786,6 +1790,13 @@ def _self_check() -> None:
     _정리 = server.consolidate_now()
     assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
     assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
+
+    # --- 백링크(편의 기능 19번) — back=1 일 때만 ---
+    call("POST", "/eb/v1/memory", {"title": "가리키는 글", "text": "[[백링크 대상]] 참고"})
+    call("POST", "/eb/v1/memory", {"title": "백링크 대상", "text": "몸"})
+    _뒤 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("백링크 대상") + "&back=1")[1]
+    assert "가리키는 글" in _뒤.get("backlinks", []), _뒤
+    assert "backlinks" not in call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("백링크 대상"))[1], "AI 길에 백링크가 실린다"
 
     # --- 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번) ---
     call("POST", "/eb/v1/memory", {"title": "표시 카드", "text": "보관할 글 표시카드낱말"})

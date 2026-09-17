@@ -193,9 +193,9 @@ class VcApi {
   }
 
   /// 찾기 2단 — 고른 글을 펼친다. q 를 주면 걸린 자리 둘레만.
-  Future<Map<String, dynamic>> note(String title, {String q = '', String? folder}) => _call(
+  Future<Map<String, dynamic>> note(String title, {String q = '', String? folder, bool back = true}) => _call(
       'GET', '/eb/v1/memory/note',
-      query: {'title': title, if (q.isNotEmpty) 'q': q, 'folder': ?folder});
+      query: {'title': title, if (q.isNotEmpty) 'q': q, 'folder': ?folder, if (back) 'back': '1'});
 
   /// 적기 — 같은 제목이 있으면 뒤에 덧붙는다. 실제로 저장된 제목을 준다.
   /// `clientId` 가 같으면 서버는 한 번만 받는다(다시 보내도 안 겹친다).

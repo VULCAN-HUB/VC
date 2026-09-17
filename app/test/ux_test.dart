@@ -402,6 +402,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(calls, contains('restore abc123'));
   });
+
+  testWidgets('글 보기 — [[링크]] 누르면 그 글로 · 가리키는 글 칩', (tester) async {
+    final asked = <String>[];
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        final t = req.url.queryParameters['title'] ?? '';
+        asked.add('$t back=${req.url.queryParameters['back']}');
+        if (t == '회의') {
+          return _json({'title': '회의', 'text': '정리는 [[정수기|정수기 글]] 에', 'backlinks': ['일지']});
+        }
+        return _json({'title': t, 'text': '$t 몸'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '회의')));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(asked.first, '회의 back=1');
+    expect(find.text('일지'), findsOneWidget, reason: '가리키는 글이 안 보인다');
+
+    await tester.tap(find.text('일지'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.text('일지 몸'), findsOneWidget, reason: '가리키는 글이 안 열린다');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tapOnText(find.textRange.ofSubstring('정수기 글'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(find.text('정수기 몸'), findsOneWidget, reason: '링크를 눌러도 안 열린다');
+  });
 }
 
 class _FakeShortcuts implements AppShortcuts {

@@ -3,6 +3,7 @@
 // 얼굴은 PC VC 의 기본 테마 「불칸」(검정 바탕 · 달아오른 붉은빛 · `// 구역` 이름표)과 같게 둔다 —
 // 같은 물건으로 읽혀야 한다. 표식 그림은 PC 의 logo.VulcanMark 를 구운 것(app/tools/make_assets.py).
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -1714,6 +1715,19 @@ class NotePage extends StatefulWidget {
 class _NotePageState extends State<NotePage> {
   bool _thinking = false;
 
+  void _open(String title) => Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => NotePage(
+        api: widget.api,
+        onFail: widget.onFail,
+        title: title,
+        onAppend: widget.onAppend,
+        onSaveLine: widget.onSaveLine,
+      ),
+    ),
+  );
+
   /// AI 요약·번역 — 결과를 시트로 보이고, 원하면 글 끝에 붙인다.
   Future<void> _assist(String action) async {
     var lang = '영어';
@@ -1874,6 +1888,7 @@ class _NotePageState extends State<NotePage> {
                   child: NoteBody(
                     text: '${j['text'] ?? ''}',
                     api: widget.api,
+                    onLink: _open,
                     onEditProp: widget.onSaveLine == null
                         ? null
                         : (k, v) async {
@@ -1890,6 +1905,22 @@ class _NotePageState extends State<NotePage> {
                           },
                   ),
                 ),
+                // 이 글을 가리키는 글(옵시디언 백링크)
+                if ((j['backlinks'] as List?)?.isNotEmpty ?? false) ...[
+                  const SectionLabel('이 글을 가리키는 글'),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final b in (j['backlinks'] as List).whereType<String>())
+                        ActionChip(
+                          label: Text(b, style: const TextStyle(color: _text)),
+                          backgroundColor: _card,
+                          onPressed: () => _open(b),
+                        ),
+                    ],
+                  ),
+                ],
                 if (j['cut'] == true)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
@@ -1963,12 +1994,14 @@ Future<String?> editProp(BuildContext context, String key, String value) async {
 /// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
-  const NoteBody({super.key, required this.text, required this.api, this.onEditProp});
+  const NoteBody({super.key, required this.text, required this.api, this.onEditProp, this.onLink});
 
   final String text;
   final VcApi api;
   // 항목 칸을 누르면 고친다(편의 기능 4번). 없으면 보기만.
   final void Function(String key, String value)? onEditProp;
+  // `[[링크]]` 를 누르면(편의 기능 19번). 없으면 글자만.
+  final void Function(String title)? onLink;
 
   static final _embed = RegExp(r'!\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]');
   static final _prop = RegExp(r'^\s*[-*]\s+([^:：\n]{1,24}?)\s*[:：]\s*(.*)$');
@@ -1994,15 +2027,36 @@ class NoteBody extends StatelessWidget {
       .toList();
 
   /// 글 조각을 항목표 · 표 · 소제목 · 태그 칩 · 글로 가른다.
-  static List<Widget> _words(String s, [void Function(String, String)? onEdit]) {
+  static List<Widget> _words(String s, [void Function(String, String)? onEdit, void Function(String)? onLink]) {
     final out = <Widget>[];
     final plain = <String>[];
     final props = <(String, String)>[];
     final table = <List<String>>[];
     void flushPlain() {
-      final t = label(plain.join('\n')).trim();
-      if (t.isNotEmpty) out.add(SelectableText(t, style: _style));
+      final raw = plain.join('\n').trim();
       plain.clear();
+      if (raw.isEmpty) return;
+      if (onLink == null || !_link.hasMatch(raw)) {
+        out.add(SelectableText(label(raw), style: _style));
+        return;
+      }
+      // `[[링크]]` 를 누르면 그 글로(편의 기능 19번 · 옵시디언)
+      final spans = <InlineSpan>[];
+      var at = 0;
+      for (final m in _link.allMatches(raw)) {
+        if (m.start > at) spans.add(TextSpan(text: raw.substring(at, m.start)));
+        final target = m.group(1)!.trim();
+        spans.add(
+          TextSpan(
+            text: (m.group(2) ?? '').isNotEmpty ? m.group(2)! : target,
+            style: const TextStyle(color: _accent, decoration: TextDecoration.underline),
+            recognizer: TapGestureRecognizer()..onTap = () => onLink(target),
+          ),
+        );
+        at = m.end;
+      }
+      if (at < raw.length) spans.add(TextSpan(text: raw.substring(at)));
+      out.add(Text.rich(TextSpan(style: _style, children: spans)));
     }
 
     void flushTable() {
@@ -2218,7 +2272,7 @@ class NoteBody extends StatelessWidget {
       final dot = name.lastIndexOf('.');
       final ext = dot < 0 ? '' : name.substring(dot).toLowerCase();
       if (!_imageExt.contains(ext) && !_fileExt.contains(ext)) continue; // 글 끼움은 글자 그대로 둔다
-      parts.addAll(_words(text.substring(at, m.start), onEditProp));
+      parts.addAll(_words(text.substring(at, m.start), onEditProp, onLink));
       if (_imageExt.contains(ext)) {
         parts.add(
           Padding(
@@ -2240,7 +2294,7 @@ class NoteBody extends StatelessWidget {
       }
       at = m.end;
     }
-    parts.addAll(_words(text.substring(at), onEditProp));
+    parts.addAll(_words(text.substring(at), onEditProp, onLink));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: parts);
   }
 
