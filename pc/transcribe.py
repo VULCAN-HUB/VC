@@ -40,7 +40,18 @@ def whisper(path: Path) -> str:
 
         _model = WhisperModel("small", device="cpu", compute_type="int8")
     segments, _ = _model.transcribe(str(path), language="ko", vad_filter=True, beam_size=5)
-    return " ".join(s.text.strip() for s in segments).strip()
+    return stamp((s.start, s.text) for s in segments)
+
+
+def stamp(parts) -> str:
+    """받아쓴 조각마다 녹음 속 시간을 붙인다 — `[1:05] 말` (편의 기능 15번 · 원노트 녹음 시점)."""
+    줄 = []
+    for start, text in parts:
+        text = (text or "").strip()
+        if text:
+            s = int(start or 0)
+            줄.append(f"[{s // 60}:{s % 60:02d}] {text}")
+    return "\n".join(줄)
 
 
 def _load(where: Path) -> set[str]:
@@ -122,6 +133,7 @@ def _self_check() -> None:
         # 기록이 사라져도 글에 이미 있으면 건너뛴다
         memo.unlink()
         assert run(n, 귀, None, memo) == [] and len(들음) == 1, "글에 받아쓰기가 있는데 또 한다"
+        assert stamp([(0.0, " 안녕 "), (65.4, "둘째"), (3, "")]) == "[0:00] 안녕\n[1:05] 둘째"
         # 받아쓰기 도구가 없으면 아무것도 안 한다
         assert run(n, None) == []
     print("transcribe self-check 통과")
