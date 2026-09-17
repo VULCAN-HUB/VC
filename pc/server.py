@@ -1289,6 +1289,7 @@ class EBServer(ThreadingHTTPServer):
         if hasattr(self.backend, "n_gpu_layers"):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
         self.gate = remote.RemoteGate()
+        self._정리잠금 = threading.Lock()   # 뒤 실과 「지금 정리」가 겹치지 않게
         # ★ 작업 폴더에 기대지 않는다 — 딴 폴더에서 켜면 거기 만들다 접근 거부로 **아예 안 떴다**(시험 쪽).
         self.artifacts = Path(cfg.get("artifact_dir") or paths.기계자리("data/artifacts"))
         self.artifacts.mkdir(parents=True, exist_ok=True)
@@ -1450,6 +1451,39 @@ class EBServer(ThreadingHTTPServer):
 
         threading.Thread(target=loop, daemon=True).start()
 
+    def consolidate_now(self) -> dict:
+        """흩어진 메모를 정리 글로 모은다(편의 기능 1·5번 · 1겹 — AI 없이 서식 칸으로)."""
+        import consolidate
+
+        with self._정리잠금:
+            got = consolidate.run(self.notes)
+        if got.get("written"):
+            _알림(f"[정리] 제품 {got['products']}개 · 새로 쓴 정리 글 {len(got['written'])}장")
+        return got
+
+    def start_consolidate(self, every_sec: int = 120) -> None:
+        """메모가 바뀌면 **2분쯤 모았다가** 정리 글을 새로 쓴다(결정 19). 하루 한 번은 바뀐 게 없어도 돈다.
+
+        단추는 없다(결정 26) — 뒤에서 돌고, 확인할 것은 「제품 보유 목록」의 「확인 필요」에 올린다.
+        """
+        def 지문() -> tuple:
+            return tuple(self.notes.conn.execute(
+                "SELECT count(*), max(mtime) FROM notes WHERE path NOT LIKE ?", ("%_정리%",)).fetchone())
+
+        def loop() -> None:
+            본것, 마지막 = None, 0.0
+            while True:
+                try:
+                    지금 = 지문()
+                    if 지금 != 본것 or time.time() - 마지막 > 86400:
+                        self.consolidate_now()
+                        본것, 마지막 = 지문(), time.time()
+                except Exception as e:  # 정리가 실패해도 서버는 계속 떠 있어야 한다
+                    _알림(f"[정리 실패] {type(e).__name__}: {e}")
+                time.sleep(every_sec)
+
+        threading.Thread(target=loop, daemon=True).start()
+
     def start_analyzer(self, every_sec: int = 900) -> None:
         """주기적으로 스스로 돌아본다. 사용자가 시키지 않아도 성장은 계속된다.
 
@@ -1489,6 +1523,7 @@ def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
     server.start_analyzer(cfg.get("analyze_every_sec", 900))
     server.start_housekeeping()
     server.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다
+    server.start_consolidate()  # 흩어진 메모 → 제품 정리 글
     print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
     print(f"페어링 열쇠: {paths.config_path()} 의 pair_token")   # 값은 안 찍는다(파일로 받으면 샌다)
     server.serve_forever()
@@ -1592,6 +1627,12 @@ def _self_check() -> None:
     _상, _몸 = call("GET", "/eb/v1/status")
     assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
     assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
+
+    # --- 흩어진 메모 → 제품 정리 글(편의 기능 1·5번) ---
+    call("POST", "/eb/v1/memory", {"title": "정리 시험 받음", "text": "- 제품명 : zz-1\n- 받은날 : 2026-10-01"})
+    _정리 = server.consolidate_now()
+    assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
+    assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
 
     # --- 서식을 폰까지(5단계): 창고 `_서식/` 의 틀을 열쇠 단 문으로 준다. 자리는 채우지 않고 그대로 ---
     server.notes.template_root().mkdir(parents=True, exist_ok=True)
@@ -2489,6 +2530,8 @@ def _self_check() -> None:
             ("def start_embedding(", "벡터를 채우는 실이 서버에 없다"),
             ("eb.start_embedding()", "창 있는 판이 벡터 실을 안 띄운다"),
             ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다"),
+            ("eb.start_consolidate()", "창 있는 판이 정리 실을 안 띄운다"),
+            ("server.start_consolidate()", "--no-ui 로 띄우면 메모가 정리되지 않는다"),
             # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 처음엔 이 실의 제 연결에만
             #   임베더를 붙였다 — 벡터는 자라는데 `search` 가 쓰는 `self.notes` 는
             #   `_embed` 가 None 이라 **뜻 검색이 영영 0건**이었다(시험 쪽이 --no-ui 에서 잡음).

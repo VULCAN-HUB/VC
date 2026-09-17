@@ -1253,15 +1253,62 @@ class NoteBody extends StatelessWidget {
   static const _fileExt = {'.pdf', '.mov', '.mp4', '.m4v', '.m4a', '.aac', '.mp3', '.wav', '.svg'};
   static const _style = TextStyle(color: _text, fontSize: 15.5, height: 1.7);
 
-  /// 글 조각을 항목표 · 태그 칩 · 글로 가른다.
+  static final _link = RegExp(r'(?<!!)\[\[([^\]|#]+?)(?:#[^\]|\\]*)?(?:\\?\|([^\]]*))?\]\]');
+  static final _heading = RegExp(r'^\s*#{1,6}\s+(.*)$');
+
+  /// `[[제목]]` · `[[제목\|보일 말]]` → 보일 말(링크 누르기는 편의 기능 9번에서).
+  static String label(String s) => s.replaceAllMapped(_link, (m) => (m.group(2) ?? '').isNotEmpty ? m.group(2)! : m.group(1)!);
+
+  /// 표 한 줄을 칸으로 — `\|` 는 칸 가름이 아니다.
+  static List<String> _cells(String line) => line
+      .trim()
+      .replaceAll(r'\|', '\u0000')
+      .replaceAll(RegExp(r'^\||\|$'), '')
+      .split('|')
+      .map((c) => label(c.replaceAll('\u0000', '|')).trim())
+      .toList();
+
+  /// 글 조각을 항목표 · 표 · 소제목 · 태그 칩 · 글로 가른다.
   static List<Widget> _words(String s) {
     final out = <Widget>[];
     final plain = <String>[];
     final props = <(String, String)>[];
+    final table = <List<String>>[];
     void flushPlain() {
-      final t = plain.join('\n').trim();
+      final t = label(plain.join('\n')).trim();
       if (t.isNotEmpty) out.add(SelectableText(t, style: _style));
       plain.clear();
+    }
+
+    void flushTable() {
+      if (table.isEmpty) return;
+      final cols = table.map((r) => r.length).reduce((a, b) => a > b ? a : b);
+      out.add(Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(color: _bg.withValues(alpha: .6), borderRadius: BorderRadius.circular(10)),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.all(8),
+          child: Table(
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            border: TableBorder(horizontalInside: BorderSide(color: _accent.withValues(alpha: .12))),
+            children: [
+              for (var r = 0; r < table.length; r++)
+                TableRow(children: [
+                  for (var c = 0; c < cols; c++)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text(c < table[r].length ? table[r][c] : '',
+                          style: r == 0
+                              ? _mono(12, _muted, weight: FontWeight.w700)
+                              : const TextStyle(color: _text, fontSize: 14)),
+                    ),
+                ]),
+            ],
+          ),
+        ),
+      ));
+      table.clear();
     }
 
     void flushProps() {
@@ -1277,7 +1324,7 @@ class NoteBody extends StatelessWidget {
               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 SizedBox(width: 92, child: Text(k, style: _mono(12.5, _muted))),
                 Expanded(
-                  child: SelectableText(v.isEmpty ? '—' : v,
+                  child: SelectableText(v.isEmpty ? '—' : label(v),
                       style: TextStyle(color: v.isEmpty ? _muted : _text, fontSize: 15)),
                 ),
               ]),
@@ -1288,6 +1335,31 @@ class NoteBody extends StatelessWidget {
     }
 
     for (final line in s.split('\n')) {
+      final t = line.trim();
+      if (t.startsWith('|')) {
+        flushPlain();
+        flushProps();
+        if (!RegExp(r'^\|[\s:|-]+\|?$').hasMatch(t)) table.add(_cells(t)); // 가름줄 |---| 은 건너뛴다
+        continue;
+      }
+      flushTable();
+      final h = _heading.firstMatch(line);
+      if (h != null) {
+        flushPlain();
+        flushProps();
+        out.add(Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 2),
+          child: Text(label(h.group(1)!), style: const TextStyle(color: _text, fontSize: 17, fontWeight: FontWeight.w700)),
+        ));
+        continue;
+      }
+      if (t.startsWith('>')) {
+        flushPlain();
+        flushProps();
+        out.add(Text(label(t.replaceFirst(RegExp(r'^>\s?'), '')),
+            style: const TextStyle(color: _muted, fontSize: 12.5, height: 1.5)));
+        continue;
+      }
       final p = _prop.firstMatch(line);
       if (p != null) {
         flushPlain();
@@ -1313,6 +1385,7 @@ class NoteBody extends StatelessWidget {
       }
       plain.add(line);
     }
+    flushTable();
     flushProps();
     flushPlain();
     return out;

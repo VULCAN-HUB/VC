@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import threading
+import os
 import time
 import urllib.error
 import urllib.request
@@ -145,6 +146,7 @@ class Downloader:
     """한 번에 하나만 받는다. 여러 개를 동시에 받으면 둘 다 느리고 진행이 안 보인다."""
 
     CHUNK = 1 << 20  # 1MB
+    PART_STALE_SEC = 600  # 이만큼 안 자란 조각만 버린 것으로 본다
 
     def __init__(self, model_dir: str | Path = "../models") -> None:
         self.model_dir = Path(model_dir)
@@ -168,6 +170,11 @@ class Downloader:
                 continue
             for part in folder.glob("*.part"):
                 try:
+                    # ★ **받는 중인 조각은 안 지운다.** 받는 동안 VC 를 한 번 더 켜거나 자체점검이 돌면
+                    #   새 Downloader 가 남의 조각을 지워, 5GB 를 90% 받고 마지막 이름 바꾸기에서 실패했다
+                    #   (2026-09-18 맥). 받는 중이면 초마다 자라므로, 최근에 안 바뀐 것만 버린 것으로 친다.
+                    if time.time() - part.stat().st_mtime < self.PART_STALE_SEC:
+                        continue
                     part.unlink()
                     gone += 1
                 except OSError:
@@ -346,8 +353,15 @@ def _self_check() -> None:
             (root / "piper").mkdir(exist_ok=True)
             (root / "찌꺼기.gguf.part").write_bytes(b"x" * 100)
             (root / "piper" / "찌꺼기.onnx.part").write_bytes(b"x" * 100)
+            옛날 = time.time() - Downloader.PART_STALE_SEC - 5
+            for 조각 in root.rglob("*.part"):
+                os.utime(조각, (옛날, 옛날))
+            # ★ 지금 받는 중인 조각(방금 자랐다)은 남겨야 한다 — 받는 중에 VC 를 또 켜면 지워졌다
+            (root / "받는중.gguf.part").write_bytes(b"x" * 100)
             fresh = Downloader(tmp)
-            assert not list(root.rglob("*.part")), "켤 때 조각을 안 치웠다"
+            assert [x.name for x in root.rglob("*.part")] == ["받는중.gguf.part"], \
+                "켤 때 버린 조각을 안 치웠거나, 받는 중인 조각까지 지웠다"
+            (root / "받는중.gguf.part").unlink()
             assert fresh.sweep_parts() == 0  # 두 번 불러도 탈 없다
 
             # 버거운지 알려주되 막지는 않는다.

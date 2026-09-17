@@ -112,4 +112,21 @@ void main() {
     expect(find.text('열기'), findsOneWidget, reason: '저장했는데 편집기가 안 닫힌다');
     expect(got?.text, '급히 적은 것');
   });
+
+  testWidgets('정리 글 — 표 · 소제목 · 링크는 보일 말만', (tester) async {
+    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: NoteBody(api: api, text: '> VC 가 다시 쓰는 글\n\n## 보유중 (1)\n\n| 제품 | 종류 |\n|---|---|\n| [[제품 · vcis-689\\|vcis-689]] | 정수기 |\n\n근거 [[정수기 받음]] 참고'),
+        ),
+      ),
+    ));
+    expect(find.byType(Table), findsOneWidget, reason: '표를 안 그린다');
+    expect(find.text('vcis-689'), findsOneWidget, reason: '표 안 링크가 보일 말로 안 바뀐다');
+    expect(find.text('보유중 (1)'), findsOneWidget);
+    expect(find.textContaining('[['), findsNothing, reason: '링크 기호가 그대로 보인다');
+    expect(find.textContaining('|---|'), findsNothing);
+    expect(find.text('근거 정수기 받음 참고'), findsOneWidget);
+  });
 }
