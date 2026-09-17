@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:vc_app/main.dart';
 import 'package:vc_app/outbox.dart';
 import 'package:vc_app/prefs.dart';
+import 'package:vc_app/alarms.dart';
 import 'package:vc_app/shortcuts.dart';
 import 'package:vc_app/templates.dart';
 import 'package:vc_app/vc_api.dart';
@@ -490,6 +491,57 @@ void main() {
     expect(calls, contains('daily'));
     expect(find.text('2026-09-18'), findsWidgets, reason: '오늘 일지가 안 열린다');
   });
+
+  testWidgets('알림 — ⋮ 에서 날·때를 고르면 걸리고, 설정에서 지운다', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('vc_alarm');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final fake = _FakeNotifier();
+    final book = (await tester.runAsync(
+      () => AlarmBook.open(File('${dir.path}/vc_alarms.json'), fake),
+    ))!;
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async => _json({'title': '정수기', 'text': '몸'})),
+    );
+    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '정수기', alarms: book)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('알림 맞추기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // 날짜(시험 MaterialApp 은 기본 영어 표기)
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // 때
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(fake.scheduled.length, 1, reason: '알림을 안 걸었다');
+    expect(book.items.single.title, '정수기');
+
+    final prefs = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
+    await tester.pumpWidget(MaterialApp(home: SettingsPage(prefs: prefs, alarms: book)));
+    await tester.pumpAndSettle();
+    expect(find.text('정수기'), findsOneWidget, reason: '설정에 걸어 둔 알림이 안 보인다');
+    await tester.tap(find.byTooltip('지우기'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    expect(fake.canceled.length, 1, reason: '알림을 안 지웠다');
+    expect(book.items, isEmpty);
+  });
+}
+
+class _FakeNotifier implements Notifier {
+  final scheduled = <Alarm>[];
+  final canceled = <int>[];
+
+  @override
+  Future<bool> schedule(Alarm a) async {
+    scheduled.add(a);
+    return true;
+  }
+
+  @override
+  Future<void> cancel(int id) async => canceled.add(id);
 }
 
 class _FakeShortcuts implements AppShortcuts {

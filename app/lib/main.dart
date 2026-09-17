@@ -5,6 +5,7 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -18,6 +19,7 @@ import 'vc_api.dart';
 import 'pick.dart';
 import 'templates.dart';
 import 'prefs.dart';
+import 'alarms.dart';
 import 'shortcuts.dart';
 import 'ocr.dart';
 import 'recorder.dart';
@@ -151,7 +153,20 @@ class VcApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      MaterialApp(title: 'VC', debugShowCheckedModeBanner: false, theme: _theme(), home: const Root());
+      MaterialApp(
+        title: 'VC',
+        debugShowCheckedModeBanner: false,
+        theme: _theme(),
+        // 날짜·때 고르개 단추가 영어(OK·Cancel)로 떴다 — 한국어로
+        locale: const Locale('ko'),
+        supportedLocales: const [Locale('ko'), Locale('en')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: const Root(),
+      );
 }
 
 // ── 공용 조각 ────────────────────────────────────────────────────────────────
@@ -274,6 +289,7 @@ class _RootState extends State<Root> {
   Pairing? _pairing;
   Outbox? _outbox;
   AppPrefs? _prefs;
+  AlarmBook? _alarms;
   bool _ready = false;
 
   @override
@@ -300,12 +316,14 @@ class _RootState extends State<Root> {
     }
     final outbox = await Outbox.open(File('${where.path}/vc_outbox.json'));
     final prefs = await AppPrefs.open(File('${where.path}/vc_settings.json'));
+    final alarms = await AlarmBook.open(File('${where.path}/vc_alarms.json'), PhoneNotifier());
     await atLeast;
     if (!mounted) return;
     setState(() {
       _pairing = saved == null ? null : Pairing.parse(saved);
       _outbox = outbox;
       _prefs = prefs;
+      _alarms = alarms;
       _ready = true;
     });
   }
@@ -357,6 +375,7 @@ class _RootState extends State<Root> {
             api: VcApi(p),
             outbox: _outbox!,
             prefs: _prefs,
+            alarms: _alarms,
             onUnauthorized: () => _unpair('열쇠가 안 맞아 — QR 을 다시 찍어 줘'),
             onUnpair: () => _unpair('연결을 지웠어'),
           );
@@ -655,6 +674,7 @@ class Home extends StatefulWidget {
     required this.onUnauthorized,
     required this.onUnpair,
     this.prefs,
+    this.alarms,
     this.shortcuts = const HomeShortcuts(),
   });
 
@@ -663,6 +683,7 @@ class Home extends StatefulWidget {
   final VoidCallback onUnauthorized;
   final VoidCallback onUnpair;
   final AppPrefs? prefs;
+  final AlarmBook? alarms; // 시간 알림(편의 기능 24번)
   final AppShortcuts shortcuts; // 홈 아이콘 길게 누르기
 
   @override
@@ -903,7 +924,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       } else if (v == 'settings') {
                         final pr = widget.prefs;
                         if (pr != null) {
-                          Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsPage(prefs: pr)));
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsPage(prefs: pr, alarms: widget.alarms)));
                         }
                       } else if (v == 'send') {
                         _send();
@@ -930,6 +951,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 api: widget.api,
                 onFail: _fail,
                 outbox: widget.outbox,
+                alarms: widget.alarms,
                 onAppend: (t) => _write(title: t),
                 onSaveLine: (t, line) async {
                   await widget.outbox.add(t, line);
@@ -975,6 +997,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             await widget.outbox.add(x, line);
             _send();
           },
+          alarms: widget.alarms,
         ),
       ),
     );
@@ -1060,9 +1083,10 @@ class _TrashPageState extends State<TrashPage> {
 
 /// 설정 — ⋮ 안(결정 26). 늘어나는 켜고 끄기는 여기에 모은다.
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.prefs});
+  const SettingsPage({super.key, required this.prefs, this.alarms});
 
   final AppPrefs prefs;
+  final AlarmBook? alarms;
 
   @override
   Widget build(BuildContext context) => Backdrop(
@@ -1081,6 +1105,39 @@ class SettingsPage extends StatelessWidget {
               title: const Text('앱을 열면 바로 새 메모', style: TextStyle(color: _text)),
               subtitle: const Text('목록 대신 빈 메모로 시작한다(구글 킵처럼)', style: TextStyle(color: _muted)),
             ),
+            // 걸어 둔 시간 알림(편의 기능 24번) — 여기서 보고 지운다
+            if (alarms != null) ...[
+              const SectionLabel('걸어 둔 알림'),
+              ListenableBuilder(
+                listenable: alarms!,
+                builder: (_, _) => Column(
+                  children: [
+                    if (alarms!.items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('없음 — 글 보기 ⋮ › 알림 맞추기', style: TextStyle(color: _muted)),
+                        ),
+                      ),
+                    for (final a in alarms!.items)
+                      ListTile(
+                        leading: const Icon(Icons.alarm, color: _accent),
+                        title: Text(a.title, style: const TextStyle(color: _text)),
+                        subtitle: Text(
+                          '${a.when.month}월 ${a.when.day}일 ${a.when.hour}시 ${a.when.minute.toString().padLeft(2, '0')}',
+                          style: _mono(11, _muted),
+                        ),
+                        trailing: IconButton(
+                          tooltip: '지우기',
+                          icon: const Icon(Icons.close, color: _muted),
+                          onPressed: () => alarms!.remove(a),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1214,6 +1271,7 @@ class BrowseTab extends StatefulWidget {
     this.outbox,
     this.onAppend,
     this.onSaveLine,
+    this.alarms,
     this.archived = false,
   });
 
@@ -1222,6 +1280,7 @@ class BrowseTab extends StatefulWidget {
   final Outbox? outbox; // 폰 글을 보내면 목록을 다시 부른다
   final void Function(String title)? onAppend; // 글 보기의 「이어 쓰기」
   final Future<void> Function(String title, String line)? onSaveLine; // 글 보기의 칸 고치기
+  final AlarmBook? alarms; // 글 보기의 시간 알림
   final bool archived; // 보관함으로 쓸 때
 
   @override
@@ -1594,6 +1653,7 @@ class _BrowseTabState extends State<BrowseTab> {
                             folder: h['folder'] as String?,
                             onAppend: widget.onAppend,
                             onSaveLine: widget.onSaveLine,
+                        alarms: widget.alarms,
                           ),
                         ),
                       ),
@@ -1728,6 +1788,7 @@ class NotePage extends StatefulWidget {
     this.folder,
     this.onAppend,
     this.onSaveLine,
+    this.alarms,
   });
 
   final VcApi api;
@@ -1738,6 +1799,8 @@ class NotePage extends StatefulWidget {
   final void Function(String title)? onAppend;
   // 한 줄을 이 글 끝에 덧붙인다(칸 고치기) — 폰에 먼저 저장하고 보낸다
   final Future<void> Function(String title, String line)? onSaveLine;
+  // 시간 알림(편의 기능 24번). 없으면 메뉴에 안 뜬다.
+  final AlarmBook? alarms;
 
   @override
   State<NotePage> createState() => _NotePageState();
@@ -1745,6 +1808,35 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> {
   bool _thinking = false;
+
+  /// 시간 알림 맞추기(편의 기능 24번) — 날·때를 고르면 폰이 그때 알려 준다.
+  Future<void> _setAlarm() async {
+    final book = widget.alarms;
+    if (book == null) return;
+    final now = DateTime.now();
+    final day = await showDatePicker(
+      context: context,
+      initialDate: now.add(const Duration(days: 1)),
+      firstDate: now,
+      lastDate: DateTime(now.year + 5),
+    );
+    if (day == null || !mounted) return;
+    final at = await showTimePicker(context: context, initialTime: const TimeOfDay(hour: 9, minute: 0));
+    if (at == null || !mounted) return;
+    final when = DateTime(day.year, day.month, day.day, at.hour, at.minute);
+    final ok = await book.add(widget.title, when);
+    if (!mounted) return;
+    final mm = at.minute.toString().padLeft(2, '0'); // ★ Dart 는 한글 변수 이름을 못 쓴다
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            ok ? '${when.month}월 ${when.day}일 ${at.hour}시 $mm 에 알려 줄게' : '알림을 못 걸었어 — 아이폰 설정 › VC › 알림을 켜 줘',
+          ),
+        ),
+      );
+  }
 
   void _open(String title) => Navigator.push(
     context,
@@ -1755,6 +1847,7 @@ class _NotePageState extends State<NotePage> {
         title: title,
         onAppend: widget.onAppend,
         onSaveLine: widget.onSaveLine,
+        alarms: widget.alarms,
       ),
     ),
   );
@@ -1877,10 +1970,11 @@ class _NotePageState extends State<NotePage> {
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: _muted),
-            onSelected: _assist,
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'summary', child: Text('AI 요약')),
-              PopupMenuItem(value: 'translate', child: Text('AI 번역')),
+            onSelected: (v) => v == 'alarm' ? _setAlarm() : _assist(v),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'summary', child: Text('AI 요약')),
+              const PopupMenuItem(value: 'translate', child: Text('AI 번역')),
+              if (widget.alarms != null) const PopupMenuItem(value: 'alarm', child: Text('알림 맞추기')),
             ],
           ),
         ],
