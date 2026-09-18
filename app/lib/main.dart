@@ -1396,6 +1396,14 @@ class _BrowseTabState extends State<BrowseTab> {
 
   int _asking = 0; // 마지막 물음 번호 — 늦게 온 옛 답이 새 목록을 덮지 않게
 
+  /// 목록이 빈 **까닭**. 화면마다 다르다 — 보관함에서 「창고가 비었어 · 아래 새 메모로」 라고 말하면
+  /// 거짓말이다(창고에는 글이 있고, 그 화면에는 「새 메모」 단추도 없다. 2026-09-18 시뮬레이터에서 봤다).
+  String _emptyWhy(String ask) {
+    if (_filter == _photo) return widget.archived ? '보관한 글 중에 사진 붙은 것이 없어' : '사진 붙은 글이 없어';
+    if (ask.isNotEmpty) return widget.archived ? '보관함에서 못 찾았어 — 말을 바꿔 봐' : '안 나왔어 — 말을 바꿔 봐';
+    return widget.archived ? '보관한 글이 없어 — 카드를 길게 눌러 「보관」하면 여기로 와' : '아직 창고가 비었어 — 아래 「새 메모」로 시작';
+  }
+
   Future<void> _find() async {
     final q = _q.text.trim();
     final mine = ++_asking;
@@ -1412,9 +1420,7 @@ class _BrowseTabState extends State<BrowseTab> {
         _hits = shown;
         _asked = q;
         _offline = false;
-        _empty = shown.isEmpty
-            ? (_filter == _photo ? '사진 붙은 글이 없어' : (ask.isEmpty ? '아직 창고가 비었어 — 아래 「새 메모」로 시작' : '안 나왔어 — 말을 바꿔 봐'))
-            : null;
+        _empty = shown.isEmpty ? _emptyWhy(ask) : null;
         // 칩은 아무것도 안 좁혔을 때의 목록으로 세운다 — 좁힌 뒤에 다시 세면 칩이 사라진다
         if (ask.isEmpty) {
           final count = <String, int>{};

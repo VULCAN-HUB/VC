@@ -1019,8 +1019,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"text": self.server.assist(what, 글.body, lang)})
             except self.server.NoModel as 없음:
                 return self._send(503, {"error": str(없음)})
+            except backends.BackendError as 못함:
+                # ★★ **기계 이름을 사람 화면에 내보내지 않는다.** 폰에 「AI 가 답을 못 했다 — BackendError」 가
+                #   그대로 떴다(2026-09-18 시뮬레이터 실기) — 그 글자를 본 사람은 **무엇을 해야 할지 모른다.**
+                #   할 일을 적어 주고, 기계 이름은 자국에만 남긴다.
+                _알림(f"[AI 도움] 엔진이 답을 못 했다 — {type(못함).__name__}: {못함}")
+                return self._send(502, {
+                    "error": "AI 엔진이 답을 못 했다 — 자체 모델이 올라와 있는지, 바깥 AI 를 쓴다면 주소·키가 맞는지 본다",
+                    "why": str(못함)[:120]})
             except Exception as e:
-                return self._send(502, {"error": f"AI 가 답을 못 했다 — {type(e).__name__}"})
+                _알림(f"[AI 도움] 뜻밖의 일 — {type(e).__name__}: {e}")
+                return self._send(502, {"error": "AI 가 답을 못 했다 — 잠시 뒤 다시 해 본다"})
 
         if url.path == "/eb/v1/log":
             try:
@@ -1878,6 +1887,15 @@ def _self_check() -> None:
     fake.fail = False
     _상, _답 = call("POST", "/eb/v1/assist", {"action": "translate", "title": "요약 시험", "lang": "일본어"})
     assert _상 == 200 and "긴 회의 메모" in _답["text"], (_상, _답)
+    # ★ 엔진이 거절하면 **사람 말로** 알린다 — 클래스 이름(BackendError 따위)은 화면에 안 나간다
+    fake.fail = True
+    _상, _못 = call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"})
+    assert _상 == 502, _상
+    _영단어 = max((len(w) for w in "".join(c if (c.isascii() and c.isalpha()) else " "
+                                      for c in _못["error"]).split()), default=0)
+    assert _영단어 <= 2, f"기계 이름이 화면 문구에 샌다: {_못['error']}"   # 「AI」 까지만 봐준다
+    assert "본다" in _못["error"], _못["error"]
+    fake.fail = False
     assert call("POST", "/eb/v1/assist", {"action": "지우기", "title": "요약 시험"})[0] == 400
     assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "없는 글"})[0] == 404
     assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"}, token="wrong-token")[0] == 401
