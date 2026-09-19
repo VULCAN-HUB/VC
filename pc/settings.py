@@ -625,6 +625,78 @@ def open_dialog(win, notes: Notes):
     폰틀.addWidget(창.폰QR)
     폰틀.addStretch(1)
 
+    # ── 딴 PC 와 잇기(오너 결정 30). **메인 하나 · 나머지는 사본**.
+    사본틀, _ = 쪽("딴 PC", "이 VC 가 메인인지, 메인의 사본인지. 사본은 글을 통째로 내려받아 두므로 "
+                        "메인이 못 쓰게 돼도 여기서 이어 갈 수 있다(그때 「이 VC 를 메인으로」).")
+    쓰던사본 = paths.load_config().get("사본") or {}
+    창.사본역할 = QComboBox()
+    창.사본역할.setObjectName("pick")
+    for 보일, 값 in (("메인 — 진짜 창고가 여기 있다", "메인"), ("손님 — 메인의 사본을 둔다", "손님")):
+        창.사본역할.addItem(보일, 값)
+    창.사본역할.setCurrentIndex(max(0, 창.사본역할.findData(쓰던사본.get("역할") or "메인")))
+    줄(사본틀, "이 VC 의 자리", 창.사본역할)
+
+    창.사본주소 = QLineEdit(쓰던사본.get("main_url", ""))
+    창.사본주소.setObjectName("field")
+    창.사본주소.setPlaceholderText("메인 주소 — http://100.x.x.x:8765 (테일스케일 주소)")
+    줄(사본틀, "메인 주소 (손님일 때)", 창.사본주소)
+
+    창.사본열쇠 = QLineEdit()
+    창.사본열쇠.setObjectName("field")
+    창.사본열쇠.setEchoMode(QLineEdit.Password)
+    창.사본열쇠.setPlaceholderText("메인의 열쇠 — 비우면 쓰던 것 그대로")
+    줄(사본틀, "메인 열쇠", 창.사본열쇠)
+
+    사본말 = QLabel("")
+    사본말.setObjectName("note")
+    사본말.setWordWrap(True)
+    사본틀.addWidget(사본말)
+
+    def _사본저장() -> None:
+        역할 = 창.사본역할.currentData()
+        cfg = paths.load_config()
+        옛 = cfg.get("사본") or {}
+        열쇠 = 창.사본열쇠.text().strip() or 옛.get("main_token", "")
+        새것 = {"역할": 역할, "main_url": 창.사본주소.text().strip(), "main_token": 열쇠}
+        paths.save_config({**cfg, "사본": 새것})
+        # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다
+        try:
+            import server as _서버
+
+            if _서버.RUNNING is not None:
+                _서버.RUNNING.cfg["사본"] = 새것
+        except Exception:
+            pass
+        if 역할 == "메인":
+            사본말.setText("이 VC 가 메인이다. 딴 PC 는 여기를 보고 사본을 쌓는다.")
+        elif not (새것["main_url"] and 새것["main_token"]):
+            사본말.setText("손님으로 두려면 **메인 주소와 열쇠**가 둘 다 있어야 한다.".replace("**", ""))
+        else:
+            사본말.setText(f"손님이다. {새것['main_url']} 과 1분마다 주고받는다.")
+
+    def _지금주고받기() -> None:
+        _사본저장()
+        try:
+            import server as _서버
+
+            사본말.setText(_서버.RUNNING.사본한판() if _서버.RUNNING else "VC 서버가 안 떠 있어 못 한다.")
+        except Exception as e:
+            사본말.setText(f"주고받다 막혔어 — {type(e).__name__}")
+
+    사본단추줄 = QHBoxLayout()
+    사본저장단추 = QPushButton("저장")
+    사본지금단추 = QPushButton("지금 주고받기")
+    사본지금단추.setObjectName("primary")
+    사본저장단추.clicked.connect(lambda: _사본저장())
+    사본지금단추.clicked.connect(lambda: _지금주고받기())
+    for 단추 in (사본저장단추, 사본지금단추):
+        사본단추줄.addWidget(단추)
+    사본단추줄.addStretch(1)
+    사본틀.addLayout(사본단추줄)
+    창.사본저장 = _사본저장
+    창.사본지금 = _지금주고받기
+    사본틀.addStretch(1)
+
     # ── 확장(오너 결정 23 · 편의 기능 31번). **기본은 다 꺼짐** — 켜는 일은 이 컴퓨터 앞에서만 한다.
     확장틀, _ = 쪽("확장", "확장 하나 = 앱 자리 `plugins/이름/` 폴더(`plugin.json` + `main.py`). "
                         "켠 것만 돌고, 하나가 터져도 VC 는 그 확장만 끄고 계속 산다.")
@@ -933,6 +1005,26 @@ def _self_check() -> None:
             다시.칸들["음식"]["좋아하는 음식"].setText("")
             다시.저장()
             assert "좋아하는 음식" not in n.read(PROFILE_TITLE).body, "비운 답이 남는다"
+            # ★★ 딴 PC 와 잇기(결정 30): 메인/손님을 고르고, 손님이면 주소·열쇠가 **둘 다** 있어야 한다.
+            사본창 = open_dialog(win, n)
+            assert "딴 PC" in 사본창.갈래이름, 사본창.갈래이름
+            사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("손님"))
+            사본창.사본주소.setText("http://100.1.2.3:8765")
+            사본창.사본열쇠.setText("key-main")
+            사본창.사본저장()
+            적힌 = paths.load_config().get("사본") or {}
+            assert 적힌 == {"역할": "손님", "main_url": "http://100.1.2.3:8765", "main_token": "key-main"}, 적힌
+            # 열쇠를 비우면 **쓰던 것 그대로** — 주소만 고치려는데 열쇠를 다시 치게 하면 안 된다
+            사본창.사본열쇠.setText("")
+            사본창.사본주소.setText("http://100.1.2.9:8765")
+            사본창.사본저장()
+            assert (paths.load_config()["사본"])["main_token"] == "key-main", paths.load_config()["사본"]
+            # 메인으로 돌리면 주소가 남아 있어도 손님이 아니다(승격 · 결정 30 ⑤)
+            사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("메인"))
+            사본창.사본저장()
+            assert (paths.load_config()["사본"])["역할"] == "메인"
+            사본창.deleteLater()
+
             # ★ 첫 연결(결정 18·21): QR 을 띄우면 **붙을 주소와 남은 시간**을 같이 보인다 —
             #   「왜 안 찍히지」의 첫째 까닭이 2분 지난 QR 이었고, 남이 띄운 QR 인지 맞춰 볼 것도 없었다.
             paths.save_config({**paths.load_config(), "pair_token": "시험열쇠-ABC"})

@@ -1780,6 +1780,80 @@ class EBServer(ThreadingHTTPServer):
             _알림(f"[정리] 제품 {got['products']}개 · 새로 쓴 정리 글 {len(got['written'])}장")
         return got
 
+    # --- 딴 PC 사본(결정 30) -------------------------------------------------
+    def 손님설정(self) -> dict:
+        """이 VC 가 손님이면 {`main_url`, `main_token`}, 메인이면 빈 표."""
+        got = self.cfg.get("사본") or {}
+        if not isinstance(got, dict) or got.get("역할") != "손님":
+            return {}
+        주소, 열쇠 = str(got.get("main_url") or "").strip(), str(got.get("main_token") or "").strip()
+        return {"main_url": 주소, "main_token": 열쇠} if 주소 and 열쇠 else {}
+
+    def _메인부르기(self, 설정: dict):
+        """메인에 묻는 함수를 만든다. `(method, path, 바이트=False, 몸=None)` → dict·bytes·None."""
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        뿌리 = 설정["main_url"].rstrip("/")
+
+        def 부르기(method: str, path: str, 바이트: bool = False, 몸: Any = None):
+            앞, _, 뒤 = path.partition("?")
+            주소 = 뿌리 + 앞 + (("?" + urllib.parse.urlencode(
+                {k: v[0] for k, v in parse_qs(뒤, keep_blank_values=True).items()})) if 뒤 else "")
+            req = urllib.request.Request(
+                주소, method=method,
+                data=None if 몸 is None else json.dumps(몸).encode(),
+                headers={"Authorization": f"Bearer {설정['main_token']}",
+                         "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    raw = r.read()
+                    if 바이트:
+                        return raw
+                    return json.loads(raw.decode()) if raw else {}
+            except (urllib.error.URLError, OSError, ValueError):
+                # 못 닿아도 **사본은 그대로 둔다** — 부르는 쪽이 까닭을 말한다.
+                return None
+
+        return 부르기
+
+    def 사본한판(self) -> str:
+        """메인에서 받고, 이 PC 에서 쓴 것을 보낸다. 사람에게 보일 한 줄."""
+        import mirror
+
+        설정 = self.손님설정()
+        if not 설정:
+            return "이 VC 는 메인이야 — 받을 곳이 없다."
+        자국 = paths.기계자리(mirror.MEMO)
+        부르기 = self._메인부르기(설정)
+        받 = mirror.한판(self.notes, 부르기, 자국)
+        보 = mirror.보내기(self.notes, 부르기, 자국)
+        if 받.까닭 or 보.까닭:
+            return f"메인({설정['main_url']})에 못 닿았어."
+        말 = []
+        if 받.몇개:
+            말.append(f"받음 새로 {받.새로} · 고침 {받.고침} · 지움 {받.지움}"
+                     + (f" · 사진 {받.첨부}" if 받.첨부 else ""))
+        if 보.보냄:
+            말.append(f"보냄 {보.보냄}" + (f"(둘 다 남김 {보.붙임})" if 보.붙임 else ""))
+        return " · ".join(말) if 말 else "메인과 같아 — 주고받을 게 없다."
+
+    def start_mirror(self, every_sec: int = 60) -> None:
+        """손님이면 주기적으로 메인과 주고받는다. 메인이면 아무 일도 안 한다."""
+        def loop() -> None:
+            while True:
+                try:
+                    if self.손님설정():
+                        말 = self.사본한판()
+                        if 말 and "주고받을 게 없다" not in 말 and "메인이야" not in 말:
+                            _알림(f"[사본] {말}")
+                except Exception as e:      # 사본이 실패해도 VC 는 계속 떠 있어야 한다
+                    _알림(f"[사본 실패] {type(e).__name__}: {e}")
+                time.sleep(every_sec)
+
+        threading.Thread(target=loop, daemon=True).start()
+
     def start_consolidate(self, every_sec: int = 120) -> None:
         """메모가 바뀌면 **2분쯤 모았다가** 정리 글을 새로 쓴다(결정 19). 하루 한 번은 바뀐 게 없어도 돈다.
 
@@ -1843,6 +1917,7 @@ def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
     server.start_housekeeping()
     server.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다
     server.start_consolidate()  # 흩어진 메모 → 제품 정리 글
+    server.start_mirror()       # 손님이면 메인과 주고받는다(결정 30)
     print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
     print(f"페어링 열쇠: {paths.config_path()} 의 pair_token")   # 값은 안 찍는다(파일로 받으면 샌다)
     server.serve_forever()
@@ -1989,6 +2064,20 @@ def _self_check() -> None:
     assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
     assert sum(f["notes"] for f in _폴) >= 1
     assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
+
+    # --- 손님 모드로 메인과 주고받기(결정 30) ---
+    # 메인 자리에서는 아무 일도 안 한다 — 제 창고를 제가 베끼면 안 된다
+    assert "메인이야" in server.사본한판(), server.사본한판()
+    assert server.손님설정() == {}
+    # 주소·열쇠가 반쪽이면 손님이 아니다(빈 주소로 부르다 터지는 것을 막는다)
+    server.cfg["사본"] = {"역할": "손님", "main_url": "", "main_token": "k"}
+    assert server.손님설정() == {}
+    # 닿지 않는 메인이면 **까닭을 말하고 창고는 그대로 둔다**
+    server.cfg["사본"] = {"역할": "손님", "main_url": "http://127.0.0.1:9", "main_token": "k"}
+    _장수 = server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
+    assert "못 닿았어" in server.사본한판(), server.사본한판()
+    assert server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == _장수, "못 닿았다고 창고가 줄었다"
+    server.cfg.pop("사본", None)
 
     # --- 바뀐 것만 내어 주기(결정 30) — 딴 PC 의 VC 가 사본을 쌓는 문 ---
     _처음 = call("GET", "/eb/v1/changes?since=0")[1]
@@ -3040,6 +3129,10 @@ def _self_check() -> None:
             ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다"),
             ("eb.start_consolidate()", "창 있는 판이 정리 실을 안 띄운다"),
             ("server.start_consolidate()", "--no-ui 로 띄우면 메모가 정리되지 않는다"),
+            # 사본 실(결정 30) — 안 띄우면 손님으로 골라 놔도 **아무것도 안 받는다**
+            ("def start_mirror(", "사본 실이 서버에 없다"),
+            ("eb.start_mirror()", "창 있는 판이 사본 실을 안 띄운다"),
+            ("server.start_mirror()", "--no-ui 로 띄우면 사본이 안 자란다"),
             # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 처음엔 이 실의 제 연결에만
             #   임베더를 붙였다 — 벡터는 자라는데 `search` 가 쓰는 `self.notes` 는
             #   `_embed` 가 None 이라 **뜻 검색이 영영 0건**이었다(시험 쪽이 --no-ui 에서 잡음).

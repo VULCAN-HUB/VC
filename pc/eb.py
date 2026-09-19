@@ -57,6 +57,7 @@ def start_server(cfg: dict) -> srv.EBServer:
     eb.start_housekeeping()
     eb.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다 (--no-ui)
     eb.start_consolidate()  # 흩어진 메모 → 제품 정리 글 (2분 모아서)
+    eb.start_mirror()       # 손님이면 메인과 주고받는다(결정 30). 메인이면 아무 일도 안 한다
     threading.Thread(target=eb.serve_forever, daemon=True).start()
     return eb
 
