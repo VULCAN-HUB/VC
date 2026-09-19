@@ -27,6 +27,26 @@ import Vision
         }
       }
     }
+    // 공유 시트로 들어온 것이 쌓이는 자리를 알려 준다(결정 29 · 편의 기능 11번).
+    //   확장은 거기에 파일만 떨어뜨리고, 보내는 일은 앱의 대기함이 한다.
+    if let reg = engineBridge.pluginRegistry.registrar(forPlugin: "VcShare") {
+      let channel = FlutterMethodChannel(name: "vc/share", binaryMessenger: reg.messenger())
+      channel.setMethodCallHandler { call, result in
+        guard call.method == "dir" else {
+          result(FlutterMethodNotImplemented)
+          return
+        }
+        guard let root = FileManager.default
+          .containerURL(forSecurityApplicationGroupIdentifier: "group.com.unknown8563.vcApp") else {
+          // 앱 그룹 권한이 없으면 **조용히 빈 자리를 주지 않는다** — 없는 것과 못 여는 것은 다르다.
+          result(FlutterError(code: "no_group", message: "앱 그룹 권한이 없다", details: nil))
+          return
+        }
+        let dir = root.appendingPathComponent("공유함")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        result(dir.path)
+      }
+    }
   }
 
   static func readText(_ path: String) -> String {

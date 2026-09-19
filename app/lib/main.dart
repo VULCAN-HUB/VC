@@ -22,6 +22,7 @@ import 'pick.dart';
 import 'templates.dart';
 import 'prefs.dart';
 import 'alarms.dart';
+import 'shared_inbox.dart';
 import 'shortcuts.dart';
 import 'ocr.dart';
 import 'recorder.dart';
@@ -420,6 +421,7 @@ class _RootState extends State<Root> {
             prefs: _prefs,
             cache: _cache,
             alarms: _alarms,
+            shared: SharedInbox(),
             onUnauthorized: () => _unpair('열쇠가 안 맞아 — QR 을 다시 찍어 줘'),
             onUnpair: () => _unpair('연결을 지웠어'),
           );
@@ -717,6 +719,7 @@ class Home extends StatefulWidget {
     this.cache,
     this.alarms,
     this.shortcuts = const HomeShortcuts(),
+    this.shared = const SharedInboxNone(),
   });
 
   final VcApi api;
@@ -727,6 +730,7 @@ class Home extends StatefulWidget {
   final Cache? cache; // 폰 안 작은 창고(결정 27)
   final AlarmBook? alarms; // 시간 알림(편의 기능 24번)
   final AppShortcuts shortcuts; // 홈 아이콘 길게 누르기
+  final SharedInboxLike shared; // 공유 시트로 들어온 것(결정 29) — 시험은 가짜로 갈아 낀다
 
   @override
   State<Home> createState() => _HomeState();
@@ -774,7 +778,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) _hello();
   }
 
+  /// 공유 시트로 들어온 것 꺼내기(결정 29). 켤 때와 앱으로 돌아올 때마다 본다 —
+  /// 확장은 파일만 떨어뜨리므로, **여기서 대기함으로 옮겨야** 컴퓨터로 간다.
+  Future<void> _takeShared() async {
+    final n = await widget.shared.drain(widget.outbox, cache: widget.cache);
+    if (n <= 0 || !mounted) return;
+    _list.currentState?._find();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(duration: const Duration(seconds: 2), content: Text('공유로 들어온 것 $n개를 받았어 — 컴퓨터로 보낸다')));
+  }
+
   Future<void> _hello() async {
+    await _takeShared();
     try {
       final n = await widget.api.notes();
       _show(n == null ? '${widget.api.pairing.label} 에 이어짐' : '이어짐 · 창고 $n장', _accent);
