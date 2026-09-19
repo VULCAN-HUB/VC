@@ -67,6 +67,7 @@ from panels import (PROPOSAL_AREA_MIN_H, ActivityFeed, Folded, Gaps, HudPanel, I
                     Results, ServerLink, Years)
 from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT, GraphView
 import notes as notes_module
+import facets
 import orders
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
 from skills import Skill, SkillStore, analyze
@@ -1506,12 +1507,49 @@ class MainWindow(QWidget):
                 said += f" 안 보이면 kind:{갈래들[1]} 처럼 갈래로 좁혀 봐."
         elif len(hits) > 1:
             said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
+            # ★★ **찾은 것들 자체를 세어 좁히는 길을 권한다**(오너 2026-09-19).
+            #   「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
+            #   진짜로 갈라지는 것만 권한다 — 전부에 붙은 값·하나뿐인 값은 뺀다.
+            좁힐길 = facets.한줄([dict(r) for r in rows])
+            if 좁힐길:
+                said += f" {좁힐길}"
         else:
             # 조사는 받침을 본다 — 따옴표·`tag:` 가 붙어도 **끝말**로 고른다(시험 쪽 14)
             said = (f"{self._감싸기(text)}{orders.tail(text.strip(chr(34) + chr(39)), '은/는')} "
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    #: 말로 부르는 이름 → 설정 창의 어느 칸인가(`None` 이면 설정 창이 아니라 딴 것)
+    창이름 = {
+        "설정": None, "설정창": None, "환경설정": None, "내 정보": None,
+        "폰 연결": "폰 연결", "큐알": "폰 연결", "qr": "폰 연결",
+        "확장": "확장", "확장플러그인": "확장", "확장프로그램": "확장", "플러그인": "확장",
+        "바깥ai": "바깥 AI", "바깥에이아이": "바깥 AI", "모델": "바깥 AI",
+        "지침": "지침", "외부연결": "외부 연결", "화면설정": "화면",
+    }
+
+    def 창열기(self, 이름: str) -> str:
+        """「설정창 열어줘」 · 「확장 열어줘」 — 화면을 연다(오너 2026-09-19).
+
+        ★ 전에는 이런 말이 **「설정창」이라는 글을 찾다** 실패했다. 사람은 글만 부르지 않는다.
+        설정 창은 칸이 스물이라 **그 칸까지 곧장** 연다 — 열어 놓고 찾게 하면 반쯤만 들어준 것이다.
+        """
+        키 = 이름.replace(" ", "").lower()
+        if 키 in ("단축키", "도움말"):
+            self.단축키보기()
+            return "단축키 목록이야."
+        if 키 in ("전체화면", "전체화면켜"):
+            방식 = settings.toggle_full(self)
+            return f"{방식} 으로 바꿨어."
+        if 키 not in {k.replace(" ", "").lower() for k in self.창이름}:
+            return f"'{이름}' 이라는 창은 몰라. 설정 · 폰 연결 · 확장 · 바깥 AI · 단축키 가 있어."
+        칸 = next(v for k, v in self.창이름.items() if k.replace(" ", "").lower() == 키)
+        창 = settings.open_dialog(self, self.notes)
+        if 칸 and 칸 in getattr(창, "갈래이름", []):
+            창.목록.setCurrentRow(창.갈래이름.index(칸))
+            return f"설정 창의 「{칸}」 칸이야."
+        return "설정 창이야."
 
     @_쓰기막히면알림(돌려줄=True)
     def do_order(self, order: "orders.Order", started: float = 0.0) -> bool:
@@ -1531,6 +1569,9 @@ class MainWindow(QWidget):
             # 적어 놓고 안 쌓이면 그 칸은 거짓말을 하는 것이다.
             self._log_deed(what, said, started)
             return True
+
+        if what == "창열기":
+            return done(self.창열기(name or ""))
 
         if what == "무르기":
             # **잘못 시킨 것을 되돌린다.** 되묻기까지 거쳐 「지워」를 다시 치게 하면

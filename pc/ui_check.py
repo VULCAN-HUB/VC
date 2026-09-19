@@ -698,6 +698,40 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()  # 다음 검사가 깨끗한 상태에서 시작하게
 
+        # --- 찾은 게 많으면 **좁히는 길**을 권한다(오너 2026-09-19) ---
+        # ★ 「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
+        for i in range(6):
+            win.notes.write(Note(title=f"고기 이야기 {i}", body="#고기 구웠다",
+                                 kind="일" if i % 2 else "결정"))
+        win.ask("고기")
+        _말 = win._say_text
+        assert "더 좁히려면" in _말, _말
+        assert "kind:" in _말 or "tag:" in _말, _말
+        # 몇 개 안 되면 안 권한다 — 그냥 보는 게 빠르다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("고기 이야기 1")
+        assert "더 좁히려면" not in win._say_text, win._say_text
+        # 다음 검사는 깨끗한 자리에서 — 초점이 남아 있으면 「첫 검색」이 「좁히기」가 된다
+        win.graph.clear_focus()
+        win.clear_detail()
+
+        # --- 말로 화면 열기(오너 2026-09-19) ---
+        # ★ 「설정창 열어줘」가 **그런 제목의 글을 찾다** 실패했다. 사람은 글만 부르지 않는다.
+        import orders as _orders창
+
+        for 말, 있어야 in (("설정창 열어줘", "설정 창"), ("확장 열어줘", "확장"),
+                        ("폰 연결 보여줘", "폰 연결"), ("단축키", "단축키")):
+            _o = _orders창.read_order(말)
+            assert _o is not None and _o.what == "창열기", (말, _o)
+            _답 = win.창열기(_o.target or "")
+            assert 있어야 in _답, (말, _답)
+        # 모르는 창은 **무엇이 있는지 알려 준다** — 「몰라」로 끝나면 사람이 다음에 뭘 칠지 모른다
+        _몰라 = win.창열기("우주선")
+        assert "몰라" in _몰라 and "설정" in _몰라, _몰라
+        # 글 제목은 여전히 글로 연다 — 창 이름이 글 부르기를 잡아먹으면 안 된다
+        assert _orders창.read_order("카페 단골 열어줘").what == "열기"
+
         # --- 초점: 맞는 것만 남고 나머지는 가라앉는다 ---
         win.graph.clear_focus()
         overview_zoom = win.graph._zoom
