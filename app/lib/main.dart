@@ -440,14 +440,12 @@ class IntroPage extends StatelessWidget {
           child: Column(
             children: [
               const Spacer(flex: 3),
-              const VcMark(size: 230),
-              const SizedBox(height: 18),
-              // ★ 전에는 마크 밑에 **기본 글꼴**로 큰 「V C」를 한 번 더 적었다 — 마크가 이미 VC 인데
-              //   글자만 시스템 글꼴이라 겉돌았다(오너: 「구린 폰트」). 마크에 이름을 맡기고,
-              //   아래 한 줄은 앱의 다른 글씨(계기판)와 같은 결로 맞춘다.
-              Text('VULCAN', style: _mono(13, _text, weight: FontWeight.w600).copyWith(letterSpacing: 7)),
-              const SizedBox(height: 5),
-              Text('내 기억 창고', style: _mono(11.5, _muted).copyWith(letterSpacing: 2)),
+              // ★ 이름은 **마크 하나로** 말한다. 전에는 밑에 기본 글꼴로 큰 「V C」를 또 적어 글자만
+              //   딴 결로 겉돌았고(오너: 「구린 폰트」), 그 아래 「VULCAN」은 **오너의 작업 PC 이름**이지
+              //   이 물건의 이름이 아니다(오너 2026-09-19). 마크를 키우고 둘 다 뺐다.
+              const VcMark(size: 280),
+              const SizedBox(height: 20),
+              Text('내 기억 창고', style: _mono(12, _muted).copyWith(letterSpacing: 3)),
               const Spacer(flex: 4),
               Text('// 컴퓨터를 찾는 중', style: _mono(11, _accent.withValues(alpha: .75))),
               const SizedBox(height: 12),
