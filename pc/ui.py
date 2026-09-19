@@ -628,7 +628,7 @@ class MainWindow(QWidget):
 
         self.results = Results()
         self.results.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
-        self.results.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
+        self.results.picked_at.connect(lambda w: self._later(lambda: self._목록에서열기(w)))
         self.results_head = theme.section("찾은 것", "검색·태그로 걸린 항목. 눌러서 연다")
         # ★★ 최근 글 — 옵시디언의 파일 목록처럼 **늘 보인다.** 첫 화면이 그래프 점뿐이라
         #   무슨 글이 있는지 안 보였다(오너 2026-09-18: 번잡하고 보기 불편하다). 칩으로 골라 본다.
@@ -1445,6 +1445,20 @@ class MainWindow(QWidget):
         # 알아듣는 일은 `orders.py` 가 하고 여기는 시키기만 한다 — 나중에 말로 시킬 때
         # 같은 길을 쓴다.
         order = orders.read_order(text)
+        # ★★ **글이 창 이름에 가려지면 안 된다**(오너 2026-09-20이 짚었다).
+        #   「확장」이라는 **글**이 있는데 창이 먼저 열리면 그 글은 영영 못 본다 —
+        #   이건 노트 앱이 할 짓이 아니다. 그래서 말끝이 없는 한 마디(「확장」)는
+        #   **창고에 그 말이 든 글이 있으면 찾기로 보낸다.** 창을 열고 싶으면
+        #   「확장 열어줘」처럼 말끝을 붙인다 — 그때는 사람이 창을 부른 것이 분명하다.
+        # ★★ **말로 가르지 않는다**(오너 2026-09-20). 「확장」이 창 이름이자 글 제목일 수 있고,
+        #   「상태창열어줘」라는 **글**도 있을 수 있다 — 어떤 말로 갈라도 부딪힌다.
+        #   그래서 **글이 있으면 글을 보여 주고, 창은 목록 맨 위에 한 줄로 얹는다.**
+        #   한 번 눌러 고르면 된다 — 「열어줘」를 일일이 칠 일이 없다.
+        창줄 = ""
+        if order is not None and order.what == "창열기" and not order.extra:
+            if self.notes.search(text, k=1):
+                창줄 = str(order.target or text).strip()
+                order = None
         if order is not None and self.do_order(order, started):
             return
 
@@ -1461,7 +1475,12 @@ class MainWindow(QWidget):
         rows = self.notes.search(text)
         hits = [r["title"] for r in rows]
         # 갈래도 같이 넘긴다 — 결과에 여러 갈래가 섞여 오므로 고를 때 그것이 필요하다.
-        self.show_results([(r["title"], r["body"], r["path"], r["kind"]) for r in rows], text)
+        목록 = [(r["title"], r["body"], r["path"], r["kind"]) for r in rows]
+        if 창줄:
+            # 맨 위에 **창 한 줄**. 글이 아니라 화면이라는 게 보이게 톱니를 붙인다.
+            목록.insert(0, (f"⚙ {창줄} 창 열기", "글이 아니라 화면이야 — 누르면 열린다",
+                           f"창:{창줄}", ""))
+        self.show_results(목록, text)
 
         # 되묻는다는 건 시킬 말이 아니라는 뜻이다. 찾을 것이 있으면 찾아준다 —
         # "카페"라고 쳤는데 "어느 쪽이야?"가 나오면 검색칸이 아니게 된다.
@@ -1469,6 +1488,12 @@ class MainWindow(QWidget):
             self.report(done["text"], [ROOT])
             self._log_turn(text, done["text"], "clarify", started)
             return
+
+        if not hits and 창줄:
+            # 글이 있는 줄 알았는데 찾기가 0건이다(뜻 검색까지 비었다) — 그러면 창을 연다.
+            되돌린 = orders.read_order(text)
+            if 되돌린 is not None and self.do_order(되돌린, started):
+                return
 
         if not hits:
             # 시키지도 못하고 찾지도 못했다. 실행이 실패했으면 그 이유를 그대로 전한다.
@@ -1521,6 +1546,15 @@ class MainWindow(QWidget):
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    def _목록에서열기(self, 자리: str) -> None:
+        """결과 줄을 눌렀을 때. `창:이름` 은 화면이고, 나머지는 그 자리의 글이다."""
+        자리 = str(자리)
+        if 자리.startswith("창:"):
+            말 = self.창열기(자리[2:])
+            self.report(말, [ROOT])
+            return
+        self.show_note_at(자리)
 
     def 더미보기(self, 이름: str = "") -> str:
         """비슷한 것끼리 **더미로 모아** 보여 준다(오너 2026-09-19).

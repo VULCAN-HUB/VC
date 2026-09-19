@@ -1027,6 +1027,51 @@ def run() -> None:
         win.refresh()
         assert len(win.feed.rows) == 1 and win.feed.rows[0]["module"] == "제품 검색"
 
+        # --- **글도 보이고 창도 보인다 — 말로 가르지 않는다**(오너 2026-09-20) ---
+        # 「확장」은 창 이름이자 글 제목일 수 있고, 「상태창열어줘」라는 글도 있을 수 있다.
+        # 어떤 말로 갈라도 부딪히므로 **글을 보여 주고 창은 목록 맨 위 한 줄**로 얹는다.
+        win.notes.write(Note(title="확장 계획", body="확장 프로그램을 어떻게 만들지 적어 둔 글"))
+        win.notes.write(Note(title="상태창열어줘", body="이런 제목의 글도 찾을 수 있어야 한다"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들 = [b.text() for b in win.results.findChildren(QPushButton)]
+        assert any("확장 계획" in t for t in 줄들), f"글이 안 보인다: {줄들}"
+        assert any(t.startswith("\u2699") and "창 열기" in t for t in 줄들), f"창 줄이 없다: {줄들}"
+        assert "설정 창" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
+
+        # 그 줄을 누르면 창이 열린다 — 「열어줘」를 일일이 칠 일이 없다
+        열린말 = []
+        옛창열기 = win.창열기
+        win.창열기 = lambda 이름: (열린말.append(이름), "설정 창의 칸이야.")[1]
+        win._목록에서열기("창:확장")
+        assert 열린말 == ["확장"], 열린말
+        win.창열기 = 옛창열기
+        # 글 자리를 누르면 그대로 글이 열린다(창 줄이 글 누르기를 잡아먹으면 안 된다)
+        본것 = []
+        옛보기 = win.show_note_at
+        win.show_note_at = lambda 자리: 본것.append(자리)
+        win._목록에서열기("/어딘가/확장 계획.md")
+        assert 본것 == ["/어딘가/확장 계획.md"], 본것
+        win.show_note_at = 옛보기
+
+        # 제목이 「상태창열어줘」인 글도 찾힌다 — 말끝이 붙은 제목이라고 사라지면 안 된다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창열어줘")
+        줄들2 = [b.text() for b in win.results.findChildren(QPushButton)]
+        assert any("상태창열어줘" in t for t in 줄들2), f"말끝이 붙은 제목의 글이 사라졌다: {줄들2}"
+
+        # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("폰 연결")
+        assert "폰 연결" in win._say_text, win._say_text
+        win.feed.show_rows([])
+        win.graph.clear_focus()
+        win.clear_detail()
+
+
         # --- 쓰고 고칠 수 있어야 실무로 쓴다 ---
         win.new_note()
         assert win.editing == "새 항목" and notes.read("새 항목") is not None
