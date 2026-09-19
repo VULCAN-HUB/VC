@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:vc_app/attach.dart';
 import 'package:vc_app/main.dart';
 import 'package:vc_app/outbox.dart';
 import 'package:vc_app/prefs.dart';
@@ -28,25 +29,47 @@ void main() {
 
   testWidgets('목록 — 태그 칩이 생기고, 누르면 그 태그로 좁혀 찾는다 · 사진 칩은 사진 붙은 글만', (tester) async {
     final asked = <String>[];
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
-      final q = req.url.queryParameters['q'] ?? '';
-      asked.add(q);
-      expect(req.url.queryParameters['card'], '1', reason: '목록 카드 칸을 안 달라고 했다');
-      return _json({
-        'results': [
-          if (q.isEmpty || q.contains('tag:제품'))
-            {'title': '정수기', 'preview': '종류: 정수기', 'tags': ['제품'], 'image': '정수기.jpg', 'updated': '2026-09-18'},
-          if (q.isEmpty) {'title': '장보기', 'preview': '우유 · 달걀', 'tags': ['일상']},
-        ]
-      });
-    }));
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}))));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        final q = req.url.queryParameters['q'] ?? '';
+        asked.add(q);
+        expect(req.url.queryParameters['card'], '1', reason: '목록 카드 칸을 안 달라고 했다');
+        return _json({
+          'results': [
+            if (q.isEmpty || q.contains('tag:제품'))
+              {
+                'title': '정수기',
+                'preview': '종류: 정수기',
+                'tags': ['제품'],
+                'image': '정수기.jpg',
+                'updated': '2026-09-18',
+              },
+            if (q.isEmpty)
+              {
+                'title': '장보기',
+                'preview': '우유 · 달걀',
+                'tags': ['일상'],
+              },
+          ],
+        });
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BrowseTab(api: api, onFail: (_) {}),
+        ),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pump();
 
     expect(find.text('#제품'), findsWidgets, reason: '태그 칩이 안 생겼다');
     expect(find.text('장보기'), findsOneWidget);
     expect(find.bySemanticsLabel('정수기.jpg'), findsOneWidget, reason: '카드에 사진 미리보기가 없다');
+    // ★★ 카드는 **작은 사진**만 받는다 — 전에는 카드마다 원본을 통째로 받아 갔다(결정 27)
+    expect(tester.widget<AttachImage>(find.byType(AttachImage)).width, 320, reason: '카드가 원본 사진을 받는다');
 
     await tester.tap(find.widgetWithText(ChoiceChip, '#제품'));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
@@ -64,13 +87,15 @@ void main() {
 
   testWidgets('글 보기 — 「- 키 : 값」 줄은 항목표로, 태그 줄은 칩으로', (tester) async {
     final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: NoteBody(api: api, text: '- 제품명 : vcis-689\n- 보낸날 : \n\n#제품 #정수기\n\n메모 한 줄'),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: NoteBody(api: api, text: '- 제품명 : vcis-689\n- 보낸날 : \n\n#제품 #정수기\n\n메모 한 줄'),
+          ),
         ),
       ),
-    ));
+    );
     expect(find.text('제품명'), findsOneWidget, reason: '항목 이름이 따로 안 보인다');
     expect(find.text('vcis-689'), findsOneWidget);
     expect(find.text('—'), findsOneWidget, reason: '빈 항목은 — 로');
@@ -84,19 +109,25 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
     OutboxItem? got;
-    await tester.pumpWidget(MaterialApp(
-      home: Builder(
-        builder: (c) => Scaffold(
-          body: TextButton(
-            child: const Text('열기'),
-            onPressed: () async {
-              got = await Navigator.push<OutboxItem>(
-                  c, MaterialPageRoute(builder: (_) => EditorPage(outbox: box, onSend: () async {})));
-            },
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (c) => Scaffold(
+            body: TextButton(
+              child: const Text('열기'),
+              onPressed: () async {
+                got = await Navigator.push<OutboxItem>(
+                  c,
+                  MaterialPageRoute(
+                    builder: (_) => EditorPage(outbox: box, onSend: () async {}),
+                  ),
+                );
+              },
+            ),
           ),
         ),
       ),
-    ));
+    );
     await tester.tap(find.text('열기'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(1), '급히 적은 것');
@@ -119,13 +150,18 @@ void main() {
 
   testWidgets('정리 글 — 표 · 소제목 · 링크는 보일 말만', (tester) async {
     final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: NoteBody(api: api, text: '> VC 가 다시 쓰는 글\n\n## 보유중 (1)\n\n| 제품 | 종류 |\n|---|---|\n| [[제품 · vcis-689\\|vcis-689]] | 정수기 |\n\n근거 [[정수기 받음]] 참고'),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: NoteBody(
+              api: api,
+              text: '> VC 가 다시 쓰는 글\n\n## 보유중 (1)\n\n| 제품 | 종류 |\n|---|---|\n| [[제품 · vcis-689\\|vcis-689]] | 정수기 |\n\n근거 [[정수기 받음]] 참고',
+            ),
+          ),
         ),
       ),
-    ));
+    );
     expect(find.byType(Table), findsOneWidget, reason: '표를 안 그린다');
     expect(find.text('vcis-689'), findsOneWidget, reason: '표 안 링크가 보일 말로 안 바뀐다');
     expect(find.text('보유중 (1)'), findsOneWidget);
@@ -137,19 +173,30 @@ void main() {
   testWidgets('새 메모를 길게 누르면 서식으로 새 글 — 채운 틀로 편집기가 열린다', (tester) async {
     final dir = Directory.systemTemp.createTempSync('vc_tpl_new');
     addTearDown(() => dir.deleteSync(recursive: true));
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
-      if (req.url.path == '/eb/v1/templates') {
-        return _json({
-          'templates': [
-            {'name': '제품', 'body': '- 제품명 : \n- 받은날 : {{날짜}}'}
-          ]
-        });
-      }
-      if (req.url.path == '/eb/v1/hello') return _json({'store': {'notes': 0}});
-      return _json({'results': []});
-    }));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        if (req.url.path == '/eb/v1/templates') {
+          return _json({
+            'templates': [
+              {'name': '제품', 'body': '- 제품명 : \n- 받은날 : {{날짜}}'},
+            ],
+          });
+        }
+        if (req.url.path == '/eb/v1/hello') {
+          return _json({
+            'store': {'notes': 0},
+          });
+        }
+        return _json({'results': []});
+      }),
+    );
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pump();
 
@@ -169,18 +216,18 @@ void main() {
   });
 
   testWidgets('글 보기 칸 누르기 — 상태를 골라 글 끝에 한 줄로 덧붙인다', (tester) async {
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
-      return _json({'title': '정수기', 'text': '- 제품명 : vcis-689\n- 상태 : 보유중'});
-    }));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        return _json({'title': '정수기', 'text': '- 제품명 : vcis-689\n- 상태 : 보유중'});
+      }),
+    );
     final saved = <String>[];
-    await tester.pumpWidget(MaterialApp(
-      home: NotePage(
-        api: api,
-        onFail: (_) {},
-        title: '정수기',
-        onSaveLine: (t, line) async => saved.add('$t|$line'),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotePage(api: api, onFail: (_) {}, title: '정수기', onSaveLine: (t, line) async => saved.add('$t|$line')),
       ),
-    ));
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
     await tester.tap(find.text('보유중'));
@@ -199,20 +246,28 @@ void main() {
 
   testWidgets('글 보기 ⋮ — AI 요약 결과를 보이고 글 끝에 붙인다 · 모델 없으면 까닭', (tester) async {
     var hasModel = true;
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
-      if (req.url.path == '/eb/v1/assist') {
-        if (!hasModel) {
-          return http.Response.bytes(utf8.encode(jsonEncode({'error': '대화 모델이 없다'})), 503,
-              headers: {'content-type': 'application/json'});
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        if (req.url.path == '/eb/v1/assist') {
+          if (!hasModel) {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'error': '대화 모델이 없다'})),
+              503,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          return _json({'text': '- 정수기 받음'});
         }
-        return _json({'text': '- 정수기 받음'});
-      }
-      return _json({'title': '정수기', 'text': '긴 메모'});
-    }));
+        return _json({'title': '정수기', 'text': '긴 메모'});
+      }),
+    );
     final saved = <String>[];
-    await tester.pumpWidget(MaterialApp(
-      home: NotePage(api: api, onFail: (_) {}, title: '정수기', onSaveLine: (t, l) async => saved.add(l)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotePage(api: api, onFail: (_) {}, title: '정수기', onSaveLine: (t, l) async => saved.add(l)),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 
@@ -239,8 +294,15 @@ void main() {
   testWidgets('설정 「열면 바로 새 메모」 — 켜면 앱이 편집기로 열리고, 설정은 남는다', (tester) async {
     final dir = Directory.systemTemp.createTempSync('vc_prefs');
     addTearDown(() => dir.deleteSync(recursive: true));
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
-        client: MockClient((req) async => _json({'results': [], 'store': {'notes': 0}})));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient(
+        (req) async => _json({
+          'results': [],
+          'store': {'notes': 0},
+        }),
+      ),
+    );
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
     final prefs = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
     expect(prefs.openNew, isFalse);
@@ -248,8 +310,11 @@ void main() {
     final again = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
     expect(again.openNew, isTrue, reason: '설정이 안 남는다');
 
-    await tester.pumpWidget(MaterialApp(
-        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, prefs: again)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, prefs: again),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(find.byType(EditorPage), findsOneWidget, reason: '켰는데 바로 새 메모로 안 열린다');
@@ -258,12 +323,22 @@ void main() {
   testWidgets('홈 아이콘 길게 누르기 「새 메모」 — 편집기로 연다', (tester) async {
     final dir = Directory.systemTemp.createTempSync('vc_qa');
     addTearDown(() => dir.deleteSync(recursive: true));
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
-        client: MockClient((req) async => _json({'results': [], 'store': {'notes': 0}})));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient(
+        (req) async => _json({
+          'results': [],
+          'store': {'notes': 0},
+        }),
+      ),
+    );
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
     final fake = _FakeShortcuts();
-    await tester.pumpWidget(MaterialApp(
-        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, shortcuts: fake)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}, shortcuts: fake),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(find.byType(EditorPage), findsNothing);
@@ -277,16 +352,18 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     final pic = File('${dir.path}/IMG_9.jpg')..writeAsBytesSync([1]);
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: WriteTab(
-          outbox: box,
-          onSend: () async {},
-          pick: (_) async => [pic],
-          readText: (f) async => '운송장 55667788',
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WriteTab(
+            outbox: box,
+            onSend: () async {},
+            pick: (_) async => [pic],
+            readText: (f) async => '운송장 55667788',
+          ),
         ),
       ),
-    ));
+    );
     await tester.tap(find.byTooltip('더 붙이기'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('사진첩'));
@@ -303,7 +380,13 @@ void main() {
     expect(text, contains('운송장 55667788'), reason: '사진 글자가 안 붙었다');
 
     final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: NoteBody(api: api, text: text))));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: NoteBody(api: api, text: text),
+        ),
+      ),
+    );
     expect(find.textContaining('55667788'), findsNothing, reason: '숨은 글자가 보인다');
     expect(find.text('택배 보냄'), findsOneWidget);
   });
@@ -313,11 +396,18 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     final rec = File('${dir.path}/녹음 2026-10-01 0930.m4a')..writeAsBytesSync([1]);
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: WriteTab(outbox: box, onSend: () async {}, templates: () async => (<Tpl>[], false), record: (_) async => rec),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WriteTab(
+            outbox: box,
+            onSend: () async {},
+            templates: () async => (<Tpl>[], false),
+            record: (_) async => rec,
+          ),
+        ),
       ),
-    ));
+    );
     final tools = find.descendant(of: find.byType(Row).last, matching: find.byType(IconButton));
     expect(tools.evaluate().length, lessThanOrEqualTo(4), reason: '도구줄 단추가 넷을 넘는다(결정 26)');
     await tester.tap(find.byTooltip('더 붙이기'));
@@ -331,7 +421,13 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('vc_blocks');
     addTearDown(() => dir.deleteSync(recursive: true));
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: WriteTab(outbox: box, onSend: () async {}))));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WriteTab(outbox: box, onSend: () async {}),
+        ),
+      ),
+    );
     await tester.enterText(find.byType(TextField).at(1), '메모');
     await tester.tap(find.byTooltip('더 붙이기'));
     await tester.pumpAndSettle();
@@ -341,13 +437,15 @@ void main() {
     expect(text, startsWith('메모\n| 항목 | 내용 |'), reason: '줄을 바꿔 표를 끼워야 한다');
 
     final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: NoteBody(api: api, text: '> [!note]- 촬영 준비\n> 조명 두 개\n\n```\nprint(1)\n```'),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: NoteBody(api: api, text: '> [!note]- 촬영 준비\n> 조명 두 개\n\n```\nprint(1)\n```'),
+          ),
         ),
       ),
-    ));
+    );
     expect(find.text('촬영 준비'), findsOneWidget, reason: '접는 칸 머리를 못 그린다');
     expect(find.textContaining('[!note]'), findsNothing);
     expect(find.text('print(1)'), findsOneWidget, reason: '코드 블록을 못 그린다');
@@ -357,27 +455,44 @@ void main() {
   testWidgets('카드 — 고정은 맨 위 · 길게 눌러 고정 · 왼쪽으로 밀어 보관 · 휴지통 되살리기', (tester) async {
     final calls = <String>[];
     var pinnedB = false;
-    final api = VcApi(Pairing.parse('http://100.101.2.3:8765/app#t=tok')!, client: MockClient((req) async {
-      final path = req.url.path;
-      if (path == '/eb/v1/memory/mark') {
-        final b = jsonDecode(req.body) as Map;
-        calls.add('mark ${b['title']} ${b.containsKey('pinned') ? 'pinned=${b['pinned']}' : ''}${b.containsKey('archived') ? 'archived=${b['archived']}' : ''}');
-        if (b['title'] == '나' && b['pinned'] == true) pinnedB = true;
-        return _json({'title': b['title']});
-      }
-      if (path == '/eb/v1/trash') {
-        return _json({'trash': [{'id': 'abc123', 'title': '지운 글', 'when': '2026-09-18 10:00'}]});
-      }
-      if (path == '/eb/v1/trash/restore') {
-        calls.add('restore ${(jsonDecode(req.body) as Map)['id']}');
-        return _json({'restored': true});
-      }
-      return _json({'results': [
-        {'title': '가', 'preview': '첫째'},
-        {'title': '나', 'preview': '둘째', 'pinned': pinnedB, 'color': '노랑'},
-      ]});
-    }));
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}))));
+    final api = VcApi(
+      Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
+      client: MockClient((req) async {
+        final path = req.url.path;
+        if (path == '/eb/v1/memory/mark') {
+          final b = jsonDecode(req.body) as Map;
+          calls.add(
+            'mark ${b['title']} ${b.containsKey('pinned') ? 'pinned=${b['pinned']}' : ''}${b.containsKey('archived') ? 'archived=${b['archived']}' : ''}',
+          );
+          if (b['title'] == '나' && b['pinned'] == true) pinnedB = true;
+          return _json({'title': b['title']});
+        }
+        if (path == '/eb/v1/trash') {
+          return _json({
+            'trash': [
+              {'id': 'abc123', 'title': '지운 글', 'when': '2026-09-18 10:00'},
+            ],
+          });
+        }
+        if (path == '/eb/v1/trash/restore') {
+          calls.add('restore ${(jsonDecode(req.body) as Map)['id']}');
+          return _json({'restored': true});
+        }
+        return _json({
+          'results': [
+            {'title': '가', 'preview': '첫째'},
+            {'title': '나', 'preview': '둘째', 'pinned': pinnedB, 'color': '노랑'},
+          ],
+        });
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BrowseTab(api: api, onFail: (_) {}),
+        ),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pump();
     expect(tester.getTopLeft(find.text('가')).dy < tester.getTopLeft(find.text('나')).dy, isTrue);
@@ -388,14 +503,22 @@ void main() {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(calls, contains('mark 나 pinned=true'));
-    expect(tester.getTopLeft(find.text('나')).dy < tester.getTopLeft(find.text('가')).dy, isTrue, reason: '고정한 글이 위로 안 간다');
+    expect(
+      tester.getTopLeft(find.text('나')).dy < tester.getTopLeft(find.text('가')).dy,
+      isTrue,
+      reason: '고정한 글이 위로 안 간다',
+    );
 
     await tester.drag(find.text('가'), const Offset(-500, 0));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(calls, contains('mark 가 archived=true'), reason: '왼쪽으로 밀어도 보관이 안 된다');
 
-    await tester.pumpWidget(MaterialApp(home: TrashPage(api: api, onFail: (_) {})));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TrashPage(api: api, onFail: (_) {}),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     await tester.tap(find.text('되살리기'));
@@ -412,12 +535,20 @@ void main() {
         final t = req.url.queryParameters['title'] ?? '';
         asked.add('$t back=${req.url.queryParameters['back']}');
         if (t == '회의') {
-          return _json({'title': '회의', 'text': '정리는 [[정수기|정수기 글]] 에', 'backlinks': ['일지']});
+          return _json({
+            'title': '회의',
+            'text': '정리는 [[정수기|정수기 글]] 에',
+            'backlinks': ['일지'],
+          });
         }
         return _json({'title': t, 'text': '$t 몸'});
       }),
     );
-    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '회의')));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotePage(api: api, onFail: (_) {}, title: '회의'),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(asked.first, '회의 back=1');
@@ -461,10 +592,17 @@ void main() {
             'text': '- [ ] 우유 사기\n- [${done ? 'x' : ' '}] 필터 갈기',
           });
         }
-        return _json({'results': [], 'store': {'notes': 0}});
+        return _json({
+          'results': [],
+          'store': {'notes': 0},
+        });
       }),
     );
-    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '할 일')));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotePage(api: api, onFail: (_) {}, title: '할 일'),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.check_box_outline_blank), findsNWidgets(2));
@@ -480,7 +618,11 @@ void main() {
     expect(find.byIcon(Icons.check_box), findsOneWidget, reason: '체크가 화면에 안 보인다');
 
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.more_vert));
@@ -496,14 +638,16 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('vc_alarm');
     addTearDown(() => dir.deleteSync(recursive: true));
     final fake = _FakeNotifier();
-    final book = (await tester.runAsync(
-      () => AlarmBook.open(File('${dir.path}/vc_alarms.json'), fake),
-    ))!;
+    final book = (await tester.runAsync(() => AlarmBook.open(File('${dir.path}/vc_alarms.json'), fake)))!;
     final api = VcApi(
       Pairing.parse('http://100.101.2.3:8765/app#t=tok')!,
       client: MockClient((req) async => _json({'title': '정수기', 'text': '몸'})),
     );
-    await tester.pumpWidget(MaterialApp(home: NotePage(api: api, onFail: (_) {}, title: '정수기', alarms: book)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NotePage(api: api, onFail: (_) {}, title: '정수기', alarms: book),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.more_vert));
@@ -519,7 +663,11 @@ void main() {
     expect(book.items.single.title, '정수기');
 
     final prefs = (await tester.runAsync(() => AppPrefs.open(File('${dir.path}/vc_settings.json'))))!;
-    await tester.pumpWidget(MaterialApp(home: SettingsPage(prefs: prefs, alarms: book)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsPage(prefs: prefs, alarms: book),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.text('정수기'), findsOneWidget, reason: '설정에 걸어 둔 알림이 안 보인다');
     await tester.tap(find.byTooltip('지우기'));
@@ -540,12 +688,22 @@ void main() {
         asked.add(req.url.queryParameters['q'] ?? '');
         return _json({
           'results': [
-            {'title': '정수기', 'preview': '종류: 정수기', 'tags': ['제품']},
+            {
+              'title': '정수기',
+              'preview': '종류: 정수기',
+              'tags': ['제품'],
+            },
           ],
         });
       }),
     );
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: BrowseTab(api: api, onFail: (_) {}, prefs: prefs))));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BrowseTab(api: api, onFail: (_) {}, prefs: prefs),
+        ),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pump();
 
@@ -596,11 +754,18 @@ void main() {
           });
         }
         if (req.url.path == '/eb/v1/memory/search') asked.add(req.url.queryParameters['q'] ?? '');
-        return _json({'results': [], 'store': {'notes': 4}});
+        return _json({
+          'results': [],
+          'store': {'notes': 4},
+        });
       }),
     );
     final box = (await tester.runAsync(() => Outbox.open(File('${dir.path}/vc_outbox.json'))))!;
-    await tester.pumpWidget(MaterialApp(home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {})));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Home(api: api, outbox: box, onUnauthorized: () {}, onUnpair: () {}),
+      ),
+    );
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.more_vert));

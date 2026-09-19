@@ -9,6 +9,8 @@ class AppPrefs extends ChangeNotifier {
 
   final File file;
   bool openNew = false; // 앱을 열면 바로 새 메모(킵·애플 노트 빠른 메모)
+  // 폰에 두는 사진의 상한(결정 27). 넘으면 오래 안 본 것부터 지운다. 기본 500MB.
+  int photoLimitBytes = 500 * 1024 * 1024;
   // 스마트 폴더(편의 기능 25번 · 애플 노트) — 찾는 말 + 칩을 이름 붙여 둔다
   final List<SmartFolder> smart = [];
 
@@ -18,6 +20,8 @@ class AppPrefs extends ChangeNotifier {
       final j = jsonDecode(await file.readAsString());
       if (j is Map) {
         p.openNew = j['openNew'] == true;
+        final lim = j['photoLimitBytes'];
+        if (lim is int && lim >= 50 * 1024 * 1024) p.photoLimitBytes = lim;
         if (j['smart'] is List) {
           p.smart.addAll((j['smart'] as List).map(SmartFolder.fromJson).whereType<SmartFolder>());
         }
@@ -32,6 +36,13 @@ class AppPrefs extends ChangeNotifier {
 
   Future<void> setOpenNew(bool v) async {
     openNew = v;
+    notifyListeners();
+    await _save();
+  }
+
+  /// 사진 보관 상한을 바꾼다(설정 › 사진 보관). 너무 작게는 못 줄인다 — 캐시가 쓸모없어진다.
+  Future<void> setPhotoLimit(int bytes) async {
+    photoLimitBytes = bytes < 50 * 1024 * 1024 ? 50 * 1024 * 1024 : bytes;
     notifyListeners();
     await _save();
   }
@@ -51,10 +62,13 @@ class AppPrefs extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      await file.writeAsString(jsonEncode({
-        'openNew': openNew,
-        'smart': smart.map((f) => f.toJson()).toList(),
-      }));
+      await file.writeAsString(
+        jsonEncode({
+          'openNew': openNew,
+          'photoLimitBytes': photoLimitBytes,
+          'smart': smart.map((f) => f.toJson()).toList(),
+        }),
+      );
     } on FileSystemException {
       // 못 남겨도 이번엔 먹는다
     }

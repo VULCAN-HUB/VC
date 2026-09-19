@@ -25,7 +25,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('0장'), findsNothing, reason: '못 닿았는데 창고가 빈 것처럼 보인다');
-    expect(find.textContaining('못 불렀어'), findsOneWidget);
+    expect(find.textContaining('컴퓨터에 못 닿았고, 폰에 남은 것도 없어'), findsOneWidget, reason: '못 닿았는데 까닭도 다음에 할 일도 안 알려 준다');
   });
 
   // ★ 2026-09-18 시뮬레이터 — 보관함이 비었는데 「아직 창고가 비었어 — 아래 「새 메모」로 시작」 이라고 했다.

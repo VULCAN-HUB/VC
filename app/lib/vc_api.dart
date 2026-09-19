@@ -114,7 +114,23 @@ class VcApi {
   }
 
   /// 첨부 받아 보기(글 보기의 사진). 열쇠는 **머리에만** 싣는다 — 주소에 넣으면 기록·캐시에 남는다.
-  Uri attachmentUri(String name) => pairing.base.replace(path: '/eb/v1/attach', queryParameters: {'name': name});
+  ///
+  /// [width] 를 주면 **작은 사진**을 받는다(목록 카드용 320px). 서버가 못 줄이는 꼴이면 원본이 온다.
+  Uri attachmentUri(String name, {int width = 0}) =>
+      pairing.base.replace(path: '/eb/v1/attach', queryParameters: {'name': name, if (width > 0) 'w': '$width'});
+
+  /// 첨부 바이트. 폰에 남겨 두려고 직접 받는다 — **같은 사진을 두 번 받지 않기 위해서다**(결정 27).
+  Future<List<int>> fetchAttach(String name, {int width = 0}) async {
+    final http.Response r;
+    try {
+      r = await _client.get(attachmentUri(name, width: width), headers: authHeaders).timeout(timeout * 6); // 원본 사진은 크다
+    } on Exception catch (e) {
+      throw VcOffline(offlineReason(e));
+    }
+    if (r.statusCode == 401) throw VcUnauthorized();
+    if (r.statusCode >= 300) throw VcError(r.statusCode, '사진을 못 받았다 (HTTP ${r.statusCode})');
+    return r.bodyBytes;
+  }
 
   Map<String, String> get authHeaders => {'Authorization': 'Bearer ${pairing.token}'};
 

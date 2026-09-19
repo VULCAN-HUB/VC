@@ -14,6 +14,8 @@ import 'dart:io';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'attach.dart';
+import 'cache.dart';
 import 'outbox.dart';
 import 'vc_api.dart';
 import 'pick.dart';
@@ -288,6 +290,7 @@ class _RootState extends State<Root> {
   Pairing? _pairing;
   Outbox? _outbox;
   AppPrefs? _prefs;
+  Cache? _cache;
   AlarmBook? _alarms;
   bool _ready = false;
 
@@ -316,12 +319,15 @@ class _RootState extends State<Root> {
     final outbox = await Outbox.open(File('${where.path}/vc_outbox.json'));
     final prefs = await AppPrefs.open(File('${where.path}/vc_settings.json'));
     final alarms = await AlarmBook.open(File('${where.path}/vc_alarms.json'), PhoneNotifier());
+    // 폰 안 작은 창고(결정 27) — 컴퓨터가 꺼져도 지난번에 본 것과 내가 쓴 것을 본다.
+    final cache = Cache(Directory('${where.path}/vc_cache'), limitBytes: prefs.photoLimitBytes);
     await atLeast;
     if (!mounted) return;
     setState(() {
       _pairing = saved == null ? null : Pairing.parse(saved);
       _outbox = outbox;
       _prefs = prefs;
+      _cache = cache;
       _alarms = alarms;
       _ready = true;
     });
@@ -374,6 +380,7 @@ class _RootState extends State<Root> {
             api: VcApi(p),
             outbox: _outbox!,
             prefs: _prefs,
+            cache: _cache,
             alarms: _alarms,
             onUnauthorized: () => _unpair('열쇠가 안 맞아 — QR 을 다시 찍어 줘'),
             onUnpair: () => _unpair('연결을 지웠어'),
@@ -673,6 +680,7 @@ class Home extends StatefulWidget {
     required this.onUnauthorized,
     required this.onUnpair,
     this.prefs,
+    this.cache,
     this.alarms,
     this.shortcuts = const HomeShortcuts(),
   });
@@ -682,6 +690,7 @@ class Home extends StatefulWidget {
   final VoidCallback onUnauthorized;
   final VoidCallback onUnpair;
   final AppPrefs? prefs;
+  final Cache? cache; // 폰 안 작은 창고(결정 27)
   final AlarmBook? alarms; // 시간 알림(편의 기능 24번)
   final AppShortcuts shortcuts; // 홈 아이콘 길게 누르기
 
@@ -744,7 +753,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   /// 전송 대기함을 비운다. 못 닿으면 글은 폰에 남고 다음에 보낸다.
   Future<void> _send() async {
     final before = widget.outbox.pending;
-    final r = await widget.outbox.flush(widget.api);
+    final r = await widget.outbox.flush(widget.api, cache: widget.cache);
     if (r == FlushResult.done && widget.outbox.pending < before) {
       try {
         final n = await widget.api.notes();
@@ -831,6 +840,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           templates: () => _book.load(widget.api),
           fixedTitle: title,
           startBody: startBody,
+          cache: widget.cache,
         ),
       ),
     );
@@ -910,7 +920,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                               child: Scaffold(
                                 backgroundColor: Colors.transparent,
                                 appBar: AppBar(title: const Text('보관함')),
-                                body: BrowseTab(api: widget.api, onFail: _fail, archived: true),
+                                body: BrowseTab(api: widget.api, onFail: _fail, cache: widget.cache, archived: true),
                               ),
                             ),
                           ),
@@ -960,6 +970,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 outbox: widget.outbox,
                 alarms: widget.alarms,
                 prefs: widget.prefs,
+                cache: widget.cache,
                 onAppend: (t) => _write(title: t),
                 onSaveLine: (t, line) async {
                   await widget.outbox.add(t, line);
@@ -1006,6 +1017,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             _send();
           },
           alarms: widget.alarms,
+          cache: widget.cache,
         ),
       ),
     );
@@ -1051,7 +1063,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   void _openStatus(BuildContext context) => Navigator.push(
     context,
     MaterialPageRoute(
-      builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox),
+      builder: (_) => StatusPage(api: widget.api, outbox: widget.outbox, cache: widget.cache),
     ),
   );
 }
@@ -1126,11 +1138,95 @@ class _TrashPageState extends State<TrashPage> {
 }
 
 /// 설정 — ⋮ 안(결정 26). 늘어나는 켜고 끄기는 여기에 모은다.
+/// 폰에 둔 사진이 얼마나 되는지 보이고, 상한을 고르고, 지금 비운다.
+///
+/// ★ 사진은 **한 번만 받아 폰에 남는다**(결정 27). 그러면 언젠가 쌓이므로 **얼마나 쌓였는지 보이고
+///   스스로 치울 길**이 있어야 한다. 비워도 글과 목록은 남는다 — 오프라인에서 읽어야 하니까.
+class _PhotoCacheTile extends StatefulWidget {
+  const _PhotoCacheTile({required this.cache, required this.prefs});
+
+  final Cache cache;
+  final AppPrefs prefs;
+
+  @override
+  State<_PhotoCacheTile> createState() => _PhotoCacheTileState();
+}
+
+class _PhotoCacheTileState extends State<_PhotoCacheTile> {
+  int? _bytes;
+
+  static const _sizes = [100, 300, 500, 1000]; // MB
+
+  @override
+  void initState() {
+    super.initState();
+    _measure();
+  }
+
+  Future<void> _measure() async {
+    final n = await widget.cache.bytes();
+    if (mounted) setState(() => _bytes = n);
+  }
+
+  static String _mb(int bytes) => bytes >= 1024 * 1024 * 1024
+      ? '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}GB'
+      : '${(bytes / (1024 * 1024)).toStringAsFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)}MB';
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      ListTile(
+        title: const Text('지금 쓰는 양', style: TextStyle(color: _text)),
+        subtitle: const Text('한 번 받은 사진은 폰에 남아 다시 안 받는다', style: TextStyle(color: _muted)),
+        trailing: Text(_bytes == null ? '…' : _mb(_bytes!), style: _mono(12.5, _accent)),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+        child: Wrap(
+          spacing: 8,
+          children: [
+            for (final mb in _sizes)
+              ChoiceChip(
+                label: Text('${mb}MB', style: _mono(12, _text)),
+                selected: widget.prefs.photoLimitBytes == mb * 1024 * 1024,
+                onSelected: (_) async {
+                  await widget.prefs.setPhotoLimit(mb * 1024 * 1024);
+                  widget.cache.limitBytes = mb * 1024 * 1024;
+                  await widget.cache.sweep(); // 줄였으면 오래 안 본 것부터 바로 치운다
+                  await _measure();
+                },
+              ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () async {
+              await widget.cache.clearAttachments();
+              await _measure();
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(duration: Duration(seconds: 2), content: Text('사진을 비웠어 — 글과 목록은 그대로야')));
+            },
+            icon: const Icon(Icons.cleaning_services_outlined, size: 16, color: _accent),
+            label: Text('지금 비우기', style: _mono(12, _accent)),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.prefs, this.alarms});
+  const SettingsPage({super.key, required this.prefs, this.alarms, this.cache});
 
   final AppPrefs prefs;
   final AlarmBook? alarms;
+  final Cache? cache; // 폰에 둔 사진(결정 27) — 얼마나 쓰는지 보고 비운다
 
   @override
   Widget build(BuildContext context) => Backdrop(
@@ -1149,6 +1245,8 @@ class SettingsPage extends StatelessWidget {
               title: const Text('앱을 열면 바로 새 메모', style: TextStyle(color: _text)),
               subtitle: const Text('목록 대신 빈 메모로 시작한다(구글 킵처럼)', style: TextStyle(color: _muted)),
             ),
+            // 폰에 둔 사진(결정 27) — 「매번 다시 받지 말 것」의 다른 쪽 끝: 얼마나 쌓였는지 보이고 비운다
+            if (cache != null) ...[const SectionLabel('폰에 둔 사진'), _PhotoCacheTile(cache: cache!, prefs: prefs)],
             // 걸어 둔 시간 알림(편의 기능 24번) — 여기서 보고 지운다
             if (alarms != null) ...[
               const SectionLabel('걸어 둔 알림'),
@@ -1192,10 +1290,11 @@ class SettingsPage extends StatelessWidget {
 /// 눌러야 펴지는 「상태·기록」(결정 17 ③). 늘 보이는 한 줄에 못 담는 자세한 것 —
 /// 보낼 글과 그 까닭, 컴퓨터가 켜진 지, 죽음 기록, 최근 자국. 컴퓨터 쪽 글 이름·집 경로는 서버가 가려서 준다.
 class StatusPage extends StatefulWidget {
-  const StatusPage({super.key, required this.api, required this.outbox});
+  const StatusPage({super.key, required this.api, required this.outbox, this.cache});
 
   final VcApi api;
   final Outbox outbox;
+  final Cache? cache; // 「지금 보내기」가 올린 사진을 폰 자리로 옮긴다(결정 27)
 
   @override
   State<StatusPage> createState() => _StatusPageState();
@@ -1285,7 +1384,7 @@ class _StatusPageState extends State<StatusPage> {
                   alignment: Alignment.centerRight,
                   child: TextButton.icon(
                     onPressed: () async {
-                      await widget.outbox.flush(widget.api);
+                      await widget.outbox.flush(widget.api, cache: widget.cache);
                       if (mounted) setState(() {});
                     },
                     icon: const Icon(Icons.sync, size: 16, color: _accent),
@@ -1336,6 +1435,7 @@ class BrowseTab extends StatefulWidget {
     this.onSaveLine,
     this.alarms,
     this.prefs,
+    this.cache,
     this.archived = false,
   });
 
@@ -1346,6 +1446,7 @@ class BrowseTab extends StatefulWidget {
   final Future<void> Function(String title, String line)? onSaveLine; // 글 보기의 칸 고치기
   final AlarmBook? alarms; // 글 보기의 시간 알림
   final AppPrefs? prefs; // 스마트 폴더(편의 기능 25번)
+  final Cache? cache; // 폰 안 작은 창고 — 컴퓨터가 꺼져도 지난번에 본 것을 본다(결정 27)
   final bool archived; // 보관함으로 쓸 때
 
   @override
@@ -1363,6 +1464,7 @@ class _BrowseTabState extends State<BrowseTab> {
   bool _busy = false;
   // ★ 못 닿았을 때 「창고 앞머리 0장」이 떠, 창고가 빈 것처럼 보였다(2026-09-15 아이폰 실기). 못 센 것은 0 이 아니다.
   bool _offline = false;
+  DateTime? _keptWhen; // 폰에 남은 목록을 언제 받았나 — 「지난번에 본 것」 띠에 쓴다
   String _filter = ''; // '' 전체 · _photo 사진 · 그 밖은 태그 이름
   List<String> _tags = []; // 칩으로 보일 태그 — 전체 목록에서 많이 쓴 차례
 
@@ -1432,12 +1534,27 @@ class _BrowseTabState extends State<BrowseTab> {
           _tags = (count.keys.toList()..sort((a, b) => count[b]!.compareTo(count[a]!))).take(12).toList();
         }
       });
+      // 아무것도 안 좁힌 목록만 남긴다 — 컴퓨터가 꺼졌을 때 이걸 그린다(결정 27)
+      if (ask.isEmpty && !widget.archived) await widget.cache?.saveList(r);
     } catch (e) {
       if (e is VcOffline && mounted) {
+        // ★★ 컴퓨터가 꺼져 있어도 **지난번에 본 것**은 보인다(결정 27). 전에는 빈 화면이었다.
+        final kept = widget.archived ? const <Map<String, dynamic>>[] : await widget.cache?.list() ?? const [];
+        final when = kept.isEmpty ? null : await widget.cache?.listWhen();
+        if (!mounted) return;
         setState(() {
           _offline = true;
-          _hits = [];
-          _empty = '컴퓨터에 못 닿아 창고를 못 불렀어 — 당겨서 다시';
+          _keptWhen = when;
+          final ask = q.trim();
+          // 캐시는 글자만 있다 — 찾기는 제목·미리보기로 좁힌다(서버 문법은 못 쓴다)
+          _hits = ask.isEmpty
+              ? kept
+              : kept
+                    .where((h) => '${h['title']}\n${h['preview'] ?? ''}'.toLowerCase().contains(ask.toLowerCase()))
+                    .toList();
+          _empty = _hits.isEmpty
+              ? (kept.isEmpty ? '컴퓨터에 못 닿았고, 폰에 남은 것도 없어 — 컴퓨터 VC 를 켜 줘' : '컴퓨터에 못 닿았어 — 폰에 남은 것 중에는 없어')
+              : null;
         });
       }
       widget.onFail(e);
@@ -1755,10 +1872,22 @@ class _BrowseTabState extends State<BrowseTab> {
             children: [
               Text(what, style: _mono(11.5, _accent.withValues(alpha: .85), weight: FontWeight.w700)),
               const Spacer(),
-              Text(_busy ? '…' : (_offline ? '—' : '${_hits.length}장'), style: _mono(11.5, _muted)),
+              Text(
+                _busy ? '…' : (_offline ? (_hits.isEmpty ? '—' : '${_hits.length}장 · 폰에 남은 것') : '${_hits.length}장'),
+                style: _mono(11.5, _muted),
+              ),
             ],
           ),
         ),
+        // ★ 컴퓨터가 꺼져 있을 때 **지금 보는 것이 언제 것인지** 말한다 — 안 그러면 최신인 줄 안다
+        if (_offline && _hits.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+            child: Text(
+              '컴퓨터 꺼짐 · ${_keptWhen == null ? '지난번에' : whenLabel(_keptWhen!.toIso8601String().substring(0, 10))} 본 것',
+              style: _mono(10.5, _warn),
+            ),
+          ),
         Expanded(
           child: RefreshIndicator(
             color: _accent,
@@ -1793,6 +1922,7 @@ class _BrowseTabState extends State<BrowseTab> {
                       key: ValueKey('${h['folder'] ?? ''}/${h['title']}'),
                       hit: h,
                       api: widget.api,
+                      cache: widget.cache,
                       onLongPress: () => _cardMenu(h),
                       onTap: () => Navigator.push(
                         context,
@@ -1806,6 +1936,7 @@ class _BrowseTabState extends State<BrowseTab> {
                             onAppend: widget.onAppend,
                             onSaveLine: widget.onSaveLine,
                             alarms: widget.alarms,
+                            cache: widget.cache,
                           ),
                         ),
                       ),
@@ -1822,11 +1953,12 @@ class _BrowseTabState extends State<BrowseTab> {
 
 /// 목록 한 장 — 제목 · 두 줄 미리보기 · 날짜·태그 · 오른쪽에 첫 사진.
 class NoteCard extends StatelessWidget {
-  const NoteCard({super.key, required this.hit, required this.onTap, this.api, this.onLongPress});
+  const NoteCard({super.key, required this.hit, required this.onTap, this.api, this.cache, this.onLongPress});
 
   final Map<String, dynamic> hit;
   final VoidCallback onTap;
   final VcApi? api;
+  final Cache? cache; // 카드 사진을 폰에 남겨 두 번 안 받는다(결정 27)
   final VoidCallback? onLongPress;
 
   @override
@@ -1907,13 +2039,15 @@ class NoteCard extends StatelessWidget {
                       child: SizedBox(
                         width: 64,
                         height: 64,
-                        child: Image.network(
-                          api.attachmentUri(image).toString(),
-                          headers: api.authHeaders,
+                        // ★★ 카드는 **작은 사진**(320px)만 받는다. 전에는 카드마다 원본을 통째로
+                        //   받아 목록만 훑어도 몇 MB 씩 나갔고, 앱을 껐다 켜면 또 받았다(결정 27).
+                        child: AttachImage(
+                          api: api,
+                          name: image,
+                          cache: cache,
+                          width: 320,
                           fit: BoxFit.cover,
-                          cacheWidth: 192,
-                          semanticLabel: image,
-                          errorBuilder: (_, _, _) => Container(
+                          missing: (_) => Container(
                             color: _panel,
                             child: const Icon(Icons.image_outlined, color: _muted, size: 22),
                           ),
@@ -1941,6 +2075,7 @@ class NotePage extends StatefulWidget {
     this.onAppend,
     this.onSaveLine,
     this.alarms,
+    this.cache,
   });
 
   final VcApi api;
@@ -1953,6 +2088,8 @@ class NotePage extends StatefulWidget {
   final Future<void> Function(String title, String line)? onSaveLine;
   // 시간 알림(편의 기능 24번). 없으면 메뉴에 안 뜬다.
   final AlarmBook? alarms;
+  // 폰 안 작은 창고(결정 27) — 받은 글을 남겨 두고, 컴퓨터가 꺼지면 그것을 그린다.
+  final Cache? cache;
 
   @override
   State<NotePage> createState() => _NotePageState();
@@ -2000,6 +2137,7 @@ class _NotePageState extends State<NotePage> {
         onAppend: widget.onAppend,
         onSaveLine: widget.onSaveLine,
         alarms: widget.alarms,
+        cache: widget.cache,
       ),
     ),
   );
@@ -2105,12 +2243,28 @@ class _NotePageState extends State<NotePage> {
   }
 
   late Future<Map<String, dynamic>> _note = _load();
+  bool _fromCache = false; // 지금 그리는 것이 폰에 남아 있던 판인가
 
-  Future<Map<String, dynamic>> _load() =>
-      widget.api.note(widget.title, q: widget.q, folder: widget.folder)..catchError((Object e) {
-        widget.onFail(e);
-        return <String, dynamic>{};
-      });
+  /// 글 한 장. 컴퓨터가 켜져 있으면 받아서 **폰에도 남기고**, 꺼져 있으면 남은 것을 그린다(결정 27).
+  Future<Map<String, dynamic>> _load() async {
+    try {
+      final got = await widget.api.note(widget.title, q: widget.q, folder: widget.folder);
+      _fromCache = false;
+      await widget.cache?.saveNote(widget.title, got);
+      return got;
+    } on VcOffline catch (e) {
+      final kept = await widget.cache?.note(widget.title);
+      if (kept != null) {
+        _fromCache = true;
+        return kept;
+      }
+      widget.onFail(e);
+      return <String, dynamic>{};
+    } catch (e) {
+      widget.onFail(e);
+      return <String, dynamic>{};
+    }
+  }
 
   @override
   Widget build(BuildContext context) => Backdrop(
@@ -2164,12 +2318,19 @@ class _NotePageState extends State<NotePage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
               children: [
+                // ★ 지금 그리는 것이 **폰에 남아 있던 판**이면 그렇다고 말한다 — 최신인 줄 알면 안 된다
+                if (_fromCache)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('컴퓨터 꺼짐 · 폰에 남아 있던 판이야', style: _mono(10.5, _warn)),
+                  ),
                 if (widget.folder != null) Text('// ${widget.folder}', style: _mono(11, _muted)),
                 const SizedBox(height: 4),
                 _Panel(
                   child: NoteBody(
                     text: '${j['text'] ?? ''}',
                     api: widget.api,
+                    cache: widget.cache,
                     onLink: _open,
                     onTask: (nth, want) async {
                       try {
@@ -2290,10 +2451,19 @@ Future<String?> editProp(BuildContext context, String key, String value) async {
 /// `- 제품명 : …` 줄 묶음은 항목표로, 태그만 있는 줄은 칩으로.
 /// ★ 오너 실기(2026-09-16): 사진은 맥에 붙었는데 앱 글 보기에는 `![[…]]` 글자만 보였다.
 class NoteBody extends StatelessWidget {
-  const NoteBody({super.key, required this.text, required this.api, this.onEditProp, this.onLink, this.onTask});
+  const NoteBody({
+    super.key,
+    required this.text,
+    required this.api,
+    this.cache,
+    this.onEditProp,
+    this.onLink,
+    this.onTask,
+  });
 
   final String text;
   final VcApi api;
+  final Cache? cache; // 글 속 사진을 폰에 남겨 두 번 안 받는다(결정 27)
   // 항목 칸을 누르면 고친다(편의 기능 4번). 없으면 보기만.
   final void Function(String key, String value)? onEditProp;
   // `[[링크]]` 를 누르면(편의 기능 19번). 없으면 글자만.
@@ -2625,12 +2795,12 @@ class NoteBody extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: Image.network(
-                api.attachmentUri(name).toString(),
-                headers: api.authHeaders,
+              child: AttachImage(
+                api: api,
+                name: name,
+                cache: cache,
                 fit: BoxFit.contain,
-                semanticLabel: name,
-                errorBuilder: (_, _, _) => _fileTile(name, '사진을 못 불러왔어 — 컴퓨터 연결을 봐 줘'),
+                missing: (why) => _fileTile(name, why == '컴퓨터가 켜지면 보임' ? '사진 — 컴퓨터가 켜지면 보임' : why),
               ),
             ),
           ),
@@ -2675,11 +2845,13 @@ class EditorPage extends StatelessWidget {
     this.templates,
     this.fixedTitle,
     this.startBody,
+    this.cache,
   });
 
   final Outbox outbox;
   final Future<void> Function() onSend;
   final Future<(List<Tpl>, bool)> Function()? templates;
+  final Cache? cache; // 폰에서 쓴 글을 폰 창고에도 바로 넣는다(결정 27)
   final String? fixedTitle;
   final String? startBody; // 서식에서 새 글 — 채운 틀로 연다
 
@@ -2697,6 +2869,7 @@ class EditorPage extends StatelessWidget {
         templates: templates,
         fixedTitle: fixedTitle,
         startBody: startBody,
+        cache: cache,
         autofocus: true,
         onSaved: (item) => Navigator.pop(context, item),
       ),
@@ -2717,6 +2890,7 @@ class WriteTab extends StatefulWidget {
     this.readText = readImageText,
     this.record = recordMemo,
     this.onSaved,
+    this.cache,
   });
 
   final Outbox outbox;
@@ -2727,6 +2901,7 @@ class WriteTab extends StatefulWidget {
   final String? startBody; // 서식에서 새 글
   final TextReader readText; // 사진 속 글자(기기 안) — 시험은 가짜
   final RecordMemo record; // 녹음 — 시험은 가짜
+  final Cache? cache; // 폰에서 쓴 글을 폰 창고에도 바로(결정 27)
   final bool autofocus;
   // 편집기로 쓸 때 — 저장하면 불린다(보내기는 기다리지 않는다)
   final void Function(OutboxItem item)? onSaved;
@@ -2949,6 +3124,9 @@ class _WriteTabState extends State<WriteTab> {
       final OutboxItem item;
       try {
         item = await widget.outbox.add(title, withText, files: List.of(_picked)); // ① 폰에 먼저 — 여기서 끝나면 앱이 꺼져도 남는다
+        // ★★ 폰 창고에도 바로 넣는다(결정 27) — 컴퓨터가 꺼져 있어도 **내가 방금 쓴 글**이 보인다.
+        //   이미 있는 글이면 서버가 할 것과 같게 **뒤에 덧붙인다**(아무것도 안 지운다).
+        await widget.cache?.addMine(title, withText);
       } catch (e) {
         _tell('폰에 저장 못 했어 — 적은 글은 칸에 그대로 있어 ($e)', false);
         return;

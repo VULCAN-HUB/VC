@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import tempfile
 import base64
+import hashlib
 import hmac
 import json
 import queue
@@ -237,6 +238,28 @@ class Handler(BaseHTTPRequestHandler):
         #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
         # ★★ **`force` 는 진짜 참(`true`)일 때만 뚫는다.** `bool()` 로 읽으니 글자 `"false"`·`"0"` 도
         #   참이 되어 **사람이 고친 글을 덮었다** — 덮어쓰기 막이가 글자 한 줄에 무너졌다.
+        # ★★ **오프라인에서 고친 글 되돌려 보내기(오너 결정 28).** 폰은 제가 본 판의 지문
+        #   (`base_hash`)을 함께 보낸다. 그 사이 컴퓨터 쪽 글이 그대로면 **조용히 덮고**,
+        #   바뀌었으면 **아무것도 안 지우고 둘 다 남긴다** — 폰이 고친 판을 글 끝에 붙이고
+        #   「둘이 달라 붙여 뒀다」고 알린다. 사람이 보고 정리한다(덮어쓰기는 늘 명시적이다).
+        base = body.get("base_hash")
+        if mode == "replace" and old is not None and isinstance(base, str) and base:
+            지금 = hashlib.sha256(old.body.encode("utf-8")).hexdigest()
+            if 지금 == base:
+                body = {**body, "force": True}          # 내가 본 그 판 그대로다 — 덮어도 안전하다
+            else:
+                언제 = time.strftime("%Y-%m-%d %H:%M")
+                붙임 = f"\n\n## 폰에서 고친 판 ({언제})\n\n{text}"
+                경로 = self.server.notes.append(title, 붙임, old.kind, pinned=old.pinned)
+                self.server.notes.embed_one(경로)
+                self.server.notes._vec_cache = None
+                실림2 = getattr(self.server, "plugins", None)
+                if 실림2:
+                    실림2.fire_saved(notes.제목맞춤(title), log=_알림)
+                return self._send(201, {
+                    "title": title, "mode": "append", "merged": "appended",
+                    "hint": "폰에서 고치는 사이 컴퓨터 쪽 글도 바뀌어, 덮지 않고 글 끝에 붙였다"})
+
         if mode == "replace" and old is not None and body.get("force") is not True:
             return self._send(409, {
                 "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
@@ -440,10 +463,22 @@ class Handler(BaseHTTPRequestHandler):
         # 첨부 받아 보기 — 폰 글 보기가 사진을 그린다(오너 실기 2026-09-16: 앱에서 사진이 안 보였다).
         # 이름만 받는다 — 경로 성분은 버리고 첨부 꼴만, 창고 안에서만 찾는다.
         if url.path == "/eb/v1/attach":
-            name = (parse_qs(url.query).get("name") or [""])[0]
+            물음 = parse_qs(url.query)
+            name = (물음.get("name") or [""])[0]
             path = self.server.notes.attachment_path(Path(name).name) if name else None
             if path is None or not path.is_file():
                 return self._send(404, {"error": "없는 첨부", "name": name[:80]})
+            # ★★ **목록 카드는 작은 사진을 받는다**(`w=320`). 전에는 카드마다 **원본을 통째로**
+            #   받아 갔다 — 폰에서 목록만 훑어도 몇 MB 씩 나갔다. 못 줄이는 꼴(HEIC 등)이면
+            #   원본을 그대로 준다 — 폰이 그것을 제 자리에 넣어 **두 번은 안 받는다.**
+            try:
+                넓이 = int((물음.get("w") or ["0"])[0])
+            except ValueError:
+                넓이 = 0
+            if 넓이:
+                작은 = self.server.notes.thumbnail_path(Path(name).name, 넓이)
+                if 작은 is not None:
+                    path = 작은
             import mimetypes
 
             data = path.read_bytes()
@@ -2049,6 +2084,55 @@ def _self_check() -> None:
     _ai = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험"))[1]["results"]
            if x["title"] == "사진 시험"][0]
     assert "preview" not in _ai and "image" not in _ai, "AI 기본 길에 카드 칸이 실린다(크레딧)"
+
+    # --- 오프라인에서 고친 글 되돌려 보내기(결정 28) · 작은 사진(결정 27) ---
+    import hashlib as _hl
+
+    call("POST", "/eb/v1/memory", {"title": "오프라인 글", "text": "처음 줄"})
+    _본 = server.notes.read("오프라인 글").body
+    _지문 = _hl.sha256(_본.encode()).hexdigest()
+    # ① 그 사이 아무도 안 건드렸다 → force 없이도 덮는다(폰이 본 그 판이니까)
+    _상, _답 = call("POST", "/eb/v1/memory",
+                   {"title": "오프라인 글", "text": "폰에서 고친 줄", "mode": "replace", "base_hash": _지문})
+    assert _상 == 201 and _답.get("merged") is None, _답
+    assert server.notes.read("오프라인 글").body.strip() == "폰에서 고친 줄", server.notes.read("오프라인 글").body
+    # ② 그 사이 컴퓨터 쪽이 바뀌었다 → **덮지 않는다.** 둘 다 남기고 알린다
+    call("POST", "/eb/v1/memory", {"title": "오프라인 글", "text": "컴퓨터에서 보탠 줄"})
+    _상, _답 = call("POST", "/eb/v1/memory",
+                   {"title": "오프라인 글", "text": "폰에서 또 고친 줄", "mode": "replace", "base_hash": _지문})
+    assert _상 == 201 and _답.get("merged") == "appended", _답
+    _몸 = server.notes.read("오프라인 글").body
+    assert "컴퓨터에서 보탠 줄" in _몸, "컴퓨터에서 쓴 줄을 지웠다"
+    assert "폰에서 또 고친 줄" in _몸 and "## 폰에서 고친 판" in _몸, _몸
+    # ③ 지문 없이 덮으려 하면 예전처럼 막힌다(force 가 필요하다)
+    assert call("POST", "/eb/v1/memory",
+                {"title": "오프라인 글", "text": "그냥 덮기", "mode": "replace"})[0] == 409
+
+    # 작은 사진 — 목록 카드가 원본을 통째로 안 받게(결정 27)
+    import io as _io
+
+    from PIL import Image as _Image
+
+    _버퍼 = _io.BytesIO()
+    _Image.new("RGB", (1600, 1200), (30, 90, 200)).save(_버퍼, "JPEG", quality=95)
+    _상, _사진 = 올리기("큰사진.jpg", _버퍼.getvalue(), title="사진 시험")
+    assert _상 == 201, (_상, _사진)
+
+    def 내려받기(이름, 너비=0):
+        import urllib.parse as _up
+        칸 = {"name": 이름, **({"w": str(너비)} if 너비 else {})}
+        요청 = urllib.request.Request(base + "/eb/v1/attach?" + _up.urlencode(칸),
+                                    headers={"Authorization": "Bearer test-token"})
+        with urllib.request.urlopen(요청, timeout=5) as 답:
+            return 답.read()
+
+    _원본 = 내려받기(_사진["name"])
+    _작은 = 내려받기(_사진["name"], 320)
+    assert len(_작은) * 4 < len(_원본), (len(_작은), len(_원본))
+    assert _작은[:3] == b"\xff\xd8\xff", "작은 사진이 JPEG 가 아니다"
+    # 모르는 너비·못 줄이는 꼴이면 원본을 그대로 준다(사진이 안 보이는 것보다 낫다)
+    assert 내려받기(_사진["name"], 999) == _원본
+    assert 내려받기(_a1["name"], 320) == b"heic-bytes", "못 줄이는 꼴인데 빈 것을 준다"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을

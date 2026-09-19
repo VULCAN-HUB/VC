@@ -14,6 +14,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import 'cache.dart';
 import 'vc_api.dart';
 
 enum SendState { saved, waiting, sent }
@@ -182,7 +183,9 @@ class Outbox extends ChangeNotifier {
   }
 
   /// 안 보낸 것을 오래된 것부터 보낸다. 못 닿으면 거기서 멈춘다(나머지는 다음에).
-  Future<FlushResult> flush(VcApi api) async {
+  /// 대기함을 보낸다. [cache] 를 주면 **올린 사진을 폰 자리로 옮긴다** — 방금 올린 것을
+  /// 되받는 왕복이 없다(오너 지시 2026-09-18: 사진을 매번 다시 받지 말 것).
+  Future<FlushResult> flush(VcApi api, {Cache? cache}) async {
     if (_flushing) return FlushResult.done;
     _flushing = true;
     try {
@@ -209,9 +212,11 @@ class Outbox extends ChangeNotifier {
           item.savedAs = await api.write(item.title, item.bodyToSend, clientId: item.id);
           item.sent = true;
           item.error = null;
-          // 서버에 다 들어간 뒤에만 폰 사본을 지운다
+          // 서버에 다 들어간 뒤에만 폰 사본을 지운다 — 지우기 전에 **캐시로 옮긴다**
           for (final f in item.files) {
             try {
+              final saved = f.uploaded;
+              if (cache != null && saved != null) await cache.adoptUpload(saved, File(f.path));
               await File(f.path).delete();
             } on FileSystemException {
               // 이미 없으면 그만

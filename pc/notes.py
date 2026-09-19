@@ -2158,6 +2158,40 @@ class Notes:
         (folder / name).write_bytes(data)
         return name
 
+    #: 목록 카드가 쓰는 작은 사진의 너비들. 아무 수나 받으면 폴더가 무한히 는다.
+    THUMB_W = (320, 640)
+
+    def thumbnail_path(self, name: str, w: int) -> Path | None:
+        """작은 사진을 만들어 그 자리를 준다. 못 만들면 None(부르는 쪽이 원본을 준다).
+
+        ★★ **왜 필요한가.** 폰 목록 카드가 사진마다 **원본을 통째로** 받아 갔다 —
+        `cacheWidth` 는 그린 뒤에 줄일 뿐이라 받는 양은 그대로다(몇 MB씩). 목록만 훑어도
+        데이터가 나가고, 앱을 껐다 켜면 또 받았다. 320px JPEG 면 보통 30~60KB 다.
+        ※ 한 번 만들면 `_첨부/.썸네일/<너비>/` 에 남아 다음부터는 읽기만 한다.
+        ※ HEIC 처럼 Pillow 가 못 읽는 꼴이면 None — 원본을 준다(폰이 그것을 캐시에 넣어
+          **두 번은 안 받는다**). 폰에서 올린 사진은 올릴 때 이미 폰에 있으니 받지도 않는다.
+        """
+        if w not in self.THUMB_W:
+            return None
+        원본 = self.attachment_path(name)
+        if 원본 is None or 원본.suffix.lower() not in IMAGE_EXT:
+            return None
+        자리 = self.attach_root() / ".썸네일" / str(w) / (원본.stem + ".jpg")
+        try:
+            if 자리.is_file() and 자리.stat().st_mtime >= 원본.stat().st_mtime:
+                return 자리
+            from PIL import Image
+
+            자리.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(원본) as 그림:
+                그림 = 그림.convert("RGB")
+                그림.thumbnail((w, w * 4))       # 세로로 긴 사진도 너비만 맞춘다
+                그림.save(자리, "JPEG", quality=78, optimize=True)
+            return 자리
+        except Exception:
+            # 못 만들어도 사진은 보여야 한다 — 원본으로 간다.
+            return None
+
     def attachment_path(self, name: str) -> Path | None:
         """이름으로 첨부 파일을 찾는다. 없으면 None."""
         if not is_attachment(name):
@@ -3660,6 +3694,28 @@ def _self_check() -> None:
         assert got.links() == [("회사", "")], got.links()      # 첨부는 링크가 아니다
         assert got.embeds() == [], "첨부가 항목 끼움으로 샜다"
         assert name not in dict(n.unresolved()), "첨부가 미해결 링크로 샜다"
+        # --- 작은 사진(썸네일) — 목록 카드가 원본을 통째로 받지 않게 ---
+        import io as _io
+
+        from PIL import Image as _Image
+
+        큰것 = _io.BytesIO()
+        _Image.new("RGB", (1600, 1200), (200, 60, 40)).save(큰것, "JPEG", quality=95)
+        사진 = n.save_attachment(큰것.getvalue(), ".jpg", "큰 사진")
+        작은 = n.thumbnail_path(사진, 320)
+        assert 작은 is not None and 작은.is_file(), "작은 사진을 못 만든다"
+        with _Image.open(작은) as _t:
+            assert _t.width == 320, _t.size
+        원본크기 = n.attachment_path(사진).stat().st_size
+        assert 작은.stat().st_size * 4 < 원본크기, (작은.stat().st_size, 원본크기)
+        # 두 번째는 다시 안 만든다 — 같은 파일을 그대로 준다
+        먼저 = 작은.stat().st_mtime_ns
+        assert n.thumbnail_path(사진, 320).stat().st_mtime_ns == 먼저, "썸네일을 매번 다시 만든다"
+        # 아무 너비나 받지 않는다(폴더가 무한히 는다) · 못 읽는 꼴이면 None(원본으로 간다)
+        assert n.thumbnail_path(사진, 321) is None
+        assert n.thumbnail_path(name, 320) is None, "깨진 png 로 썸네일을 만들었다고 한다"
+        assert n.thumbnail_path("없는사진.png", 320) is None
+
         assert n.attachment_path("없는사진.png") is None
         assert not is_attachment("그냥 항목")
         # 표 안 링크 `[[제목\|보일 말]]` — 제목 끝에 `\` 가 붙으면 끊긴 링크다
