@@ -194,8 +194,61 @@ class NoteView(QTextBrowser):
         """
         return "<" + 글.replace("<", "%3C").replace(">", "%3E") + ">"
 
+    #: 바깥으로 여는 주소들. 우리끼리 쓰는 이름표(`note:`·`tag:`)와 갈라야 한다.
+    바깥꼴 = ("http", "https", "mailto")
+
+    @classmethod
+    def 바깥주소인가(cls, raw: str) -> bool:
+        """브라우저·메일 앱으로 열 주소인가. `note:`·`tag:` 는 우리 것이라 아니다."""
+        return str(raw).split(":", 1)[0].lower() in cls.바깥꼴
+
+    def 바깥열기(self, raw: str) -> None:
+        """기본 브라우저로 연다. 시험에서는 이 함수를 갈아 끼운다."""
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(str(raw)))
+
+    def 링크메뉴(self, 주소: str):
+        """우클릭 메뉴에 얹을 것. 바깥 주소가 아니면 `None`.
+
+        ★ 누르면 바로 열리지만 **우클릭 길도 둔다** — 새 창에 열거나 주소만 복사하고
+          싶을 때가 있고, 잘못 눌러 브라우저가 뜨는 것이 싫은 사람도 있다(오너 2026-09-20).
+        """
+        if not self.바깥주소인가(주소):
+            return None
+        from PyQt5.QtWidgets import QMenu
+
+        메뉴 = QMenu(self)
+        메뉴.addAction("브라우저로 열기", lambda: self.바깥열기(주소))
+        메뉴.addAction("주소 복사", lambda: self._주소복사(주소))
+        return 메뉴
+
+    @staticmethod
+    def _주소복사(주소: str) -> None:
+        from PyQt5.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(str(주소))
+
+    def contextMenuEvent(self, event) -> None:
+        """링크 위에서 우클릭하면 **열기·복사**를 맨 위에 붙인다."""
+        주소 = self.anchorAt(event.pos())
+        메뉴 = self.링크메뉴(주소) if 주소 else None
+        if 메뉴 is None:
+            return super().contextMenuEvent(event)
+        기본 = self.createStandardContextMenu(event.pos())
+        메뉴.addSeparator()
+        for act in 기본.actions():
+            메뉴.addAction(act)
+        메뉴.exec_(event.globalPos())
+
     def _went(self, url) -> None:
         raw = url.toString()
+        # ★★ **인터넷 주소는 브라우저로 연다**(오너 2026-09-20). 전에는 `setOpenLinks(False)` 로
+        #   전부 막아 두고 우리 이름표(`note:`·`tag:`)만 다뤄서, 글에 남긴 주소를 눌러도
+        #   **아무 일도 안 났다** — 링크를 남겨 두는 뜻이 없었다.
+        if self.바깥주소인가(raw):
+            return self.바깥열기(raw)
         kind, _, rest = raw.partition(":")
         if kind == "tag":
             self.tag_clicked.emit(rest)
@@ -1448,6 +1501,32 @@ def _self_check() -> None:
     assert len(years.buttons) == 1, "다시 그렸는데 옛 단추가 남았다"
     # 빈칸이 쌓이면 단추가 왼쪽에 안 붙고 가운데로 밀린다.
     assert years.grid.count() == 2, f"빈칸이 쌓였다: {years.grid.count()}"
+
+    # ★★ **글에 남긴 인터넷 주소는 눌러서 브라우저로 연다**(오너 2026-09-20).
+    #   전에는 `setOpenLinks(False)` 로 전부 막아 두고 우리 이름표만 다뤄 **눌러도 아무 일이 없었다**.
+    _뷰 = NoteView()
+    열린것 = []
+    _뷰.바깥열기 = 열린것.append
+    assert _뷰.바깥주소인가("https://example.com/a?b=1")
+    assert _뷰.바깥주소인가("http://100.1.2.3:8765") and _뷰.바깥주소인가("mailto:a@b.c")
+    # 우리끼리 쓰는 이름표는 바깥으로 안 나간다 — 나가면 글 열기·태그 고르기가 브라우저로 샌다
+    assert not _뷰.바깥주소인가("note:회의록") and not _뷰.바깥주소인가("tag:할일")
+    assert not _뷰.바깥주소인가("file:/tmp/a.png") and not _뷰.바깥주소인가("회의록")
+    from PyQt5.QtCore import QUrl as _QUrl
+
+    _뷰._went(_QUrl("https://example.com/글"))
+    assert 열린것 == ["https://example.com/글"], 열린것
+    _뷰._went(_QUrl("note:회의록"))          # 이건 안 열린다(글 열기 신호로 간다)
+    assert len(열린것) == 1, 열린것
+    # 우클릭 메뉴 — 링크 위에서만 「열기·복사」가 붙는다
+    메뉴 = _뷰.링크메뉴("https://example.com")
+    assert 메뉴 is not None and [a.text() for a in 메뉴.actions()] == ["브라우저로 열기", "주소 복사"], 메뉴
+    assert _뷰.링크메뉴("note:회의록") is None and _뷰.링크메뉴("") is None
+    메뉴.actions()[0].trigger()
+    assert 열린것[-1] == "https://example.com", 열린것
+    # 민 주소도 Qt 가 링크로 그린다 — 마크다운을 안 써도 눌린다
+    _뷰.setMarkdown(_뷰.to_markdown("여기 https://quasarzone.com/bbs/qn_hardware/views/2065297 참고"))
+    assert "<a href" in _뷰.toHtml() and "quasarzone" in _뷰.toHtml()
 
     view = NoteView()
     src = "제목 [[가#머리]] 와 [[나|보임]] 와 ![[다]] 와 #태그/하위"
