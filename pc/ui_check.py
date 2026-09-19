@@ -1078,6 +1078,28 @@ def run() -> None:
         win.ask("상태창 열어")
         assert "상태창" in win._say_text, win._say_text
 
+        # ★★ **글이 이겨도 창 여는 길은 남는다**(오너 2026-09-20 실기). 「설정창」이라는 제목의 글이
+        #   있으면 글이 이기는데, 그때 ⚙ 줄까지 없애 버리면 **창을 열 길이 사라진다.**
+        win.notes.write(Note(title="설정창", body="설정창을 어떻게 바꿀지 적어 둔 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("설정창")
+        줄들3 = [b.text() for b in win.results.findChildren(QPushButton)]
+        assert any("설정창" == t for t in 줄들3), f"그 글이 안 보인다: {줄들3}"
+        assert any(t.startswith("\u2699") for t in 줄들3), f"창 여는 줄이 사라졌다: {줄들3}"
+        assert not any("창 창" in t for t in 줄들3), f"「창」이 두 번 적힌다: {줄들3}"
+        assert "설정 창이야" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
+        # ★ **말끝이 붙은 제목**(「설정창열어줘」)도 같다 — 글이 이기되 ⚙ 줄은 남아야 한다.
+        #   이쪽은 딴 길을 지난다(말끝이 있어 「글이 있으면 찾기로」 가지가 안 걸린다).
+        win.notes.write(Note(title="설정창열어줘", body="말끝이 붙은 제목의 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("설정창열어줘")
+        줄들4 = [b.text() for b in win.results.findChildren(QPushButton)]
+        assert any("설정창열어줘" == t for t in 줄들4), f"그 글이 안 보인다: {줄들4}"
+        assert any(t.startswith("\u2699") for t in 줄들4), f"창 여는 줄이 사라졌다: {줄들4}"
+        assert "설정 창이야" not in win._say_text, f"글을 제목 그대로 쳤는데 창이 열렸다: {win._say_text}"
+
         # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
         win.graph.clear_focus()
         win.clear_detail()

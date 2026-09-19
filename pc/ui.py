@@ -1458,14 +1458,17 @@ class MainWindow(QWidget):
         #   「상태창열어줘」라는 **제목의 글**을 쳤더니 열기 규칙이 삼켜 「상태창」 글이 열렸다 —
         #   내가 적은 글을 제목 그대로 쳤는데 딴 글이 열리면 그건 못 믿는 물건이다.
         #   시키는 말은 **말끝이 붙은 딴 표현**(「상태창 열어」)이 얼마든지 있다.
-        if order is not None and self.notes.read(text.strip()) is not None:
-            order = None
-
         창줄 = ""
         if order is not None and order.what == "창열기" and not order.extra:
+            # 창 이름을 먼저 챙겨 둔다 — 아래에서 글이 이겨도 **창 여는 길은 남겨야** 한다.
+            창이름 = str(order.target or text).strip()
             if self.notes.search(text, k=1):
+                창줄, order = 창이름, None
+        if order is not None and self.notes.read(text.strip()) is not None:
+            # 친 말 그대로가 글 제목이면 그 글이 이긴다. 창 이름이기도 하면 목록 맨 위에 ⚙ 줄로 남는다.
+            if order.what == "창열기":
                 창줄 = str(order.target or text).strip()
-                order = None
+            order = None
         if order is not None and self.do_order(order, started):
             return
 
@@ -1485,7 +1488,9 @@ class MainWindow(QWidget):
         목록 = [(r["title"], r["body"], r["path"], r["kind"]) for r in rows]
         if 창줄:
             # 맨 위에 **창 한 줄**. 글이 아니라 화면이라는 게 보이게 톱니를 붙인다.
-            목록.insert(0, (f"⚙ {창줄} 창 열기", "글이 아니라 화면이야 — 누르면 열린다",
+            # 「설정창 창 열기」처럼 창이 두 번 나오지 않게 — 이름이 이미 창·화면으로 끝나면 그대로 쓴다
+            이름말 = 창줄 if 창줄.endswith(("창", "화면")) else f"{창줄} 창"
+            목록.insert(0, (f"⚙ {이름말} 열기", "글이 아니라 화면이야 — 누르면 열린다",
                            f"창:{창줄}", ""))
         self.show_results(목록, text)
 
