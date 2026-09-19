@@ -334,9 +334,9 @@ class _RootState extends State<Root> {
   }
 
   Future<void> _pair(String text) async {
-    final p = Pairing.parse(text);
+    final (p, why) = Pairing.parseOrWhy(text);
     if (p == null) {
-      _snack('VC 설정 → 폰 연결의 QR 이 아니야');
+      _snack(why); // 「QR 이 아니야」 한 마디 대신 **무엇이 잘못됐는지**
       return;
     }
     // 남이 띄운 QR 로 엉뚱한 곳에 붙지 않게 — 붙을 PC 주소를 사람이 보고 고른다
@@ -355,8 +355,46 @@ class _RootState extends State<Root> {
       ),
     );
     if (ok != true) return;
+
+    // ★★ **여기서 한 번 붙어 본다.** 전에는 묻지도 따지지도 않고 저장하고 들어가, 안 되는 까닭을
+    //   목록 화면에서야 알았다 — 그때는 이미 컴퓨터 앞을 떠난 뒤다. 붙는 것을 확인하고 들어가면
+    //   고칠 것(테일스케일·2분 지난 QR)을 **컴퓨터 앞에 있을 때** 알 수 있다.
+    if (!await _tryPair(p, text)) return;
     await _store.write(key: _pairKey, value: text.trim());
     if (mounted) setState(() => _pairing = p);
+  }
+
+  /// 짝지은 자리에서 한 번 불러 본다. 안 되면 까닭을 보이고 **그래도 저장할지** 묻는다.
+  Future<bool> _tryPair(Pairing p, String text) async {
+    final api = VcApi(p, timeout: const Duration(seconds: 6));
+    String why;
+    try {
+      await api.notes();
+      return true; // 붙었다
+    } on VcUnauthorized {
+      why = '열쇠가 안 맞아 — QR 은 2분 뒤 사라져. PC VC 설정 › 폰 연결에서 다시 띄워 줘';
+    } on VcOffline catch (e) {
+      final hint = p.viaTailscale ? '\n이 주소는 테일스케일 주소야 — **폰에서도** 테일스케일이 켜져 있어야 닿아.' : '\n폰과 컴퓨터가 같은 와이파이인지 봐 줘.';
+      why = '컴퓨터에 못 닿았어${e.reason.isEmpty ? '' : ' (${e.reason})'}$hint';
+    } on VcError catch (e) {
+      why = '컴퓨터가 거절했어 — ${e.message}';
+    }
+    if (!mounted) return false;
+    final anyway = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('아직 안 붙어', style: TextStyle(color: _text, fontSize: 19)),
+        content: Text(why.replaceAll('**', ''), style: const TextStyle(color: _dim, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('다시 찍기', style: TextStyle(color: _muted)),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('그래도 저장')),
+        ],
+      ),
+    );
+    return anyway == true;
   }
 
   Future<void> _unpair(String why) async {

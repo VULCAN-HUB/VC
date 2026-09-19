@@ -562,6 +562,11 @@ def open_dialog(win, notes: Notes):
     폰집단추 = QPushButton("집 와이파이 주소로 보이기")
     폰집단추.hide()
 
+    # QR 이 언제 사라지는지 세어 보인다 — 「왜 안 찍히지」의 첫째 까닭이 **2분이 지난 것**이었다.
+    창.폰남은 = QLabel("")
+    창.폰남은.setObjectName("note")
+    QR살이 = 120
+
     def _QR그리기(주소: str) -> None:
         from PyQt5.QtCore import QTimer
         from PyQt5.QtGui import QPixmap
@@ -570,7 +575,24 @@ def open_dialog(win, notes: Notes):
         그림.loadFromData(phone_app.qr_png(phone_app.pair_url(주소, paths.load_config()["pair_token"])))
         창.폰QR.setPixmap(그림)
         창.폰QR.show()
-        QTimer.singleShot(120_000, lambda: (창.폰QR.clear(), 창.폰QR.hide()))
+        # 폰 대화창에 뜰 주소를 **여기서도** 보인다 — 남이 띄운 QR 을 찍지 않았는지 맞춰 본다.
+        #   (열쇠는 QR 에만 있다. 글자로는 절대 안 보인다.)
+        창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · 2:00 뒤 사라짐")
+        창.폰남은.show()
+        남음 = [QR살이]
+
+        def 한칸():
+            남음[0] -= 1
+            if 남음[0] <= 0:
+                창.폰QR.clear()
+                창.폰QR.hide()
+                창.폰남은.setText("QR 이 사라졌다 — 「QR 보이기」를 다시 누른다")
+                return
+            창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · "
+                           f"{남음[0] // 60}:{남음[0] % 60:02d} 뒤 사라짐")
+            QTimer.singleShot(1000, 한칸)
+
+        QTimer.singleShot(1000, 한칸)
 
     def QR보이기() -> None:
         테일 = 창.테일주소()
@@ -597,6 +619,7 @@ def open_dialog(win, notes: Notes):
     창.폰단추 = 폰단추
     창.폰집단추 = 폰집단추
     폰틀.addWidget(폰단추)
+    폰틀.addWidget(창.폰남은)
     폰틀.addWidget(창.폰경고)
     폰틀.addWidget(폰집단추)
     폰틀.addWidget(창.폰QR)
@@ -910,6 +933,18 @@ def _self_check() -> None:
             다시.칸들["음식"]["좋아하는 음식"].setText("")
             다시.저장()
             assert "좋아하는 음식" not in n.read(PROFILE_TITLE).body, "비운 답이 남는다"
+            # ★ 첫 연결(결정 18·21): QR 을 띄우면 **붙을 주소와 남은 시간**을 같이 보인다 —
+            #   「왜 안 찍히지」의 첫째 까닭이 2분 지난 QR 이었고, 남이 띄운 QR 인지 맞춰 볼 것도 없었다.
+            paths.save_config({**paths.load_config(), "pair_token": "시험열쇠-ABC"})
+            폰창 = open_dialog(win, n)
+            폰창.테일주소 = lambda: "100.101.2.3"      # 테일스케일이 켜진 셈 친다
+            폰창.폰단추.click()
+            assert 폰창.폰QR.pixmap() is not None and not 폰창.폰QR.pixmap().isNull(), "QR 이 안 그려진다"
+            말 = 폰창.폰남은.text()
+            assert "100.101.2.3:8765" in 말 and "2:00" in 말, 말
+            assert paths.load_config()["pair_token"] not in 말, "열쇠가 글자로 샌다"
+            폰창.deleteLater()
+
             # ★★ 확장(결정 23 · 편의 기능 31번) — **깔아도 꺼진 채**고, 켜면 설정에 남는다.
             import plugins as 확장들
 

@@ -174,13 +174,26 @@ class Handler(BaseHTTPRequestHandler):
         header = self.headers.get("Authorization", "")
         return header[7:] if header.startswith("Bearer ") else ""
 
+    @staticmethod
+    def _같은열쇠(온것: str, 우리것: str) -> bool:
+        """열쇠 두 개가 같은가. **바이트로 견준다.**
+
+        ★★ `hmac.compare_digest` 는 글자열끼리는 **ASCII 만** 견준다 — 한글이 섞이면
+        `TypeError: comparing strings with non-ASCII characters` 로 터져, 열쇠가 틀렸다는
+        401 대신 **500 이 나가고 연결이 끊겼다.** 폰에는 그것이 「컴퓨터에 못 닿았어」로 보여
+        「테일스케일이 문젠가」를 한참 뒤졌다(2026-09-19 실기에서 잡았다).
+        바이트로 견주면 아무 글자나 와도 안 터지고, 견주는 시간도 그대로 일정하다.
+        """
+        return hmac.compare_digest(온것.encode("utf-8", "surrogatepass"),
+                                   우리것.encode("utf-8", "surrogatepass"))
+
     def _authorized(self, path: str = "") -> bool:
         """폰·내 PC는 페어링 토큰으로, 외부 PC는 폰이 승인한 원격 토큰으로 들어온다.
 
         원격 토큰은 허용된 경로에서만 통한다 — 검사는 remote.RemoteGate가 한다.
         """
         token = self._bearer()
-        if token and hmac.compare_digest(token, self.server.cfg["pair_token"]):
+        if token and self._같은열쇠(token, self.server.cfg["pair_token"]):
             self.session = None
             return True
 
@@ -199,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         relay = self.headers.get("X-EB-Relay", "")
         claimed = self.headers.get("X-EB-Client", "")
-        if claimed and relay and hmac.compare_digest(relay, self.server.cfg["pair_token"]):
+        if claimed and relay and self._같은열쇠(relay, self.server.cfg["pair_token"]):
             return claimed
         return self.client_address[0]
 
@@ -2084,6 +2097,14 @@ def _self_check() -> None:
     _ai = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험"))[1]["results"]
            if x["title"] == "사진 시험"][0]
     assert "preview" not in _ai and "image" not in _ai, "AI 기본 길에 카드 칸이 실린다(크레딧)"
+
+    # ★★ **아스키가 아닌 열쇠가 와도 터지지 않는다.** `hmac.compare_digest` 는 글자열끼리는
+    #   ASCII 만 견뎌, 한글이 섞인 열쇠가 오면 401 대신 **500 으로 터지고 연결이 끊겼다** —
+    #   폰에는 그것이 「컴퓨터에 못 닿았어」로 보여 엉뚱한 곳(테일스케일)을 뒤지게 했다(2026-09-19 실기).
+    #   ※ 머리글은 latin-1 로 오간다 — 폰이 UTF-8 로 실어 보낸 바이트가 서버에는 이 꼴로 보인다.
+    _한글열쇠 = "한글열쇠".encode("utf-8").decode("latin-1")
+    assert call("GET", "/eb/v1/hello", token=_한글열쇠)[0] == 401, "아스키 아닌 열쇠에 401 이 아니라 500 이 난다"
+    assert call("GET", "/eb/v1/hello", token="🔑".encode().decode("latin-1"))[0] == 401
 
     # --- 오프라인에서 고친 글 되돌려 보내기(결정 28) · 작은 사진(결정 27) ---
     import hashlib as _hl

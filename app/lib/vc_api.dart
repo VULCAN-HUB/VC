@@ -15,18 +15,36 @@ class Pairing {
   final Uri base;
   final String token;
 
-  static Pairing? parse(String text) {
-    final u = Uri.tryParse(text.trim());
-    if (u == null || (u.scheme != 'http' && u.scheme != 'https') || u.host.isEmpty) return null;
-    if (!u.fragment.startsWith('t=')) return null;
+  static Pairing? parse(String text) => parseOrWhy(text).$1;
+
+  /// 짝짓기 주소를 읽는다. **안 되면 까닭까지 준다** — 「QR 이 아니야」 한 마디로는
+  /// 사람이 무엇을 고쳐야 할지 모른다(2분 지난 QR · 열쇠 없는 주소 · 오타가 다 같은 말이었다).
+  static (Pairing?, String) parseOrWhy(String text) {
+    final raw = text.trim();
+    if (raw.isEmpty) return (null, '아무것도 안 적혔어');
+    final u = Uri.tryParse(raw);
+    if (u == null || (u.scheme != 'http' && u.scheme != 'https') || u.host.isEmpty) {
+      return (null, raw.startsWith('http') ? '주소가 깨졌어 — 붙여넣기로 다시 넣어 줘' : 'VC 의 QR 이 아니야 (http 로 시작해야 해)');
+    }
+    if (!u.fragment.startsWith('t=')) {
+      return (null, '열쇠가 없는 주소야 — PC VC 설정 › 폰 연결의 QR 을 찍어 줘');
+    }
     final String token;
     try {
       token = Uri.decodeComponent(u.fragment.substring(2));
     } on FormatException {
-      return null; // 깨진 %인코딩 — 찍힌 QR 이 망가졌다
+      return (null, '열쇠 글자가 깨졌어 — QR 을 다시 찍어 줘'); // 깨진 %인코딩
+    } on ArgumentError {
+      return (null, '열쇠 글자가 깨졌어 — QR 을 다시 찍어 줘');
     }
-    if (token.isEmpty) return null;
-    return Pairing(Uri(scheme: u.scheme, host: u.host, port: u.hasPort ? u.port : 8765), token);
+    if (token.isEmpty) return (null, '열쇠가 비었어 — QR 을 다시 띄워 줘');
+    return (Pairing(Uri(scheme: u.scheme, host: u.host, port: u.hasPort ? u.port : 8765), token), '');
+  }
+
+  /// 테일스케일 주소(100.64.0.0/10)인가. 못 닿을 때 할 말이 달라진다.
+  bool get viaTailscale {
+    final n = int.tryParse(base.host.split('.').first);
+    return n == 100 && base.host.split('.').length == 4;
   }
 
   String get label => '${base.host}:${base.port}';
