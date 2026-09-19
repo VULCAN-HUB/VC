@@ -15,6 +15,11 @@ from __future__ import annotations
 import re
 
 TAG = re.compile(r"(?:^|\s)#([^\s#,.]{1,24})")
+낱말꼴 = re.compile(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9]{1,}")
+# 어디에나 나오는 말은 좁히는 데 쓸모가 없다
+흔한말 = {"그리고", "하지만", "그래서", "오늘", "어제", "내일", "이것", "저것", "때문", "하는",
+        "한다", "했다", "있다", "없다", "된다", "같다", "https", "http", "www", "com",
+        "메모", "기록", "정리", "확인", "the", "and", "for", "you", "with", "this"}
 
 
 def _년월(path: str) -> tuple[str, str]:
@@ -41,6 +46,30 @@ def 세기(행들: list[dict]) -> dict[str, dict[str, int]]:
         for t in set(TAG.findall(str(r.get("body") or ""))):
             더하기("tag", t)
     return 표
+
+
+def 낱말제안(행들: list[dict], 물은말: str = "", 최대: int = 3) -> list[str]:
+    """찾은 것들을 **반쯤 가르는 낱말**들. 쉼표로 덧붙여 좁히라고 권할 말이다(오너 2026-09-20).
+
+    ★ 쉼표로 좁히는 것은 **이미 되고 있었다**(`고기, 먹음` → 둘 다 든 글). 그런데 화면이
+      아무 말도 안 해 아무도 몰랐다 — 되는데 안 알려 주면 없는 것과 같다.
+    """
+    전체 = len(행들)
+    이미 = {w.lower() for w in 낱말꼴.findall(물은말 or "")}
+    셈: dict[str, int] = {}
+    for r in 행들:
+        글 = f"{r.get('title') or ''} {r.get('body') or ''}"[:600]
+        for w in {x.lower() for x in 낱말꼴.findall(글)}:
+            if w in 흔한말 or w in 이미 or len(w) < 2:
+                continue
+            셈[w] = 셈.get(w, 0) + 1
+    골라 = []
+    for w, n in 셈.items():
+        if n < 2 or n >= 전체:            # 하나뿐이거나 전부면 좁히기가 아니다
+            continue
+        골라.append((1.0 - abs(n / 전체 - 0.5) * 2, n, w))
+    골라.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    return [w for _, _, w in 골라[:최대]]
 
 
 def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5) -> list[str]:
@@ -75,17 +104,30 @@ def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5) -> list[str]
     return 골라
 
 
-def 한줄(행들: list[dict], 최대: int = 3) -> str:
-    """사람에게 보일 한 줄. 권할 게 없으면 빈 글."""
+def 한줄(행들: list[dict], 최대: int = 3, 물은말: str = "") -> str:
+    """사람에게 보일 한 줄. 권할 게 없으면 빈 글.
+
+    **낱말을 먼저** 권한다 — 쉼표로 덧붙이는 것이 `kind:` 문법보다 손에 익다(오너 2026-09-20).
+    """
+    말 = []
+    # ★ 세 개만 돼도 권한다 — 좁히기는 **이어질 때** 쓸모가 있다. 7개에서 한 번 권하고
+    #   4개에서 입을 닫으면 「고기, 먹음, 배달」로 가는 길이 중간에 끊긴다(오너 2026-09-20).
+    낱말 = 낱말제안(행들, 물은말) if len(행들) >= 3 else []
+    if 낱말 and 물은말.strip():
+        첫 = 낱말[0]
+        고른 = " · ".join(낱말)
+        말.append(f"쉼표로 더 좁혀 — 「{물은말.strip()}, {첫}」 (쓸 만한 말: {고른})")
     got = 제안(행들, 최대)
-    return f"더 좁히려면 — {' · '.join(got)}" if got else ""
+    if got:
+        말.append(f"갈래·태그로는 — {' · '.join(got)}")
+    return " / ".join(말)
 
 
 def _self_check() -> None:
     def 행(제목, kind="", body="", path=""):
         return {"title": 제목, "kind": kind, "body": body, "path": path}
 
-    # 몇 개 안 되면 안 권한다 — 그냥 보는 게 빠르다
+    # 갈래·태그 권유는 몇 개 안 되면 안 한다 — 그냥 보는 게 빠르다
     assert 제안([행(f"{i}", kind="일") for i in range(4)]) == []
 
     # 전부 같은 갈래면 그 갈래는 안 권한다(좁혀도 그대로)
@@ -117,7 +159,31 @@ def _self_check() -> None:
     assert sum(1 for s in got if s.startswith("kind:")) <= 2, got
 
     assert 한줄([행(f"{i}", kind="일") for i in range(3)]) == ""
-    assert 한줄(섞임).startswith("더 좁히려면 — ")
+    assert 한줄(섞임).startswith("갈래·태그로는 — "), 한줄(섞임)
+
+    # ★ 쉼표로 좁히는 길을 **말로 알려 준다**(오너 2026-09-20). 이미 되던 것인데 아무도 몰랐다.
+    고기들 = ([행(f"a{i}", body="고기 먹음 배달") for i in range(4)]
+            + [행(f"b{i}", body="고기 구움 숯불") for i in range(4)])
+    낱말 = 낱말제안(고기들, "고기")
+    assert 낱말 and "고기" not in 낱말, 낱말          # 이미 친 말은 다시 안 권한다
+    # ★ **이미 친 말이 일부 글에만 있어도 다시 권하면 안 된다** — 「고기, 고기」는 좁히기가 아니다.
+    #   (뜻 검색이 낱말 없는 글까지 담아 오므로 이 꼴이 실제로 나온다.)
+    섞여든것 = ([행(f"x{i}", body="고기 먹음") for i in range(4)]
+             + [행(f"y{i}", body="먹음 배달") for i in range(4)])
+    assert "고기" not in 낱말제안(섞여든것, "고기"), 낱말제안(섞여든것, "고기")
+    assert set(낱말) & {"먹음", "배달", "구움", "숯불"}, 낱말
+    줄 = 한줄(고기들, 물은말="고기")
+    assert 줄.startswith("쉼표로 더 좁혀 — 「고기, "), 줄
+    # 전부에 든 말은 안 권한다 — 좁혀도 그대로다
+    같은말 = [행(f"c{i}", body="회의 노트") for i in range(6)]
+    assert "회의" not in 낱말제안(같은말, ""), 낱말제안(같은말, "")
+    # 물은 말이 없으면(빈 창고 앞머리) 쉼표 권유를 안 한다 — 붙일 말이 없다
+    assert not 한줄(고기들, 물은말="").startswith("쉼표로"), 한줄(고기들, 물은말="")
+    # ★ **이어질 때** 쓸모가 있다 — 셋만 남아도 다음 낱말을 권한다(중간에 끊기면 안 된다)
+    셋 = [행("a", body="고기 먹음 배달"), 행("b", body="고기 먹음 회식"), 행("c", body="고기 구움")]
+    assert 한줄(셋, 물은말="고기").startswith("쉼표로 더 좁혀"), 한줄(셋, 물은말="고기")
+    # 둘 이하면 안 권한다 — 그냥 보면 된다
+    assert not 한줄(셋[:2], 물은말="고기").startswith("쉼표로")
     print("facets self-check 통과")
 
 

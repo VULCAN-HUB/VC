@@ -705,13 +705,17 @@ def run() -> None:
                                  kind="일" if i % 2 else "결정"))
         win.ask("고기")
         _말 = win._say_text
-        assert "더 좁히려면" in _말, _말
-        assert "kind:" in _말 or "tag:" in _말, _말
+        # ★ 쉼표로 겹쳐 좁히는 길을 **말로 알려 준다**(오너 2026-09-20) — 이미 되던 것인데 아무도 몰랐다
+        assert "쉼표로 더 좁혀" in _말 or "갈래·태그로는" in _말, _말
+        if "쉼표로 더 좁혀" in _말:
+            assert "「고기, " in _말, _말
+        # 찾기 칸 안내에도 적혀 있어야 한다 — 화면 어디에도 없으면 없는 길과 같다
+        assert "쉼표" in win.ask_box.placeholderText() or "쉼표" in win.ask_box.toolTip()
         # 몇 개 안 되면 안 권한다 — 그냥 보는 게 빠르다
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("고기 이야기 1")
-        assert "더 좁히려면" not in win._say_text, win._say_text
+        assert "쉼표로 더 좁혀" not in win._say_text and "갈래·태그로는" not in win._say_text, win._say_text
         # 다음 검사는 깨끗한 자리에서 — 초점이 남아 있으면 「첫 검색」이 「좁히기」가 된다
         win.graph.clear_focus()
         win.clear_detail()

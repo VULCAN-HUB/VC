@@ -360,7 +360,7 @@ class MainWindow(QWidget):
         #   AI 한테는 인사(`hello`)로 알려 주면서 사람한테는 안 알려 준 셈이다.
         #   [잰 것, AI 쪽] 갈래로 좁히면 한 번에 802 → 617자, 찾은 물음 6/20 → 13/20.
         #   빈 칸에만 보이므로 치기 시작하면 사라진다 — 자리를 안 먹는다.
-        self.ask_box.setPlaceholderText("찾거나 시키기    kind:결정   tag:이름   \"그대로\"")
+        self.ask_box.setPlaceholderText("찾거나 시키기    고기, 먹음(쉼표로 좁히기)   kind:결정   tag:이름")
         # 돋보기는 그림이 아니라 단추다 — 붙여 놓고 안 이으면 눌러도 아무 일이 없다.
         find_act = self.ask_box.addAction(
             theme.glyph_icon("search", theme.rgba(theme.T.DIM, 110)), QLineEdit.LeadingPosition)
@@ -370,6 +370,7 @@ class MainWindow(QWidget):
         #   오늘만 다섯 번 나왔다. 자체점검이 이 둘을 견준다(`ui_check`).
         self.ask_box.setToolTip(
             "한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다" + chr(10)
+            + "쉼표로 겹쳐 좁히기 — 고기, 먹음, 배달 (다 든 것만 남는다)" + chr(10)
             + "좁히기 — kind:결정 · tag:이름 · year:2026 · path:2026/09 · title:이름(=file:)" + chr(10)
             + "빼기 — -kind:일 (잡담이 준다) · -낱말" + chr(10)
             + '"따옴표" 는 그 구절 그대로' + chr(10)
@@ -1511,7 +1512,7 @@ class MainWindow(QWidget):
             # ★★ **찾은 것들 자체를 세어 좁히는 길을 권한다**(오너 2026-09-19).
             #   「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
             #   진짜로 갈라지는 것만 권한다 — 전부에 붙은 값·하나뿐인 값은 뺀다.
-            좁힐길 = facets.한줄([dict(r) for r in rows])
+            좁힐길 = facets.한줄([dict(r) for r in rows], 물은말=text)
             if 좁힐길:
                 said += f" {좁힐길}"
         else:
