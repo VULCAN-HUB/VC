@@ -69,6 +69,7 @@ from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT, GraphView
 import notes as notes_module
 import facets
 import orders
+import piles
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
 from skills import Skill, SkillStore, analyze
 from store import Store
@@ -1520,6 +1521,42 @@ class MainWindow(QWidget):
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
 
+    def 더미보기(self, 이름: str = "") -> str:
+        """비슷한 것끼리 **더미로 모아** 보여 준다(오너 2026-09-19).
+
+        「더미」 한 마디면 더미 목록, 「더미 고기」면 그 더미의 글들만.
+        ★ 새 모델을 안 부른다 — 창고에 이미 있는 **뜻 벡터**로 묶는다(수백 장이 한 호흡).
+        """
+        더미들, 혼자들, 까닭 = piles.창고에서(self.notes)
+        if 까닭:
+            return 까닭
+        if not 더미들:
+            return "비슷한 것끼리 묶일 만한 게 아직 없어 — 글이 더 쌓이면 묶인다."
+
+        if 이름:
+            골라 = [p for p in 더미들 if 이름 in p.name] or [p for p in 더미들
+                                                      if any(이름 in t for t in p.titles)]
+            if not 골라:
+                있는것 = " · ".join(p.name for p in 더미들[:5])
+                return f"'{이름}' 더미는 없어. 있는 더미 — {있는것}"
+            뭉치 = 골라[0]
+            쪽들 = [(t, (self.notes.read(t).body if self.notes.read(t) else ""), "", "") for t in 뭉치.titles]
+            self.show_results(쪽들, 이름)
+            self.ensure_on_graph(뭉치.titles)
+            self.graph.focus_on(뭉치.titles, zoom=FOCUS_ZOOM)
+            return f"「{뭉치.name}」 더미 {뭉치.size}장이야."
+
+        # 더미 목록 — 줄마다 **그 더미에서 가장 그 더미다운 글**을 건다(눌러서 바로 연다)
+        쪽들 = []
+        for p in 더미들:
+            나머지 = " · ".join(p.titles[1:4])
+            쪽들.append((p.titles[0], f"[{p.name}] {p.size}장 — {나머지}", "", ""))
+        self.show_results(쪽들, "")
+        앞 = " · ".join(f"{p.name}({p.size})" for p in 더미들[:4])
+        꼬리 = f" 혼자인 글 {len(혼자들)}장." if 혼자들 else ""
+        return (f"더미 {len(더미들)}개야 — {앞}.{꼬리} "
+                f"「더미 {더미들[0].name.split(' · ')[0]}」 처럼 치면 그 더미만 보여줄게.")
+
     #: 말로 부르는 이름 → 설정 창의 어느 칸인가(`None` 이면 설정 창이 아니라 딴 것)
     창이름 = {
         "설정": None, "설정창": None, "환경설정": None, "내 정보": None,
@@ -1569,6 +1606,9 @@ class MainWindow(QWidget):
             # 적어 놓고 안 쌓이면 그 칸은 거짓말을 하는 것이다.
             self._log_deed(what, said, started)
             return True
+
+        if what == "더미":
+            return done(self.더미보기(name or ""))
 
         if what == "창열기":
             return done(self.창열기(name or ""))

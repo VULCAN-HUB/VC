@@ -716,6 +716,19 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
 
+        # --- 더미로 모아 보기(오너 2026-09-19) ---
+        import orders as _orders창
+        # ★ 「무작위로 쓴 수많은 메모를 모아서 보여 달라」 — 벡터가 없으면 **그렇다고 말한다**.
+        _o더미 = _orders창.read_order("더미")
+        assert _o더미 is not None and _o더미.what == "더미", _o더미
+        _답 = win.더미보기("")
+        assert _답, "더미 물음에 아무 말도 안 한다"
+        # 시험 자리에는 뜻 벡터가 없다 — 「없다」고 말해야지 빈 화면이면 안 된다
+        assert ("뜻 벡터" in _답 or "더미" in _답 or "묶일 만한" in _답), _답
+        # 없는 더미를 불러도 **까닭이든 있는 목록이든 말은 한다** — 잠잠한 게 제일 나쁘다
+        _없 = win.더미보기("없는더미이름")
+        assert _없 and ("더미" in _없 or "벡터" in _없), _없
+
         # --- 말로 화면 열기(오너 2026-09-19) ---
         # ★ 「설정창 열어줘」가 **그런 제목의 글을 찾다** 실패했다. 사람은 글만 부르지 않는다.
         import orders as _orders창
