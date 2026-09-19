@@ -1196,6 +1196,8 @@ class MainWindow(QWidget):
             ("Ctrl+-", lambda: self.글자키우기(-0.1), "글자 줄이기"),
             ("Ctrl+0", lambda: self.글자키우기(0), "글자 제자리"),
             # ※ 한글 이름 메서드를 `activated=` 에 곧장 넘기면 PyQt 가 이름을 ASCII 로 바꾸다 터진다.
+            # ★ 마우스 없이 쓰는 길은 **적어 둬야 길이다**(오너 2026-09-20). 아래 셋은 단축키가
+            #   아니라 창 안에서 도는 키라 표에 「(키)」로만 적는다 — F1 목록에서 보이게.
             ("F1", lambda: self.단축키보기(), "이 목록"),
             ("F11", lambda: settings.toggle_full(self), "전체화면 켜고 끄기"),
             ("Ctrl+,", lambda: settings.open_dialog(self, self.notes), "설정 · 내 정보"),
@@ -1212,12 +1214,21 @@ class MainWindow(QWidget):
         쪽 = self.notes.read(제목)
         return 쪽.body if 쪽 else None
 
+    #: 단축키표에 안 들어가는 「창 안에서 도는 키」 — F1 목록에 같이 적는다
+    창안키 = (("↓", "찾기 칸에서 결과 목록으로"),
+            ("↑ · ↓", "결과 줄 오르내리기 (맨 위에서 ↑ 면 찾기 칸으로)"),
+            ("Enter", "고른 결과 열기"),
+            ("Esc", "결과에서 찾기 칸으로 돌아가기"))
+
     def 단축키글(self) -> str:
         """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""
         묶음: dict[str, list[str]] = {}
         for keys, _, 설명 in self.단축키표:
             묶음.setdefault(설명, []).append(keys)
-        return chr(10).join(f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items())
+        줄들 = [f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items()]
+        # 창 안에서 도는 키(결과 목록 오르내리기 등)도 같이 적는다 — 되는데 안 적히면 없는 길이다
+        줄들 += ["", "— 결과 목록에서 —"] + [f"{키:22}  {설명}" for 키, 설명 in self.창안키]
+        return chr(10).join(줄들)
 
     def 단축키보기(self) -> None:
         # ★ 공백으로 칸을 맞추면 비례 글꼴에서 줄이 들쭉날쭉했고, 한글 글꼴은 `\` 를 `₩` 로 그렸다(그려 보고 찾았다).
@@ -1261,6 +1272,14 @@ class MainWindow(QWidget):
         if self.detail_body.pop_open():
             self.detail_body.close_pop()
             return
+        # ★ 결과 줄에 손이 가 있으면 **찾기 칸으로 돌아간다**(오너 2026-09-20 · 마우스 없이 쓰기).
+        #   창 단축키가 Esc 를 먼저 가로채므로 여기서 처리해야 걸린다 — 거름망에 둬 봤자 안 온다.
+        from PyQt5.QtWidgets import QApplication as _앱
+
+        if self._결과줄(_앱.instance().focusWidget()) is not None:
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
+            return
         self.clear_detail()
 
     def eventFilter(self, obj, event) -> bool:
@@ -1284,6 +1303,18 @@ class MainWindow(QWidget):
         if event.type() == QEvent.MouseButtonPress and obj.isWidgetType():
             self._누름들 = (getattr(self, "_누름들", []) +
                          [f"{type(obj).__name__}:{obj.objectName() or '-'}"])[-4:]
+        # ★★ **마우스 없이도 쓸 수 있어야 한다**(오너 2026-09-20).
+        #   찾기 칸에서 ↓ 를 누르면 결과 첫 줄로, 결과에서 ↑↓ 로 오르내리고 Enter 로 연다.
+        #   전에는 결과로 가려면 **탭을 여남은 번** 눌러야 했다 — 검색→고르기→열기가
+        #   키보드로 끊겨 있었다. 이 고리가 없으면 「키보드로 다 된다」는 말이 거짓이다.
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Down, Qt.Key_Up):
+            if obj is self.ask_box and event.key() == Qt.Key_Down:
+                if self._결과줄로(0) is not None:
+                    return True
+            elif self._결과줄(obj) is not None:
+                간데 = self._결과줄로(self._결과줄(obj) + (1 if event.key() == Qt.Key_Down else -1))
+                if 간데 is not None:
+                    return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.detail_body.pop_open()):
             self.detail_body.close_pop()
@@ -1558,6 +1589,40 @@ class MainWindow(QWidget):
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    def _결과단추들(self) -> list:
+        """결과 목록의 줄 단추들(차례대로). 키보드로 오르내릴 때 쓴다."""
+        from PyQt5.QtWidgets import QPushButton
+
+        # ★ **보이기 여부에 기대지 않는다.** 창을 안 띄운 자리(자체점검·오프스크린)에서는
+        #   `isVisible()` 이 거짓이라 줄을 하나도 못 찾았다 — 결과가 비면 단추 자체가 없다.
+        return list(self.results.findChildren(QPushButton))
+
+    def _결과줄(self, obj) -> int | None:
+        """이 위젯이 결과 목록의 몇 번째 줄인가. 아니면 None."""
+        줄들 = self._결과단추들()
+        try:
+            return 줄들.index(obj)
+        except ValueError:
+            return None
+
+    def _결과줄로(self, 몇: int):
+        """그 줄에 초점을 준다. **초점을 준 위젯**을 돌려준다(못 가면 None).
+
+        ★ 돌려주는 이유: 자체점검 자리에서는 창이 활성화되지 않아 `focusWidget()` 이 비어
+          있다 — 그때도 **무엇을 고르려 했는지**는 재야 한다(실제 창에서는 초점이 잘 잡힌다).
+        """
+        줄들 = self._결과단추들()
+        if not 줄들:
+            return None
+        if 몇 < 0:
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
+            return self.ask_box
+        if 몇 >= len(줄들):
+            return None         # 맨 아래에서 더 내려가면 그대로 둔다(끝인 줄 알게)
+        줄들[몇].setFocus()
+        return 줄들[몇]
 
     def _목록에서열기(self, 자리: str) -> None:
         """결과 줄을 눌렀을 때. `창:이름` 은 화면이고, 나머지는 그 자리의 글이다."""

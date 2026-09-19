@@ -1100,6 +1100,40 @@ def run() -> None:
         assert any(t.startswith("\u2699") for t in 줄들4), f"창 여는 줄이 사라졌다: {줄들4}"
         assert "설정 창이야" not in win._say_text, f"글을 제목 그대로 쳤는데 창이 열렸다: {win._say_text}"
 
+        # ★★ **마우스 없이도 쓸 수 있어야 한다**(오너 2026-09-20).
+        #   찾기 칸에서 ↓ → 결과 첫 줄, ↑↓ 로 오르내리기, 맨 위에서 ↑ 면 찾기 칸으로.
+        #   전에는 결과로 가려면 탭을 여남은 번 눌러야 했다 — 검색→고르기→열기가 끊겨 있었다.
+        #   ※ 자체점검 자리에서는 창이 활성화되지 않아 `focusWidget()` 이 빈다 — 그래서
+        #     **어디로 가려 했는지**(돌려주는 위젯)로 잰다. 실제 창에서는 초점이 잡힌다.
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들5 = win._결과단추들()
+        assert len(줄들5) >= 2, f"결과가 모자라 키보드 시험을 못 한다: {len(줄들5)}"
+        assert win._결과줄로(0) is 줄들5[0], "↓ 로 결과 첫 줄에 못 간다"
+        assert win._결과줄(줄들5[1]) == 1, "결과 줄 번호를 못 센다"
+        assert win._결과줄로(1) is 줄들5[1], "다음 줄로 못 간다"
+        assert win._결과줄로(-1) is win.ask_box, "맨 위에서 ↑ 가 찾기 칸으로 안 간다"
+        assert win._결과줄로(len(줄들5)) is None, "맨 아래에서 더 내려간다"
+        assert win._결과줄(win.ask_box) is None, "찾기 칸을 결과 줄로 센다"
+        # ★ **거름망 배선까지 잰다.** 위 검사는 도우미만 보므로, ↓ 키가 실제로 걸리는지는
+        #   거름망을 직접 불러 확인한다(초점이 없어도 걸린다 — 잡으면 True 를 돌려준다).
+        from PyQt5.QtCore import QEvent as _이벤트9
+        from PyQt5.QtGui import QKeyEvent as _키9
+
+        _아래 = _키9(_이벤트9.KeyPress, Qt.Key_Down, Qt.NoModifier)
+        assert win.eventFilter(win.ask_box, _아래) is True, "찾기 칸에서 ↓ 가 안 걸린다"
+        assert win.eventFilter(줄들5[0], _아래) is True, "결과 줄에서 ↓ 가 안 걸린다"
+        _위 = _키9(_이벤트9.KeyPress, Qt.Key_Up, Qt.NoModifier)
+        assert win.eventFilter(줄들5[0], _위) is True, "맨 위에서 ↑ 가 안 걸린다(찾기 칸으로 가야 한다)"
+        # 글자 키는 그대로 지나가야 한다 — 거름망이 아무거나 먹으면 타자가 막힌다
+        _글자 = _키9(_이벤트9.KeyPress, Qt.Key_A, Qt.NoModifier)
+        assert win.eventFilter(win.ask_box, _글자) is not True, "거름망이 글자 키까지 먹는다"
+
+        # 단축키 목록(F1)에 이 길이 적혀 있어야 한다 — 되는데 안 적히면 없는 길이다
+        도움 = win.단축키글()
+        assert "결과" in 도움 and "↓" in 도움, 도움[-200:]
+
         # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
         win.graph.clear_focus()
         win.clear_detail()
