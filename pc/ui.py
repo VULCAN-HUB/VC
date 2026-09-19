@@ -1454,6 +1454,13 @@ class MainWindow(QWidget):
         #   「상태창열어줘」라는 **글**도 있을 수 있다 — 어떤 말로 갈라도 부딪힌다.
         #   그래서 **글이 있으면 글을 보여 주고, 창은 목록 맨 위에 한 줄로 얹는다.**
         #   한 번 눌러 고르면 된다 — 「열어줘」를 일일이 칠 일이 없다.
+        # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
+        #   「상태창열어줘」라는 **제목의 글**을 쳤더니 열기 규칙이 삼켜 「상태창」 글이 열렸다 —
+        #   내가 적은 글을 제목 그대로 쳤는데 딴 글이 열리면 그건 못 믿는 물건이다.
+        #   시키는 말은 **말끝이 붙은 딴 표현**(「상태창 열어」)이 얼마든지 있다.
+        if order is not None and self.notes.read(text.strip()) is not None:
+            order = None
+
         창줄 = ""
         if order is not None and order.what == "창열기" and not order.extra:
             if self.notes.search(text, k=1):

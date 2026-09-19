@@ -1062,6 +1062,22 @@ def run() -> None:
         줄들2 = [b.text() for b in win.results.findChildren(QPushButton)]
         assert any("상태창열어줘" in t for t in 줄들2), f"말끝이 붙은 제목의 글이 사라졌다: {줄들2}"
 
+        # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
+        #   「상태창열어줘」라는 제목의 글을 쳤더니 열기 규칙이 삼켜 「상태창」 글이 열렸다 —
+        #   내가 적은 글을 제목 그대로 쳤는데 딴 글이 열리면 그건 못 믿는 물건이다.
+        win.notes.write(Note(title="상태창", body="창 이름과 같은 제목의 글"))
+        win.notes.write(Note(title="상태창열어줘", body="말끝이 붙은 제목의 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창열어줘")
+        assert win.detail_title.text() != "상태창", f"딴 글이 열렸다: {win.detail_title.text()}"
+        assert "상태창열어줘" in win._say_text, win._say_text
+        # 그런 제목의 글이 없으면 예전처럼 시키는 말로 읽는다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창 열어")
+        assert "상태창" in win._say_text, win._say_text
+
         # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
         win.graph.clear_focus()
         win.clear_detail()
