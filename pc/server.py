@@ -396,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/plugins", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/plugins", "/eb/v1/changes", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task")
@@ -509,6 +509,29 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/templates":
             n = self.server.notes
             return self._send(200, {"templates": [{"name": t, "body": n.template(t)} for t in n.templates()]})
+
+        # ★★ **바뀐 것만 내어 준다**(결정 30 · 딴 PC 의 VC 가 사본을 쌓는 문).
+        #   메인이 죽어도 손님 PC 의 자료가 살아 새 메인이 될 수 있어야 한다 — 그러려면
+        #   손님이 **글을 통째로 들고** 있어야 한다. 매번 전부 받으면 못 쓰니 **그때 뒤로 바뀐 것**만.
+        #   ※ 지운 글은 「지난 판은 있는데 글이 없는 것」(휴지통)으로 알아낸다 — VC 는 지울 때 늘 한 판 남긴다.
+        if url.path == "/eb/v1/changes":
+            물음 = parse_qs(url.query)
+            try:
+                뒤로 = float((물음.get("since") or ["0"])[0])
+            except ValueError:
+                return self._send(400, {"error": "since 는 숫자(초)여야 한다"})
+            몇개 = max(1, min(500, int((물음.get("limit") or ["200"])[0] or 200)))
+            n = self.server.notes
+            줄들 = n.conn.execute(
+                "SELECT path, title, mtime, kind FROM notes WHERE mtime > ? ORDER BY mtime LIMIT ?",
+                (뒤로, 몇개)).fetchall()
+            바뀜 = [{"title": r["title"], "path": r["path"], "mtime": r["mtime"], "kind": r["kind"]}
+                  for r in 줄들]
+            지움 = [{"title": t, "when": 언제} for t, 언제, _마지막, _자리 in n.trashed()[:100]]
+            # 다음에 어디서부터 받을지 — 받은 것 중 가장 늦은 때. 없으면 물어본 자리 그대로.
+            다음 = max((r["mtime"] for r in 줄들), default=뒤로)
+            return self._send(200, {"changes": 바뀜, "trashed": 지움, "next_since": 다음,
+                                    "more": len(줄들) >= 몇개})
 
         # 확장 플러그인(결정 23 · 편의 기능 31번) — **보기만** 한다.
         # ★ 폰에서 확장을 켜고 끄는 길은 일부러 안 낸다 — 코드가 도는 곳은 컴퓨터이고,
@@ -1966,6 +1989,24 @@ def _self_check() -> None:
     assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
     assert sum(f["notes"] for f in _폴) >= 1
     assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
+
+    # --- 바뀐 것만 내어 주기(결정 30) — 딴 PC 의 VC 가 사본을 쌓는 문 ---
+    _처음 = call("GET", "/eb/v1/changes?since=0")[1]
+    assert isinstance(_처음.get("changes"), list) and _처음["changes"], _처음
+    assert "next_since" in _처음 and _처음["next_since"] > 0, _처음
+    # 받은 자리 뒤로는 **아무것도 안 준다** — 매번 전부 주면 사본이 못 쓴다
+    _다음 = call("GET", f"/eb/v1/changes?since={_처음['next_since']}")[1]
+    assert _다음["changes"] == [], _다음["changes"][:2]
+    # 새 글을 쓰면 그 자리에 걸린다
+    call("POST", "/eb/v1/memory", {"title": "사본 시험 글", "text": "딴 PC 로 갈 글"})
+    _새 = call("GET", f"/eb/v1/changes?since={_처음['next_since']}")[1]
+    assert any(c["title"] == "사본 시험 글" for c in _새["changes"]), _새["changes"]
+    # 지운 글도 알려 준다 — 사본에서도 지워야 진짜 사본이다
+    call("POST", "/eb/v1/memory/delete", {"title": "사본 시험 글"})
+    _지움 = call("GET", "/eb/v1/changes?since=0")[1]
+    assert any(t["title"] == "사본 시험 글" for t in _지움["trashed"]), _지움["trashed"][:3]
+    assert call("GET", "/eb/v1/changes?since=0", token="wrong-token")[0] == 401
+    assert call("GET", "/eb/v1/changes?since=abc")[0] == 400
 
     # --- 확장 플러그인(결정 23 · 편의 기능 31번) ---
     _확장자리 = Path(tmp.name) / "plugins"
