@@ -441,15 +441,13 @@ class IntroPage extends StatelessWidget {
             children: [
               const Spacer(flex: 3),
               const VcMark(size: 230),
-              const Padding(
-                padding: EdgeInsets.only(left: 16), // 글자 사이를 벌리면 뒤에 한 칸이 붙는다 — 가운데를 맞춘다
-                child: Text(
-                  'VC',
-                  style: TextStyle(fontSize: 46, fontWeight: FontWeight.w300, letterSpacing: 16, color: _text),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text('VULCAN · 내 기억 창고', style: _mono(12, _muted)),
+              const SizedBox(height: 18),
+              // ★ 전에는 마크 밑에 **기본 글꼴**로 큰 「V C」를 한 번 더 적었다 — 마크가 이미 VC 인데
+              //   글자만 시스템 글꼴이라 겉돌았다(오너: 「구린 폰트」). 마크에 이름을 맡기고,
+              //   아래 한 줄은 앱의 다른 글씨(계기판)와 같은 결로 맞춘다.
+              Text('VULCAN', style: _mono(13, _text, weight: FontWeight.w600).copyWith(letterSpacing: 7)),
+              const SizedBox(height: 5),
+              Text('내 기억 창고', style: _mono(11.5, _muted).copyWith(letterSpacing: 2)),
               const Spacer(flex: 4),
               Text('// 컴퓨터를 찾는 중', style: _mono(11, _accent.withValues(alpha: .75))),
               const SizedBox(height: 12),
