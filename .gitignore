@@ -48,3 +48,6 @@ pc/eb_config.json
 .DS_Store
 .venv-mac/
 pc/vc_mac.png
+
+# 서명 팀(이 기기에서만) — 오너 계정을 가리키는 값이라 창고에 안 올린다
+app/ios/Flutter/서명.xcconfig
