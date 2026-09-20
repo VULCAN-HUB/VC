@@ -765,6 +765,16 @@ def _꾸밈벗기기(글: str) -> str:
     return 글
 
 
+def 줄제목(단추) -> str:
+    """결과 줄 단추가 **진짜로 가리키는 제목.**
+
+    ★ 보이는 글자만 보면 안 된다 — 긴 제목은 칸에 맞춰 `…` 로 줄여 그리므로
+      `text()` 는 제목의 앞부분일 뿐이다. 누르면 열리는 것은 여기 적힌 제목이다.
+    """
+    있는것 = 단추.property("vc_title")
+    return str(있는것) if 있는것 else 번호뗀말(단추.text())
+
+
 def 번호뗀말(말: str) -> str:
     """줄 앞에 붙인 번호(`3. `)를 뗀 **제목 그대로**. 번호는 보여 주려고만 붙인다."""
     앞, 점, 뒤 = 말.partition(". ")
@@ -850,8 +860,20 @@ class Results(QWidget):
             title, body, where = (tuple(hit) + ("", ""))[:3]
             갈래 = (tuple(hit) + ("", "", "", ""))[3]
             # 번호는 아홉까지만 — 열째부터는 누를 키가 없으니 적지 않는다(없는 길을 알리지 않는다)
-            b = QPushButton(f"{몇 + 1}. {title}" if self.번호매김 and 몇 < 9 else title)
+            보일말 = f"{몇 + 1}. {title}" if self.번호매김 and 몇 < 9 else title
+            b = QPushButton(보일말)
             b.setObjectName("quiet")
+            # ★★ **긴 제목이 칸을 밀어내지 않게 한다.** 단추는 줄바꿈을 못 해서
+            #   `minimumSizeHint` 로 **제목 전체 폭**을 요구한다. 옵시디언 볼트를 들이고
+            #   나서야 드러났다 — 제목이 길어지자 속 최소폭이 144 → 455 로 뛰어
+            #   칸(348)을 넘겼고, 오른쪽 칸 글자가 **112px 씩 창 밖으로 잘려 나갔다.**
+            #   최소폭을 풀고, 보이는 글자는 칸에 맞춰 `…` 로 줄인다(아래 `줄임다시`).
+            #   ※ 크기 정책을 `Ignored` 로도 바꿔 봤는데 **재 보니 아무 차이가 없었다**(275 그대로).
+            #     줄인 글자는 `sizeHint` 자체가 작아지므로 최소폭을 따로 풀 것이 없다. 뺐다.
+            b.setMinimumWidth(1)
+            b.설명 = 보일말                # 줄이기 전 온전한 글자
+            b.setProperty("vc_title", title)   # 누르면 열리는 진짜 제목
+            b.setToolTip(title)
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet("text-align:left; padding:2px 6px;")
             if where:
@@ -872,6 +894,30 @@ class Results(QWidget):
             for w in (b, line):
                 self.rows.addWidget(w)
                 self.items.append(w)
+        self.줄임다시()
+
+    def 줄임다시(self) -> None:
+        """줄 글자를 칸 폭에 맞춰 `…` 로 줄인다. **뚝 끊기면 무슨 글인지 모른다.**
+
+        Qt 는 단추 글자를 저절로 줄여 주지 않는다 — 폭이 모자라면 그냥 잘라서
+        「신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴」 처럼 말끝이 사라진다.
+        """
+        # ★ 줄 자신의 폭이 아니라 **칸 폭**으로 잰다. 줄은 칸에 맞춰 늘어나므로 갓 만든
+        #   줄은 아직 옛 폭을 들고 있다 — 그걸 믿으면 칸이 좁아져도 안 줄어든다.
+        쓸폭 = max(40, self.width() - 16)
+        for w in self.items:
+            온말 = getattr(w, "설명", None)
+            if 온말 is None:
+                continue
+            w.setText(w.fontMetrics().elidedText(온말, Qt.ElideRight, 쓸폭))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.줄임다시()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.줄임다시()      # 처음 보일 때 칸 폭이 정해진다
 
 
 class Indexer(QThread):
@@ -1851,6 +1897,36 @@ def _self_check() -> None:
     읽몸.setMarkdown("첫 줄" + chr(10) * 2 + "- 둘째 항목 이다" + chr(10) * 2 + "끝")
     읽몸.go_to_heading("둘째 항목")
     assert 읽몸.textCursor().block().text().strip().startswith("둘째 항목"), "읽기 화면이 덩이 첫 줄로 안 간다"
+
+    # ★★ **긴 제목이 칸을 밀어내면 안 된다**(오너 2026-09-20 · 볼트를 들이고 드러났다).
+    #   단추는 줄바꿈을 못 해 제목 전체 폭을 최소폭으로 요구했다. 옵시디언 볼트 119장이
+    #   들어오자 오른쪽 칸 최소폭이 144 → 455 로 뛰어 칸(348)을 넘겼고, **칸 전체가
+    #   창 밖으로 112px 밀려 글자가 잘렸다.** 실기 화면을 찍어 보고서야 알았다.
+    긴제목 = "신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴링 진행 중, 미결) 그리고 더 긴 꼬리"
+    목록 = Results(번호매김=True)
+    목록.resize(200, 300)
+    목록.show()          # 보여야 레이아웃이 돈다 — 안 그러면 줄이 칸 폭을 못 본다
+    목록.show_hits([(긴제목, "몸", "", "dev-task"), ("짧은 글", "몸", "", "")], "")
+    app9 = QApplication.instance()
+    for _ in range(5):
+        if app9 is not None:
+            app9.processEvents()
+    단추들 = 목록.findChildren(QPushButton)
+    assert 단추들, "줄이 안 그려졌다"
+    긴것 = 단추들[0]
+    # **줄여 그리되 진짜 제목은 온전해야 한다** — 누르면 열리는 것이 이것이다
+    assert 줄제목(긴것) == 긴제목, f"진짜 제목이 안 남았다: {줄제목(긴것)}"
+    assert 긴것.text().endswith("…"), f"긴 제목이 안 줄었다({긴것.width()}px): {긴것.text()}"
+    assert len(긴것.text()) < len(긴제목), "줄인 티가 안 난다"
+    # 폭 요구를 안 하는지 — 이게 칸을 밀어내던 것이다
+    assert 목록.minimumSizeHint().width() <= 200, (
+        f"줄이 칸보다 넓은 폭을 요구한다: {목록.minimumSizeHint().width()}")
+    # 칸이 넓어지면 **다시 온전히** 보인다 — 줄인 채로 굳으면 안 된다
+    목록.resize(900, 300)
+    for _ in range(5):
+        if app9 is not None:
+            app9.processEvents()
+    assert not 단추들[0].text().endswith("…"), f"넓어졌는데 그대로 줄어 있다: {단추들[0].text()}"
 
     print("panels self-check 통과")
 

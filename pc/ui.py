@@ -2068,6 +2068,7 @@ class MainWindow(QWidget):
                 b.clicked.connect(lambda _=False, v=값: self._later(lambda: self._칩골라(v)))
                 self._칩줄.addWidget(b)
             self._칩줄.addStretch(1)
+        self._칩맞추기()      # 칸에 안 들어가는 칩은 접는다 — 안 그러면 칸이 창 밖으로 밀린다
 
     def _칩골라(self, 값: str) -> None:
         self._목록갈래 = "" if self._목록갈래 == 값 else 값
@@ -2961,6 +2962,29 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         if self.detail_card.isVisible() or self.side_open:
             self._place_reader()
+        self._칩맞추기()
+
+    def _칩맞추기(self) -> None:
+        """칸에 안 들어가는 칩은 **숨긴다.**
+
+        ★★ 칩은 가로로 늘어서므로 개수만큼 최소폭을 요구한다. 옵시디언 볼트를 들이자
+          태그가 생겨 칩이 다섯으로 늘었고, 그 요구가 오른쪽 칸(348)을 넘겨
+          **칸 전체가 112px 씩 창 밖으로 밀려 글자가 잘렸다.** 글자를 뭉개는 대신
+          안 들어가는 칩을 접는다 — 남은 칩은 온전히 읽힌다(태그는 검색으로도 닿는다).
+        """
+        칸 = self.recent_chips.width() or self.recent.width()
+        if 칸 <= 0:
+            return
+        쓴폭 = 0
+        for i in range(self._칩줄.count()):
+            w = self._칩줄.itemAt(i).widget()
+            if w is None:
+                continue
+            필요 = w.sizeHint().width() + self._칩줄.spacing()
+            들어감 = 쓴폭 + 필요 <= 칸
+            w.setVisible(들어감)
+            if 들어감:
+                쓴폭 += 필요
 
     def clear_detail(self) -> None:
         self.detail_card.hide()

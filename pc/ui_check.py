@@ -29,7 +29,7 @@ import theme
 import ui
 from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT
 from notes import Note, Notes, flip_task, headings, section
-from panels import ServerLink, 번호뗀말
+from panels import ServerLink, 줄제목
 from store import Store
 from ui import GRAPH_LIMIT, MainWindow
 from ui import ModelPicker, QLabel, QPushButton, RemoteGateCard
@@ -1035,7 +1035,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("확장")
-        줄들 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
+        줄들 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
         assert any("확장 계획" in t for t in 줄들), f"글이 안 보인다: {줄들}"
         assert any(t.startswith("\u2699") and "창 열기" in t for t in 줄들), f"창 줄이 없다: {줄들}"
         assert "설정 창" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
@@ -1059,7 +1059,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("상태창열어줘")
-        줄들2 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
+        줄들2 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
         assert any("상태창열어줘" in t for t in 줄들2), f"말끝이 붙은 제목의 글이 사라졌다: {줄들2}"
 
         # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
@@ -1084,7 +1084,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("설정창")
-        줄들3 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
+        줄들3 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
         assert any("설정창" == t for t in 줄들3), f"그 글이 안 보인다: {줄들3}"
         assert any(t.startswith("\u2699") for t in 줄들3), f"창 여는 줄이 사라졌다: {줄들3}"
         assert not any("창 창" in t for t in 줄들3), f"「창」이 두 번 적힌다: {줄들3}"
@@ -1095,7 +1095,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("설정창열어줘")
-        줄들4 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
+        줄들4 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
         assert any("설정창열어줘" == t for t in 줄들4), f"그 글이 안 보인다: {줄들4}"
         assert any(t.startswith("\u2699") for t in 줄들4), f"창 여는 줄이 사라졌다: {줄들4}"
         assert "설정 창이야" not in win._say_text, f"글을 제목 그대로 쳤는데 창이 열렸다: {win._say_text}"
@@ -1134,11 +1134,11 @@ def run() -> None:
         #   `Ctrl+3` 한 번은 다른 물건이다. 번호가 **보여야** 쓸 수 있으므로 화면에
         #   적히는 것까지 같이 잰다.
         assert 줄들5[0].text().startswith("1. "), f"결과 줄에 번호가 안 보인다: {줄들5[0].text()!r}"
-        assert 번호뗀말(줄들5[1].text()) != 줄들5[1].text(), "둘째 줄에 번호가 없다"
+        assert 줄제목(줄들5[1]) != 줄들5[1].text(), "둘째 줄에 번호가 없다"
         assert not any(b.text().startswith(("1. ", "2. "))
                        for b in win.recent.findChildren(QPushButton)), "최근 목록에 없는 숫자키를 적었다"
         win.editing = None
-        둘째 = 번호뗀말(줄들5[1].text())
+        둘째 = 줄제목(줄들5[1])
         _둘 = _키9(_이벤트9.KeyPress, Qt.Key_2, Qt.ControlModifier)
         assert win.eventFilter(win.ask_box, _둘) is True, "Ctrl+2 가 안 걸린다"
         win.settle()
@@ -1149,8 +1149,8 @@ def run() -> None:
         win.ask("확장")
         줄들6 = win._결과단추들()
         # ⚙(창 여는 줄)은 글이 아니라 창을 연다 — 글인 줄을 골라 잰다
-        글줄 = next(i for i, b in enumerate(줄들6) if not 번호뗀말(b.text()).startswith("\u2699"))
-        그글 = 번호뗀말(줄들6[글줄].text())
+        글줄 = next(i for i, b in enumerate(줄들6) if not 줄제목(b).startswith("\u2699"))
+        그글 = 줄제목(줄들6[글줄])
         win.editing = None
         _맨n = _키9(_이벤트9.KeyPress, Qt.Key_1 + 글줄, Qt.NoModifier)
         assert win.eventFilter(줄들6[글줄], _맨n) is True, "결과 줄에서 숫자키가 안 걸린다"
@@ -1179,6 +1179,39 @@ def run() -> None:
         assert win.graph.hover != 간데 or len(win.graph.nodes) == 1, "→ 가 안 먹는다"
         assert win.graph.focusPolicy() != Qt.NoFocus, "그래프가 초점을 못 받는다 — 키가 오지 않는다"
         win.graph.clear_focus()
+
+        # ★★ **긴 제목이 오른쪽 칸을 창 밖으로 밀어내면 안 된다**(옵시디언 볼트를 들이고
+        #   드러났다 · 오너 2026-09-20). 단추는 줄바꿈을 못 해 **제목 전체 폭**을 최소폭으로
+        #   요구하고, 칩은 개수만큼 가로로 늘어선다. 둘이 겹쳐 칸(348)이 455 를 요구했고
+        #   **오른쪽 칸 글자가 112px 씩 잘려 나갔다.** 실기 화면을 찍어 보고서야 알았다.
+        #   ※ 줄이는 것 자체는 `panels` 에서 잰다 — 자체점검 창은 칸이 넓어 안 줄어든다.
+        긴제목 = "신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴링 진행 중, 미결) 그리고 더 긴 꼬리"
+        win.notes.write(Note(title=긴제목, body="긴 제목 시험 · 확장"))
+        for 태그 in ("#팀-회의실", "#긴급", "#작업-로그", "#오류-리포트", "#공지"):
+            win.notes.write(Note(title=f"태그글{태그[1:]}", body=f"칩을 늘리는 글 {태그}"))
+        win.refresh()
+        win.settle()
+        win.ask("확장")
+        win.settle()
+        # **실제 오른쪽 칸은 348px 이다.** 그보다 더 요구하면 칸이 창 밖으로 밀려 잘린다.
+        칸 = win.results.parent()
+        실제칸폭 = 348
+        assert 칸.minimumSizeHint().width() <= 실제칸폭, (
+            f"오른쪽 칸이 창 밖으로 밀린다: 최소 {칸.minimumSizeHint().width()} > 칸 {실제칸폭}")
+        # 누르면 열리는 제목은 **줄인 글자가 아니라 온전한 제목**이어야 한다
+        긴줄 = [b for b in win.results.findChildren(QPushButton) if 줄제목(b) == 긴제목]
+        assert 긴줄, [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        # 칸에 안 들어가는 칩은 접힌다 — 안 접으면 칩 줄이 칸을 밀어낸다
+        칩들 = win.recent_chips.findChildren(QPushButton)
+        assert 칩들, "칩이 하나도 없다"
+        보인칩 = [c for c in 칩들 if not c.isHidden()]
+        쓴폭 = sum(c.sizeHint().width() + 4 for c in 보인칩)
+        assert 쓴폭 <= win.recent_chips.width() + 8, f"칩이 칸을 넘는다: {쓴폭} > {win.recent_chips.width()}"
+        win.notes.delete(긴제목)
+        for 태그 in ("팀-회의실", "긴급", "작업-로그", "오류-리포트", "공지"):
+            win.notes.delete(f"태그글{태그}")
+        win.refresh()
+        win.clear_detail()
 
         # 단축키 목록(F1)에 이 길이 적혀 있어야 한다 — 되는데 안 적히면 없는 길이다
         도움 = win.단축키글()
@@ -1326,7 +1359,7 @@ def run() -> None:
         # 태그를 누르면 그 태그가 붙은 것끼리 모인다. 하위 태그는 상위로도 걸린다.
         win.show_tag("팔월")
         win.settle()
-        titles = [번호뗀말(w.text()) for w in win.results.items if isinstance(w, QPushButton)]
+        titles = [줄제목(w) for w in win.results.items if isinstance(w, QPushButton)]
         assert set(titles) == {"8월 계획", "주간 보고"}, titles
 
         # 없는 이름을 따라가면 그 자리에서 만든다 — 끊긴 채로 두지 않는다.
@@ -1437,7 +1470,7 @@ def run() -> None:
         win.refresh()
         assert "24" in [b.text() for b in win.years.buttons], [b.text() for b in win.years.buttons]
         win.show_year("2024")
-        found = [번호뗀말(w.text()) for w in win.results.items if isinstance(w, QPushButton)]
+        found = [줄제목(w) for w in win.results.items if isinstance(w, QPushButton)]
         assert found == ["재작년 견적"], found
         notes.delete("재작년 견적")
         win.show_results([])
