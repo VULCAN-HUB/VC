@@ -1242,8 +1242,17 @@ class Notes:
             self.reindex()
 
     def _is_history(self, path: Path) -> bool:
-        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다. VC 가 적는 기계 기록 요약도."""
-        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts or VC_LOG_DIR in path.parts
+        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다. VC 가 적는 기계 기록 요약도.
+
+        ★ 창고 맨 위의 **지도(`index.md`)·일지(`log.md`)** 도 안 센다(오너 2026-09-20 ·
+          카파시 LLM Wiki). 지도는 창고를 비추는 거울이고 일지는 계속 자란다 — 글로 세면
+          검색·그래프가 그것들로 덮이고, 일지 한 줄 적을 때마다 「글이 바뀌었다」가 된다.
+        """
+        if HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts or VC_LOG_DIR in path.parts:
+            return True
+        import wikilog
+
+        return wikilog.안세는파일(path, self.root)
 
     def _색인열기(self, index) -> None:
         """색인 파일을 열고 표 모양을 맞춘다. 깨졌으면 `sqlite3.DatabaseError` 가 난다."""

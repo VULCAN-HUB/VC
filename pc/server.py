@@ -1790,9 +1790,16 @@ class EBServer(ThreadingHTTPServer):
                 합치기손 = None
                 if 모델 and (self.cfg.get("backend") or {}).get("kind") == "local":
                     합치기손 = lambda 말: self.backend.chat(말, 모델, temperature=0, max_tokens=600)
-                합침 = synth.합치기(self.notes, 합치기손, 적기=lambda 줄: _자국9.trail(줄))
+                import wikilog as _일지9
+
+                합침 = synth.합치기(
+                    self.notes, 합치기손,
+                    적기=lambda 줄: (_자국9.trail(줄),
+                                   _일지9.적기(self.notes, "합치기", 줄.split(" · ", 1)[-1])))
                 for 쪽 in 합침.get("만든것", []):
                     self.notes.embed_one(self.notes.path_of(쪽))
+                # ★ 지도는 **바뀌었을 때만** 다시 쓴다 — 매번 쓰면 폰·딴 PC 가 일 없이 받아 간다
+                _일지9.지도쓰기(self.notes)
             except Exception as e:
                 _알림(f"[합치기 실패] {type(e).__name__}: {e}")
             got = consolidate.run(self.notes, 짐작)
@@ -3150,6 +3157,15 @@ def _self_check() -> None:
         _임시상태9.cleanup()
     assert note_store.read("배선 원본 요점") is not None, (
         "주기 정리에서 합치기를 안 부른다 — 모아만 두고 영영 안 합쳐진다")
+    # ★ 합치면 **일지에 남고 지도가 갱신된다**
+    import wikilog as _일지8
+
+    _일지파일 = Path(note_store.root) / _일지8.LOG
+    assert _일지파일.exists() and " | 합치기 | " in _일지파일.read_text(encoding="utf-8"), \
+        "합쳤는데 일지에 안 남는다"
+    _지도파일 = Path(note_store.root) / _일지8.INDEX
+    assert _지도파일.exists() and "[[배선 원본 요점]]" in _지도파일.read_text(encoding="utf-8"), \
+        "합쳤는데 지도에 안 오른다"
 
     # ★★ **어디서 왔는지 적힌다**(오너 2026-09-20 · 모으기). 공유로 온 원본은 `raw/` 로,
     #   내가 적은 것은 `wiki/` 로 간다 — 밖에서 가져온 것과 내 글은 다루는 법이 다르다.

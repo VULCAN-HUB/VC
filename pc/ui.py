@@ -70,6 +70,7 @@ import notes as notes_module
 import facets
 import orders
 import wiki
+import wikilog
 import piles
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
 from skills import Skill, SkillStore, analyze
@@ -1673,6 +1674,7 @@ class MainWindow(QWidget):
             self.notes.write(Note(title=제목, body=f"# {제목}\n\n{몸}\n",
                                   kind=wiki.원본갈래,
                                   extra={"출처": "공유", "상태": "살아있음"}))
+        wikilog.적기(self.notes, "모으기", f"{주소}", [제목])
         self.refresh()
         # ★ **글을 먼저 열고 말은 나중에.** 거꾸로 하면 여는 쪽이 자기 말로 덮어
         #   「모았어」가 사라진다(재 보고 알았다 — 「링크 · … 얘기야」만 남았다).

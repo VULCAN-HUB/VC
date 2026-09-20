@@ -1229,6 +1229,11 @@ def run() -> None:
         assert 자리.startswith(_위키8.RAW + "/"), f"원본이 raw 로 안 갔다: {자리}"
         assert 모은것.extra.get("출처") == "공유", 모은것.extra
         assert "모았어" in win._say_text, win._say_text
+        # ★ **일지에 한 줄 남아야 한다** — 무슨 일이 언제 있었는지는 거기서 본다
+        import wikilog as _일지8
+
+        일지 = (Path(win.notes.root) / _일지8.LOG).read_text(encoding="utf-8")
+        assert " | 모으기 | " in 일지 and "quasarzone" in 일지, 일지[-300:]
         # 같은 집의 다른 주소는 **한 글에 붙는다** — 링크마다 글을 만들면 목록이 터진다
         win.ask("https://quasarzone.com/bbs/qn_hardware/views/999")
         win.settle()
