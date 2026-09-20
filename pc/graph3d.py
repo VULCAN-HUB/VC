@@ -439,6 +439,7 @@ class GraphView(QGraphicsView):
         self._선위층.raise_()
         self._선위층.show()
 
+        self.둘레중 = ""      # 이 항목 둘레만 보는 중(로컬 그래프)
         self._settling = 0
         self._last_spin = time.perf_counter()
         self._slow = 0        # 연달아 밀린 프레임 수
@@ -810,6 +811,47 @@ class GraphView(QGraphicsView):
         self.clear_focus()
         self._fit()
 
+    def 둘레만(self, title: str, 깊이: int = 1) -> int:
+        """**그 항목과 이어진 것만** 남기고 나머지는 감춘다. 남긴 수를 돌려준다.
+
+        옵시디언의 「로컬 그래프」다. 전체 그래프는 139개가 한꺼번에 떠 있어
+        「이 글이 무엇과 묶였나」를 눈으로 골라야 한다 — 그 판을 갈아 끼운다.
+        ★ 가라앉히는(`focus_on`) 것과 다르다. 흐리게 남겨 두면 여전히 화면을 채운다.
+        """
+        if title not in self.nodes:
+            return 0
+        남길 = {title} | set(self.이웃들(title))
+        for _ in range(max(깊이 - 1, 0)):
+            남길 |= {y for x in list(남길) for y in self.이웃들(x)}
+        self.둘레중 = title
+        for t, node in self.nodes.items():
+            보임 = t in 남길 and t != ROOT
+            node.setVisible(보임)
+            node.dim = False
+            if not 보임:
+                node.label.setVisible(False)
+            node._paint_label()
+        self._키기준 = title
+        self.set_hover(title)
+        # ★ 남은 것들로 **다시 자리를 잡게** 한다. 안 그러면 139개 틈에 뿌려진 그대로라
+        #   구석에 몰려 보인다 — 좁혀 놓은 뜻이 없다(찍어 보고 알았다).
+        self._settling = 0
+        self.physics.start()
+        self.project()
+        return len(남길)
+
+    def 둘레풀기(self) -> bool:
+        """둘레 보기를 그만두고 전부 되돌린다. 보고 있지 않았으면 거짓."""
+        if not getattr(self, "둘레중", ""):
+            return False
+        self.둘레중 = ""
+        for t, node in self.nodes.items():
+            node.setVisible(t != ROOT)
+            node._paint_label()
+        self.project()
+        self.physics.start()        # 감춰 둔 동안 멈춰 있던 배치를 다시 돌린다
+        return True
+
     def clear_focus(self) -> None:
         """초점을 풀고 전체가 보이는 기본 모습으로 돌아간다."""
         self._release.stop()
@@ -854,7 +896,14 @@ class GraphView(QGraphicsView):
             )
 
         # 전체 모습의 배율은 초점과 무관하게 늘 계산해 둔다. 초점을 풀면 여기로 돌아온다.
-        center, half_w, half_h = bounds(list(self.nodes.values()))
+        # ★ **둘레 보기 중에만 「보이는 것」으로 잰다.** 감춘 항목까지 세면 34개만 띄워
+        #   놓고도 139개짜리 배율로 물러나 있어 좁힌 뜻이 없다. 다만 평소에도 이러면
+        #   항목이 떴다 잠겼다 할 때마다 배율이 흔들린다 — 검사가 바로 잡아냈다
+        #   (「검색인데 배율이 움직였다 0.90 → 0.94」). 그래서 그때만 한다.
+        잴것 = list(self.nodes.values())
+        if getattr(self, "둘레중", ""):
+            잴것 = [n for n in 잴것 if n.isVisible()] or 잴것
+        center, half_w, half_h = bounds(잴것)
         overview = min(
             self.viewport().width() / (2 * half_w),
             self.viewport().height() / (2 * half_h),
@@ -2051,6 +2100,25 @@ def _self_check() -> None:
     #   테두리로 보였다(오너가 짚었다). 가리는 일은 표식 위젯이 제 모양대로 한다.
     자름 = "set" + "ClipPath"
     assert 자름 not in 본문, "표식 자리를 잘라낸다 — 로고 둘레에 원이 생긴다"
+
+    # ★★ **둘레만 보기**(로컬 그래프 · 오너 2026-09-20). 가라앉히는 것과 다르다 —
+    #   흐리게 남겨 두면 여전히 화면을 채운다. **감춰야** 좁힌 뜻이 산다.
+    가운데 = next(iter(치우.edges))[0]
+    이웃수 = len(치우.이웃들(가운데))
+    assert 이웃수 >= 1, 이웃수
+    남은 = 치우.둘레만(가운데)
+    assert 남은 == 이웃수 + 1, (남은, 이웃수)
+    보이는것 = {t for t, x in 치우.nodes.items() if x.isVisible()}
+    assert 가운데 in 보이는것, "가운데 항목이 안 보인다"
+    assert len(보이는것) <= 이웃수 + 1, f"감춰야 할 것이 남았다: {len(보이는것)}"
+    assert len(보이는것) < len(치우.nodes), "아무것도 안 감췄다"
+    assert 치우.둘레중 == 가운데, 치우.둘레중
+    # 풀면 전부 돌아온다(가운데 표식 자리만 빼고)
+    assert 치우.둘레풀기() is True
+    돌아온 = {t for t, x in 치우.nodes.items() if x.isVisible()}
+    assert len(돌아온) >= len(치우.nodes) - 1, (len(돌아온), len(치우.nodes))
+    assert 치우.둘레풀기() is False, "보고 있지도 않은데 풀었다고 한다"
+    assert 치우.둘레만("없는 항목ZZZ") == 0, "없는 항목에도 둘레를 연다"
 
     치우.set_hover(None)
     치우.deleteLater()

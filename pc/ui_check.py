@@ -1213,6 +1213,42 @@ def run() -> None:
         win.refresh()
         win.clear_detail()
 
+        # ★★ **둘레만 보기**(로컬 그래프 · 오너 2026-09-20). 오너가 옵시디언에서 쓰던
+        #   기능은 아니지만 「만들어 두고 필요하면 쓰게」 지시로 넣었다.
+        win.notes.write(Note(title="둘레 가운데", body="[[둘레 이웃1]] 과 [[둘레 이웃2]]"))
+        win.notes.write(Note(title="둘레 이웃1", body="몸"))
+        win.notes.write(Note(title="둘레 이웃2", body="몸"))
+        win.notes.write(Note(title="둘레 남", body="아무 상관 없는 글"))
+        win.refresh()
+        win.settle()
+        win.ensure_on_graph(["둘레 가운데", "둘레 이웃1", "둘레 이웃2", "둘레 남"])
+        win.show_note("둘레 가운데")
+        win.settle()
+        온통 = len([t for t, x in win.graph.nodes.items() if x.isVisible()])
+        win.둘레보기()
+        win.settle()
+        보임 = {t for t, x in win.graph.nodes.items() if x.isVisible()}
+        assert "둘레 가운데" in 보임 and "둘레 이웃1" in 보임, 보임
+        assert "둘레 남" not in 보임, "상관없는 글이 남았다"
+        assert len(보임) < 온통, (len(보임), 온통)
+        # ★ 글 카드는 비켜 준다 — 안 그러면 카드가 그래프를 덮어 **둘레가 안 보인다**
+        assert win.detail_card.isHidden(), "글 카드가 그래프를 덮은 채다"
+        assert "둘레" in win._say_text, win._say_text
+        # Esc 로 전체로 돌아온다 — 나올 길이 없으면 갇힌다
+        win.escape()
+        win.settle()
+        assert len([t for t, x in win.graph.nodes.items() if x.isVisible()]) >= 온통, "Esc 로 안 풀린다"
+        assert not win.graph.둘레중
+        # 글을 안 열고 부르면 **말해 준다** — 아무 일도 안 일어나면 고장인 줄 안다
+        win.clear_detail()
+        win.둘레보기()
+        assert "글을 하나 열어" in win._say_text, win._say_text
+        # 단축키 표에 매여 있어야 한다
+        assert any(k == "Ctrl+L" for k, _, _ in win.단축키표), [k for k, _, _ in win.단축키표]
+        for t in ("둘레 가운데", "둘레 이웃1", "둘레 이웃2", "둘레 남"):
+            win.notes.delete(t)
+        win.refresh()
+
         # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 자리다.
         win.notes.write(Note(title="폴더칸 글", body="몸", created="2019-04-07T09:00:00Z"))
         win.refresh()

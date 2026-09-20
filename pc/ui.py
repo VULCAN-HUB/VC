@@ -1226,6 +1226,7 @@ class MainWindow(QWidget):
             ("F11", lambda: settings.toggle_full(self), "전체화면 켜고 끄기"),
             # ★ 마우스 없이 그래프를 돌기(오너 2026-09-20). 지금 보는 글부터 잡는다.
             ("Ctrl+G", lambda: self.그래프잡기(), "그래프로 — ↑↓←→ 로 옮기고 Enter 로 열기"),
+            ("Ctrl+L", lambda: self.둘레보기(), "이 글 둘레만 보기 (다시 누르면 전체로)"),
             ("Ctrl+,", lambda: settings.open_dialog(self, self.notes), "설정 · 내 정보"),
             ("Esc", self.escape, "닫기 · 목록 접기"),
         )
@@ -1246,7 +1247,8 @@ class MainWindow(QWidget):
             ("Enter", "고른 결과 열기"),
             ("Ctrl+1~9", "결과 몇째 줄을 바로 열기 (결과에 손이 가 있으면 숫자만)"),
             ("Esc", "결과에서 찾기 칸으로 돌아가기"),
-            ("↑↓←→", "그래프에서 이어진 것 사이를 옮기기 (Ctrl+G 로 들어간다)"))
+            ("↑↓←→", "그래프에서 이어진 것 사이를 옮기기 (Ctrl+G 로 들어간다)"),
+            ("Ctrl+L", "지금 보는 글 둘레만 — 다시 누르거나 Esc 면 전체로"))
 
     def 단축키글(self) -> str:
         """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""
@@ -1304,6 +1306,10 @@ class MainWindow(QWidget):
         #   창 단축키가 Esc 를 먼저 가로채므로 여기서 처리해야 걸린다 — 거름망에 둬 봤자 안 온다.
         from PyQt5.QtWidgets import QApplication as _앱
 
+        # ★ 둘레 보기 중이면 **그것부터 푼다** — 들어갈 길만 있고 나올 길이 없으면 갇힌다.
+        if self.graph.둘레풀기():
+            self.report("전체 그래프로 돌아왔어.", [])
+            return
         손 = _앱.instance().focusWidget()
         # ★ 그래프에 손이 얹혀 있으면(Ctrl+G) Esc 로 찾기 칸에 돌아온다 — 들어갈 길만
         #   있고 나올 길이 없으면 키보드만 쓰는 사람은 **갇힌다**.
@@ -1635,6 +1641,34 @@ class MainWindow(QWidget):
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    def 둘레보기(self) -> None:
+        """지금 보는 글과 **이어진 것만** 그래프에 남긴다. 다시 부르면 전체로 돌아간다.
+
+        ★ 옵시디언의 「로컬 그래프」 자리다. 전체 그래프는 창고가 커질수록 한 화면에
+          다 떠서, 「이 글이 무엇과 묶였나」를 눈으로 골라야 한다.
+        """
+        if self.graph.둘레중:
+            self.graph.둘레풀기()
+            self.report("전체 그래프로 돌아왔어.", [])
+            return
+        제목 = self.detail_title.text().strip()
+        if not 제목 or 제목 not in self.graph.nodes:
+            self.report("먼저 글을 하나 열어 줘 — 그 글 둘레를 보여 줄게.", [])
+            return
+        남은 = self.graph.둘레만(제목)
+        이웃수 = 남은 - 1
+        # ★ **글 카드를 접는다.** 안 접으면 카드가 그래프를 덮어 **둘레가 안 보인다**
+        #   (찍어 보고 알았다 — 남긴 34개 중 화면에 나온 건 가장자리 몇 개뿐이었다).
+        #   보러 가는 동작이므로 글은 비켜 준다. 점을 누르면 다시 열리고, Esc 면 전체로.
+        if 이웃수 > 0:
+            self.clear_detail()
+        if 이웃수 <= 0:
+            self.graph.둘레풀기()
+            self.report(f"「{제목}」 에 이어진 게 아직 없어.", [제목])
+            return
+        self.report(f"「{제목}」 둘레야 — 이어진 것 {이웃수}개만 남겼어. "
+                    f"Ctrl+L 이나 Esc 면 전체로 돌아가.", [제목])
 
     def 그래프잡기(self) -> None:
         """그래프에 손을 얹는다(Ctrl+G). 지금 펼친 글이 있으면 그 점부터."""
@@ -2691,6 +2725,13 @@ class MainWindow(QWidget):
         self.more_menu.clear()
         self.more_menu.addAction(f"새 항목  ({_키글('Ctrl+N')})", self.new_note)
         self.more_menu.addAction(f"오늘 일지  ({_키글('Ctrl+D')})", self.open_daily)
+        # ★ 둘레 보기(로컬 그래프)는 **단추를 안 늘리고** 여기와 단축키로 넣는다(결정 26).
+        지금글 = self.detail_title.text().strip()
+        if 지금글 or self.graph.둘레중:
+            말 = ("둘레 보기 그만" if self.graph.둘레중 else "이 글 둘레만 보기")
+            # ★ 한글 메서드를 신호에 **직접** 걸면 Qt 가 이름을 ascii 로 바꾸려다 터진다
+            #   (UnicodeEncodeError) — 전에도 밟은 자리다. lambda 로 감싼다.
+            self.more_menu.addAction(f"{말}  ({_키글('Ctrl+L')})", lambda: self.둘레보기())
         # ★ **접힌 목차를 여기로 옮긴다.** 카드가 좁으면 위 줄에서 목차를 숨기는데,
         # 여기에도 안 넣어서 **소제목으로 갈 길이 통째로 사라졌다**(시험 쪽 라-③ —
         # 「목차 UI 가 안 보이고 ⋯ 메뉴에도 없다」). 접는 것은 자리를 아끼려는
