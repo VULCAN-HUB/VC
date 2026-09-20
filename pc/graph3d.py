@@ -23,9 +23,11 @@ import random
 import time
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen, QRadialGradient
+from PyQt5.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen,
+                         QRadialGradient)
 from PyQt5.QtWidgets import (
     QFrame,
+    QWidget,
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -41,8 +43,10 @@ ROOT = "VC"       # 가운데 항목의 이름. 부서는 불칸, 이 AI는 VC
 OLD_ROOT = "이비"  # 옛 이름. 켤 때 한 번 옮긴다
 
 # 크기 = 층위. 가운데가 제일 크고, 모듈이 그다음, 지시·자료가 제일 작다.
-RADIUS = {"agent": 28, "skill": 16}
-RADIUS_OTHER = 7
+# 오너 2026-09-20: 항목·로고를 20% 키우고 항목 사이를 조금 벌린다.
+# 정수로 두면 7 → 8(14%)이나 9(29%)밖에 못 가 20% 가 안 된다 — 실수로 둔다.
+RADIUS = {"agent": 33.6, "skill": 19.2}
+RADIUS_OTHER = 8.4
 
 # 내용을 펼쳐 볼 때의 배율. 고정값이라 언제 봐도 같은 거리에서 보게 된다.
 FOCUS_ZOOM = 1.4
@@ -55,7 +59,43 @@ def _spread(title: str) -> str:
     return hashlib.blake2b(title.encode("utf-8"), digest_size=8).hexdigest()
 
 
-def node_radius(title: str, kind: str) -> int:
+class _선위층(QWidget):
+    """표식(로고) **위에** 얹는 얇은 덮개. 손 얹은 항목의 선만 여기에 다시 그린다.
+
+    장면에 그리는 선은 뷰포트 자식 위젯인 표식보다 늘 아래에 깔린다. 평소에는 그게
+    맞지만(선이 글자를 가로지르면 안 된다), 손을 얹었을 때는 **그 선이 어디로 가는지가
+    알고 싶은 것**이라 표식에 끊기면 안 된다. 같은 선을 한 층 위에서 한 번 더 그린다.
+    """
+
+    def __init__(self, view) -> None:
+        super().__init__()
+        self._view = view
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)   # 누름은 그대로 아래로 간다
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event) -> None:
+        v = self._view
+        손 = v.hover
+        if not 손 or 손 not in v.nodes:
+            return
+        q = QPainter(self)
+        q.setRenderHint(QPainter.Antialiasing)
+        for src, dst in v.edges:
+            if 손 not in (src, dst):
+                continue
+            a, b = v.nodes.get(src), v.nodes.get(dst)
+            if not (a and b) or not (a.isVisible() and b.isVisible()):
+                continue
+            pa, pb = v.mapFromScene(a.pos()), v.mapFromScene(b.pos())
+            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 40), 5.0))
+            q.drawLine(pa, pb)
+            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 225), 1.6))
+            q.drawLine(pa, pb)
+        q.end()
+
+
+def node_radius(title: str, kind: str) -> float:
     if title == ROOT:
         return RADIUS["agent"]
     return RADIUS.get(kind, RADIUS_OTHER)
@@ -383,6 +423,17 @@ class GraphView(QGraphicsView):
         self.mark.setParent(self.viewport())
         self.mark.show()
 
+        # ★★ **손 얹은 항목의 선만 표식 위로 지나간다**(오너 2026-09-20).
+        #   평소 선은 표식을 피해 간다 — 표식은 뒤가 비치는 위젯이라 선이 획 사이로
+        #   보여 글자를 가로지르는 것처럼 읽혔다. 그런데 손을 얹었을 때는 그 선이
+        #   **어디로 가는지가 알고 싶은 것**이므로 표식이 가리면 안 된다.
+        #   장면(선)과 위젯(표식)은 층이 달라 `setZValue` 로는 못 올린다 — 표식 위에
+        #   얇은 덮개를 하나 더 얹고 그 선만 여기 다시 그린다.
+        self._선위층 = _선위층(self)
+        self._선위층.setParent(self.viewport())
+        self._선위층.raise_()
+        self._선위층.show()
+
         self._settling = 0
         self._last_spin = time.perf_counter()
         self._slow = 0        # 연달아 밀린 프레임 수
@@ -603,7 +654,9 @@ class GraphView(QGraphicsView):
         가운데 구멍은 여기서 만들지 않는다. 하한을 두면 항목이 90개를 넘을 때까지
         구가 안 자라 "쌓일수록 공 모양"이 사라진다 — 구멍은 투영에서 뚫는다.
         """
-        return 95.0 + 46.0 * max(len(self.nodes) - 1, 1) ** (1 / 3)
+        # ★ 2026-09-20 오너 지시로 20% 벌렸다(79.2/38.3 → 95/46). 항목도 같이 20% 커지므로
+        #   **빈 틈이 실제로 20% 넓어진다** — 껍질만 키우면 커진 항목이 그만큼 도로 메운다.
+        return 114.0 + 55.2 * max(len(self.nodes) - 1, 1) ** (1 / 3)
 
     def step_layout(self) -> None:
         """3차원 힘 배치. 붙은 것끼리 당기고, 가까운 것끼리 밀어내고, 구 껍질로 모은다.
@@ -673,6 +726,20 @@ class GraphView(QGraphicsView):
                 node.v[i] *= damp
                 node.p[i] += node.v[i]
             moved = max(moved, abs(node.v[0]) + abs(node.v[1]) + abs(node.v[2]))
+
+        # ★★ **무리를 한가운데로 되돌린다**(오너 2026-09-20: 「치우침은 없이」).
+        #   VC 는 원점에 못 박혀 있는데 나머지는 그렇지 않아, 격자로 자른 반발력의
+        #   작은 비대칭과 처음 뿌린 자리의 쏠림이 **씻겨 나가지 못하고 쌓였다.**
+        #   재 보니 무게중심이 (182, -114, -55) 에서 **치우친 채로 안정**됐다 —
+        #   그래서 표식이 늘 무리 한쪽에 붙어 보였다. 걸음마다 평균을 빼면
+        #   모양은 그대로 두고 자리만 가운데로 온다.
+        흐른것 = [n for n in items if n.title != ROOT]
+        if 흐른것:
+            가운데 = [sum(n.p[i] for n in 흐른것) / len(흐른것) for i in range(3)]
+            if abs(가운데[0]) + abs(가운데[1]) + abs(가운데[2]) > 0.5:
+                for n in 흐른것:
+                    for i in range(3):
+                        n.p[i] -= 가운데[i]
 
         # 거의 안 움직이면 그만둔다. 켜 두는 내내 도는 계산이라 멈추는 게 곧 성능이다.
         self._settling = self._settling + 1 if moved < 0.8 else 0
@@ -797,7 +864,15 @@ class GraphView(QGraphicsView):
             self._zoom_target = self._focus_zoom
         else:
             # 검색만으로는 배율을 건드리지 않는다.
-            self._zoom_target = overview
+            # ★★ **배치가 꿈틀댄다고 배율까지 따라 흔들리면 안 된다**(2026-09-20).
+            #   전체 배율은 항목들의 **화면 범위**로 잡는데, 그 범위는 힘 배치가 자리를
+            #   잡는 동안 조금씩 변한다. 항목과 껍질을 20% 키우자 그 흔들림이 커져
+            #   **검색 전후로 배율이 0.86 → 0.88 로 움직였다**(검사가 잡았다).
+            #   사람 눈에는 「좁혔더니 화면이 들썩」으로 보인다. 눈에 띌 만큼
+            #   달라질 때만 따라간다 — 항목이 크게 늘거나 창이 바뀌는 때다.
+            옛것 = self._zoom_target
+            if 옛것 <= 0 or abs(overview - 옛것) > max(옛것, overview) * 0.05:
+                self._zoom_target = overview
 
         self._center_target = center
 
@@ -832,6 +907,16 @@ class GraphView(QGraphicsView):
         self.centerOn(self._center)
         self._place_mark()
 
+    def _덮개고침(self) -> None:
+        """선 덮개를 표식 위에 맞춰 두고 다시 그리게 한다."""
+        층 = getattr(self, "_선위층", None)
+        if 층 is None:
+            return
+        if 층.geometry() != self.viewport().rect():
+            층.setGeometry(self.viewport().rect())
+        층.raise_()
+        층.update()
+
     def _place_mark(self) -> None:
         """표식을 원점 위에 놓고 구멍 크기에 맞춘다.
 
@@ -840,8 +925,9 @@ class GraphView(QGraphicsView):
         """
         pos = self.mapFromScene(QPointF(0.0, 0.0))
         # 2.5면 불티 링이 항목이 밀려난 자리에 딱 앉는데, 그러면 표식이
-        # 화면에서 커 보인다. 24% 줄여 항목 쪽에 자리를 내준다.
-        size = max(140, int(1.913 * self.RING * self._zoom))
+        # 화면에서 커 보인다. 24% 줄여 항목 쪽에 자리를 내줬다가,
+        # 오너 지시로 다시 20% 키웠다(1.913 → 2.296 · 2026-09-20).
+        size = max(168, int(2.296 * self.RING * self._zoom))
         섰던자리 = self.mark.geometry()
         self.mark.setFixedSize(size, size)
         self.mark.move(pos.x() - size // 2, pos.y() - size // 2)
@@ -862,6 +948,7 @@ class GraphView(QGraphicsView):
         super().resizeEvent(event)
         self._fit()
         self._place_mark()
+        self._선위층.setGeometry(self.viewport().rect())
 
     def project(self) -> None:
         """3차원 좌표를 화면으로 옮긴다. 가까울수록 크고 진하게, 앞에 그린다."""
@@ -906,6 +993,7 @@ class GraphView(QGraphicsView):
         self._name_front()
         self._resolve_labels()
         self.viewport().update()
+        self._덮개고침()
 
     def _name_front(self) -> None:
         """**맨 앞줄 몇 개는 이름표를 늘 보인다.**
@@ -1079,6 +1167,20 @@ class GraphView(QGraphicsView):
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
 
         # 연결선. 말하는 항목에 닿은 선은 함께 밝아진다 — 말이 어디로 흐르는지 보이게.
+        # ★★ **평소 선은 표식을 피해 간다**(오너 2026-09-20). 표식은 뒤가 비치는 위젯이라
+        #   선이 획 사이로 보여 글자를 가로지르는 것처럼 읽혔다. 표식이 앉은 자리를
+        #   그리지 않는 곳으로 잘라 둔다 — 손 얹은 선은 `_선위층` 이 그 위에 다시 그린다.
+        painter.save()
+        표식자리 = self.mapToScene(self.mark.geometry()).boundingRect() if self.mark.isVisible() else None
+        if 표식자리 is not None:
+            # 글자와 불티 링만 비운다. 네모째로 비우면 둘레가 휑하게 잘려 보인다.
+            반 = min(표식자리.width(), 표식자리.height()) * 0.30
+            비울 = QPainterPath()
+            비울.addEllipse(표식자리.center(), 반, 반)
+            온통 = QPainterPath()
+            온통.addRect(rect)
+            painter.setClipPath(온통.subtracted(비울))
+
         for src, dst in self.edges:
             a, b = self.nodes.get(src), self.nodes.get(dst)
             if not (a and b):
@@ -1143,6 +1245,8 @@ class GraphView(QGraphicsView):
                 painter.setPen(QPen(Qt.NoPen))
                 painter.setBrush(QBrush(theme.rgba(theme.T.ACCENT, int(230 * heat * (1 - t * 0.5)))))
                 painter.drawEllipse(spot, 2.2, 2.2)
+
+        painter.restore()      # 표식 자리를 비워 둔 잘라내기를 여기서 푼다
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         """뷰 자체에 걸리는 계기 장식. 화면에 고정돼야 하므로 화면 좌표로 되돌려 그린다."""
@@ -1880,6 +1984,65 @@ def _self_check() -> None:
         view.drawBackground(painter, QRectF(-400, -300, 800, 600))
     finally:
         painter.end()
+
+    # ★★ **무리가 한가운데 앉는다**(오너 2026-09-20: 「치우침은 없이」).
+    #   VC 만 원점에 못 박혀 있고 나머지는 그렇지 않아, 반발력의 작은 비대칭과 처음
+    #   뿌린 자리의 쏠림이 씻기지 않고 쌓였다 — 재 보니 무게중심이 (182,-114,-55) 에서
+    #   **치우친 채 안정**됐고, 표식이 늘 무리 한쪽에 붙어 보였다.
+    치우 = GraphView()
+    치우.resize(900, 700)
+    치우.show()
+    치우.load({f"글{i}": [f"글{(i * 7 + 3) % 40}"] for i in range(40)},
+             {f"글{i}": "note" for i in range(40)})
+    for 점 in 치우.nodes.values():        # 일부러 한쪽으로 몰아 놓는다
+        점.p = [점.p[0] + 400.0, 점.p[1] + 250.0, 점.p[2] - 180.0]
+    for _ in range(260):
+        치우.step_layout()
+    흐른 = [x for x in 치우.nodes.values() if x.title != ROOT]
+    무게 = [sum(x.p[i] for x in 흐른) / len(흐른) for i in range(3)]
+    assert max(abs(v) for v in 무게) < 12, f"무리가 한쪽으로 치우친 채 굳는다: {무게}"
+    # 가운데로 옮기면서 모양까지 뭉개면 안 된다 — 껍질 언저리에 남아 있어야 한다
+    거리 = sorted(math.sqrt(sum(c * c for c in x.p)) for x in 흐른)
+    assert 거리[len(거리) // 2] > 치우.shell * 0.5, f"가운데로 빨려 들어갔다: {거리[len(거리)//2]:.0f}"
+
+    # ★ 항목·표식을 20% 키웠다(오너 2026-09-20). 정수로 두면 7 → 8(14%) 밖에 못 간다.
+    assert abs(RADIUS_OTHER - 8.4) < 0.01, RADIUS_OTHER
+    assert isinstance(node_radius("아무거나", "note"), float), "정수로 돌아갔다 — 20% 가 안 된다"
+
+    # ★★ **평소 선은 표식을 피하고, 손 얹은 선은 표식 위로 간다**(오너 2026-09-20).
+    층 = 치우._선위층
+    assert 층.parent() is 치우.viewport(), "덮개가 뷰포트에 안 붙었다"
+    assert 층.testAttribute(Qt.WA_TransparentForMouseEvents), "덮개가 누름을 가로챈다"
+    자식들 = 치우.viewport().children()
+    assert 자식들.index(층) > 자식들.index(치우.mark), "덮개가 표식보다 아래다 — 선이 안 보인다"
+
+    def 그려본(뷰):
+        """덮개가 실제로 무엇을 그렸는지 **칠해진 점 수**로 잰다."""
+        from PyQt5.QtGui import QImage
+
+        층2 = 뷰._선위층
+        층2.setGeometry(뷰.viewport().rect())
+        w, h = max(층2.width(), 1), max(층2.height(), 1)
+        img = QImage(w, h, QImage.Format_ARGB32)
+        img.fill(0)
+        q = QPainter(img)
+        층2.render(q)
+        q.end()
+        return sum(1 for y in range(0, h, 3) for x in range(0, w, 3)
+                   if img.pixelColor(x, y).alpha() > 0)
+
+    치우.set_hover(None)
+    치우.project()
+    assert 그려본(치우) == 0, "손을 안 얹었는데 덮개가 뭔가 그린다"
+    이은것 = next((a for a, b in 치우.edges
+                 if a in 치우.nodes and b in 치우.nodes
+                 and 치우.nodes[a].isVisible() and 치우.nodes[b].isVisible()), None)
+    assert 이은것 is not None, "이어진 항목이 없어 덮개를 못 잰다"
+    치우.set_hover(이은것)
+    치우.project()
+    assert 그려본(치우) > 0, "손을 얹었는데 표식 위에 선이 안 그려진다"
+    치우.set_hover(None)
+    치우.deleteLater()
 
     print("graph3d self-check 통과")
 
