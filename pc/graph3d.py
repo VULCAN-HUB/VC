@@ -45,6 +45,13 @@ OLD_ROOT = "이비"  # 옛 이름. 켤 때 한 번 옮긴다
 # 크기 = 층위. 가운데가 제일 크고, 모듈이 그다음, 지시·자료가 제일 작다.
 # 오너 2026-09-20: 항목·로고를 20% 키우고 항목 사이를 조금 벌린다.
 # 정수로 두면 7 → 8(14%)이나 9(29%)밖에 못 가 20% 가 안 된다 — 실수로 둔다.
+# 손 얹은 항목에 닿은 선. **한 자리에 둔다** — 장면과 덮개 두 곳에서 그리므로
+# 값이 흩어지면 언젠가 갈라진다(같은 판단을 두 군데서 하면 갈라진다: `태그인가` 의 교훈).
+# 오너 2026-09-20: 「활성화됐을 때 선 두께와 밝기만 줄여줘」 — 굵은 깔개(5px)를 빼고
+# 가는 선 하나로. 이어진 것이 112개인 항목이 있어 굵게 밝히면 화면이 통째로 붉어졌다.
+손선굵기 = 1.0
+손선밝기 = 150
+
 RADIUS = {"agent": 33.6, "skill": 19.2}
 RADIUS_OTHER = 8.4
 
@@ -88,9 +95,7 @@ class _선위층(QWidget):
             if not (a and b) or not (a.isVisible() and b.isVisible()):
                 continue
             pa, pb = v.mapFromScene(a.pos()), v.mapFromScene(b.pos())
-            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 40), 5.0))
-            q.drawLine(pa, pb)
-            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 225), 1.6))
+            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 손선밝기), 손선굵기))
             q.drawLine(pa, pb)
         q.end()
 
@@ -1221,11 +1226,9 @@ class GraphView(QGraphicsView):
                 painter.drawLine(pa, pb)
                 continue
             if lit:
-                # 손 얹힌 항목에 닿은 선. 굵은 흐린 선을 깔고 그 위에 밝은 선을 얹어
-                # 빛나 보이게 한다 — 그냥 굵게만 하면 굵어졌다고만 읽힌다.
-                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 40), 5.0))
-                painter.drawLine(pa, pb)
-                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 225), 1.6))
+                # 손 얹힌 항목에 닿은 선. 굵은 깔개를 덧대 빛나게 했었는데, 이어진 것이
+                # 백 개가 넘는 항목에서는 화면이 통째로 붉어졌다 — 가는 선 하나로 줄였다.
+                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 손선밝기), 손선굵기))
                 painter.drawLine(pa, pb)
                 continue
             if heat > 0.05:
@@ -2041,6 +2044,16 @@ def _self_check() -> None:
     치우.set_hover(이은것)
     치우.project()
     assert 그려본(치우) > 0, "손을 얹었는데 표식 위에 선이 안 그려진다"
+    # ★ 손 얹은 선의 굵기·밝기는 **한 자리에서** 나와야 한다(오너 2026-09-20 로 줄였다).
+    #   장면과 덮개 두 곳에서 그리므로, 값을 각자 적어 두면 한쪽만 고쳐져 갈라진다.
+    import pathlib as _길9
+
+    본문 = _길9.Path(__file__).read_text(encoding="utf-8")
+    # (검사 글 자체가 세어지지 않게 조각을 붙여 만든다)
+    꼴 = "theme.T.ACCENT, " + "손선밝기), " + "손선굵기"
+    assert 본문.count(꼴) == 2, f"손 얹은 선을 두 곳에서 따로 그린다: {본문.count(꼴)}군데"
+    assert 손선굵기 <= 1.2 and 손선밝기 <= 170, (손선굵기, 손선밝기)
+
     치우.set_hover(None)
     치우.deleteLater()
 
