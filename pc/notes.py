@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 import paths
+import wiki
 
 import json
 import os
@@ -1507,40 +1508,13 @@ class Notes:
 
     # 이 저장소를 만지는 모두(사람·AI·나중에 붙을 무엇이든)가 읽을 규칙. 항목으로는
     # 안 세는 자리(`_서식`)에 둔다.
-    RULE_FILE = "이 폴더를 만지는 규칙.md"
-    RULES = """# 이 폴더를 만지는 규칙
-
-이 파일은 VC 가 처음 한 번만 만든다. 사람이 고쳐도 되고 지워도 된다 — 다시 안 만든다.
-
-## 1. 이어 주는 일은 안 해도 된다
-
-**`[[제목]]` 을 일부러 넣을 필요가 없다.** VC 가 뜻으로 가까운 것을 스스로 이어
-그래프와 「비슷한 것」 줄에 보여 준다. 그 이음선은 **파일에 안 적힌다** — 셈해서 그릴
-뿐이라 틀려도 글이 더러워지지 않는다.
-
-`[[제목]]` 은 **사람이 「이것과 저것은 이어진다」고 말하고 싶을 때만** 쓴다.
-그 선은 진하게, 짐작한 선은 흐리게 그려져 눈으로 갈린다.
-
-> 그래서 이 규칙은 **아무것도 안 하는 것이 지키는 것**이다. 무엇이 붙어도 못 어긴다.
-
-## 2. 글은 그냥 마크다운이다
-
-앞머리(`---`)는 있어도 되고 없어도 된다. 없으면 VC 가 알아서 채운다.
-`kind` 는 `agent · skill · preference · place · thing · note` 중 하나이고, 모르는 값을
-적어도 **지우지 않고 그대로 둔다.**
-
-## 3. 건드리면 안 되는 자리
-
-- `.이력/` — 지난 판. VC 가 관리한다
-- `_첨부/` — 붙임 파일
-- `_서식/` — 서식과 이 규칙. **항목으로 안 센다**
-- `_VC기록/` — 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 적는 상태 요약. **항목으로 안 센다**
-
-## 4. 색인은 언제나 버려도 된다
-
-`.md` 가 원본이고 색인(`notes_index.db`)은 그것을 훑어 만든 것뿐이다.
-어긋난 것 같으면 `VC.exe --색인다시`. 기록은 안 건드린다.
-"""
+    # 이 저장소를 만지는 모두(사람·AI·나중에 붙을 무엇이든)가 읽을 규칙. 항목으로는
+    # 안 세는 자리(`_서식`)에 둔다.
+    # ★★ **글을 여기 적지 않는다.** 층·갈래·앞머리·연산은 `wiki.py` 한 자리에 있고
+    #   이 글은 거기서 **지어진다** — 두 군데 적으면 갈래를 더했을 때 갈라진다
+    #   (오너 2026-09-20: 카파시 LLM Wiki 기준으로 창고를 새로 세운다).
+    RULE_FILE = "이 창고를 쓰는 법.md"
+    옛RULE_FILES = ("이 폴더를 만지는 규칙.md",)
 
     # 기본 서식(결정 19) — 받고 보낸 제품을 대충 적어도 틀이 잡히게. 폰 적기 탭에서도 고른다.
     DEFAULT_TEMPLATES = {
@@ -1566,8 +1540,11 @@ class Notes:
         where = self.template_root() / self.RULE_FILE
         try:
             where.parent.mkdir(parents=True, exist_ok=True)
-            if not where.exists():
-                _atomic_write(where, self.RULES)
+            # ★ 옛 이름(`이 폴더를 만지는 규칙.md`)이 있으면 **새로 만들지 않는다.**
+            #   사람이 고쳐 뒀을 수 있는 글을 같은 자리에 둘씩 늘리지 않는다.
+            옛것 = any((self.template_root() / 옛).exists() for 옛 in self.옛RULE_FILES)
+            if not where.exists() and not 옛것:
+                _atomic_write(where, wiki.스키마글())
             표 = self.template_root() / ".기본서식넣음"
             넣은것 = set(read_text(표).split()) if 표.exists() else set()
             새로 = [이름 for 이름 in self.DEFAULT_TEMPLATES if 이름 not in 넣은것]
@@ -4358,6 +4335,36 @@ def _self_check() -> None:
         # 규칙 파일은 **항목이 아니다** — 서식 자리에 있으니 색인이 안 센다.
         n.reindex()
         assert n.read(Path(n.RULE_FILE).stem) is None, "규칙 파일이 항목으로 셌다"
+
+        # ★★ **규칙 글은 `wiki.py` 표에서 지어진다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   코드와 글 두 군데에 적으면 갈래를 더했을 때 갈라진다 — 사람과 AI 가 다른
+        #   목록을 보게 되는데, 그건 기준이 없는 것과 같다.
+        # 갓 만든 창고로 잰다 — 이 검사가 도는 창고에는 옛 이름 규칙 글이 있을 수 있다
+        with tempfile.TemporaryDirectory() as _새창고:
+            _새 = Notes(Path(_새창고) / "notes")
+            _새.write_rules()
+            규칙글 = read_text(_새.template_root() / _새.RULE_FILE)
+            _새.conn.close()
+        for 갈 in wiki.갈래들:
+            assert f"`{갈}`" in 규칙글, f"갈래 「{갈}」 이 창고의 규칙 글에 없다"
+        for 일 in wiki.연산들:
+            assert f"**{일}**" in 규칙글, f"일 「{일}」 이 창고의 규칙 글에 없다"
+        assert 규칙글 == wiki.스키마글(), "창고에 적힌 규칙이 wiki.py 와 다르다 — 갈라졌다"
+
+        # ★ **옛 이름 규칙 글이 있으면 새로 만들지 않는다.** 사람이 고쳐 뒀을 수 있는 글을
+        #   같은 자리에 둘씩 늘리면 어느 것이 규칙인지 알 수 없게 된다.
+        with tempfile.TemporaryDirectory() as _옛창고:
+            _옛 = Notes(Path(_옛창고) / "notes")
+            _옛.template_root().mkdir(parents=True, exist_ok=True)
+            # 창고를 열면 생성자가 이미 규칙 글을 만든다 — **옛 창고를 새 VC 로 여는 꼴**을
+            # 만들려면 그것을 치우고 옛 이름 글만 남겨야 한다.
+            (_옛.template_root() / _옛.RULE_FILE).unlink(missing_ok=True)
+            (_옛.template_root() / _옛.옛RULE_FILES[0]).write_text("# 내가 고친 규칙\n", encoding="utf-8")
+            _옛.write_rules()
+            assert not (_옛.template_root() / _옛.RULE_FILE).exists(), (
+                "옛 이름 규칙 글이 있는데 새 이름으로 또 만들었다")
+            assert read_text(_옛.template_root() / _옛.옛RULE_FILES[0]) == "# 내가 고친 규칙\n"
+            _옛.conn.close()
 
         # 낱말로 찾은 차례는 **안 흔들린다.** 뜻은 뒤에 붙기만 한다.
         plain = [r["title"] for r in n.search("사과", k=8)]
