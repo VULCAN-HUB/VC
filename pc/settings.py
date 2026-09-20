@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import paths
 from notes import Note, Notes, WriteBlocked
@@ -785,6 +786,97 @@ def open_dialog(win, notes: Notes):
     창.확장예제깔기 = _확장예제
     _확장그리기()
 
+    # ── 폴더 들이기(오너 2026-09-20). 옵시디언 볼트처럼 **이미 정리된 창고**를 통째로 들인다.
+    #   ★★ **먼저 보여 주고 나서 들인다.** 한 번에 백 장이 움직이는 일이라, 무엇이 들어가는지
+    #   모르고 누르면 되돌릴 마음도 안 생긴다. 그래서 「살펴보기」와 「들이기」를 갈라 뒀고
+    #   들인 것은 **한꺼번에 뺄 수 있다**(글마다 온 곳을 적어 둔다).
+    들임틀, _ = 쪽("폴더 들이기", "옵시디언 볼트 같은 폴더를 글 하나 = 글 하나로 들인다. "
+                          "제목은 본문 표제, 파일 이름은 별칭이라 [[링크]]가 그대로 이어진다.")
+    import vault as 볼트
+
+    창.들임폴더 = QLineEdit()
+    창.들임폴더.setPlaceholderText("들일 폴더 (예: ~/…/Second Brain)")
+    고르기줄 = QHBoxLayout()
+    고르기줄.addWidget(창.들임폴더, 1)
+    찾아보기 = QPushButton("찾아보기…")
+    고르기줄.addWidget(찾아보기)
+    줄(들임틀, "폴더", QWidget())
+    들임틀.addLayout(고르기줄)
+
+    들임말 = QLabel("폴더를 고르고 **살펴보기**를 누른다. 창고는 그때 안 건드린다.")
+    들임말.setObjectName("note")
+    들임말.setWordWrap(True)
+    들임틀.addWidget(들임말)
+    창.들임말 = 들임말
+    창.들임본것 = None
+
+    def _폴더고르기() -> None:
+        from PyQt5.QtWidgets import QFileDialog
+
+        고른 = QFileDialog.getExistingDirectory(창, "들일 폴더", 창.들임폴더.text().strip() or str(Path.home()))
+        if 고른:
+            창.들임폴더.setText(고른)
+
+    def _살펴보기() -> None:
+        어디 = 창.들임폴더.text().strip()
+        if not Path(어디).is_dir():
+            들임말.setText("그런 폴더가 없어. 자리를 다시 봐 줘.")
+            return
+        try:
+            본것 = 볼트.살펴보기(어디, notes)
+        except OSError as e:
+            들임말.setText(f"폴더를 못 읽었어 — {e}")
+            return
+        창.들임본것 = 본것
+        if not 본것.것들:
+            들임말.setText("들일 글이 없어. `.md` 파일이 있는 폴더인지 봐 줘.")
+            return
+        말 = [f"**{본것.한줄()}**"]
+        if 본것.이미있음:
+            말.append("창고에 같은 제목이 있는 것은 **건드리지 않는다** — 밑에 그대로 둔다.")
+        if 본것.끊긴링크:
+            말.append(f"끊긴 링크 {len(본것.끊긴링크)}개는 그대로 들어간다 "
+                     "(VC 는 없는 이름을 따라가면 그 자리에서 만든다).")
+        말.append("보기: " + " · ".join(것.제목 for 것 in 본것.것들[:3]))
+        들임말.setText(chr(10).join(말))
+
+    def _들이기() -> None:
+        본것 = 창.들임본것
+        if 본것 is None:
+            들임말.setText("먼저 **살펴보기**를 눌러 줘 — 무엇이 들어가는지 보고 나서 들인다.")
+            return
+        난것 = 볼트.들이기(notes, 본것)      # 색인은 `write` 가 글마다 바로 고친다
+        말 = [f"**{len(난것['넣음'])}장 들였다.**"]
+        if 난것["건너뜀"]:
+            말.append(f"같은 제목이 이미 있어 건드리지 않은 것 {len(난것['건너뜀'])}장.")
+        if 난것["터짐"]:
+            말.append(f"못 쓴 것 {len(난것['터짐'])}장 — {난것['터짐'][0][0]}")
+        말.append(f"잘못됐으면 「되돌리기」로 한꺼번에 뺄 수 있다(이 폴더에서 온 것만).")
+        들임말.setText(chr(10).join(말))
+
+    def _되돌리기() -> None:
+        어디 = 창.들임폴더.text().strip()
+        이름 = Path(어디).name if 어디 else ""
+        if not 이름:
+            들임말.setText("어느 폴더에서 들인 것을 뺄지 자리를 적어 줘.")
+            return
+        뺀것 = 볼트.되돌리기(notes, 이름)
+        들임말.setText(f"「{이름}」 에서 들인 {len(뺀것)}장을 뺐다. "
+                    "뒤에 내가 적은 글은 그대로 있다.")
+
+    찾아보기.clicked.connect(lambda: _폴더고르기())
+    들임단추줄 = QHBoxLayout()
+    for 글, 함 in (("살펴보기", _살펴보기), ("들이기", _들이기), ("되돌리기", _되돌리기)):
+        단추 = QPushButton(글)
+        단추.clicked.connect(lambda _=False, f=함: f())
+        들임단추줄.addWidget(단추)
+    들임단추줄.addStretch(1)
+    들임틀.addLayout(들임단추줄)
+    들임틀.addStretch(1)
+    창.들임살펴보기 = _살펴보기
+    창.들임들이기 = _들이기
+    창.들임되돌리기 = _되돌리기
+
     # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
     답, _옛남2 = from_body(옛.body if 옛 else "")
@@ -1061,6 +1153,49 @@ def _self_check() -> None:
             #   모른다(맥에서 눈으로 보고 잡았다). 옷에 네모가 들었는지 여기서 지킨다.
             assert "QCheckBox::indicator" in _dialog_css(__import__("theme")), "켜고 끄는 네모를 안 그린다"
             확장창.deleteLater()
+
+            # ★★ 폴더 들이기(오너 2026-09-20) — **살펴보기 없이 들이기를 누르면 안 들어간다.**
+            #   한 번에 백 장이 움직이는 일이라, 무엇이 들어가는지 보기 전에는 창고를 안 건드린다.
+            볼트자리 = Path(tmp) / "내볼트"
+            (볼트자리 / "wiki").mkdir(parents=True, exist_ok=True)
+            (볼트자리 / "wiki" / "2026-06-12-a.md").write_text(
+                "---\ntype: error\ndate: 2026-06-12\n---\n# 첫 글\n\n[[2026-06-12-b]]\n",
+                encoding="utf-8")
+            (볼트자리 / "wiki" / "2026-06-12-b.md").write_text(
+                "---\ntype: decision\ndate: 2026-06-12\n---\n# 둘째 글\n\n본문.\n",
+                encoding="utf-8")
+            들임창 = open_dialog(win, n)
+            assert "폴더 들이기" in 들임창.갈래이름, 들임창.갈래이름
+            들임창.들임폴더.setText(str(볼트자리))
+            들임창.들임들이기()          # 살펴보기를 건너뛰고 눌렀다
+            assert n.read("첫 글") is None, "살펴보지도 않고 창고에 넣었다"
+            assert "살펴보기" in 들임창.들임말.text(), 들임창.들임말.text()
+            # 살펴보면 **무엇이 들어가는지 숫자로** 보인다 — 창고는 아직 그대로다
+            들임창.들임살펴보기()
+            본말 = 들임창.들임말.text()
+            assert "2장" in 본말 and "error" in 본말, 본말
+            assert n.read("첫 글") is None, "살펴보기가 창고를 건드렸다"
+            들임창.들임들이기()
+            assert "2장 들였다" in 들임창.들임말.text(), 들임창.들임말.text()
+            들어온 = n.read("첫 글")
+            assert 들어온 is not None and 들어온.kind == "error", 들어온
+            # ★ 별칭으로 열린다 = 볼트의 [[링크]]가 이어진다
+            assert n.read("2026-06-12-b") is not None and n.read("2026-06-12-b").title == "둘째 글"
+            # ★★ **들인 뒤 곧바로 찾아져야 한다.** 파일만 놓고 색인을 안 고치면 글은
+            #   창고에 있는데 검색에 안 나온다 — 사람 눈에는 「안 들어왔다」로 보인다.
+            찾은 = [r["title"] for r in n.search("첫 글", k=5)]
+            assert "첫 글" in 찾은, f"들이자마자 못 찾는다: {찾은}"
+            # 없는 폴더는 **말해 준다** — 조용히 0장 들였다고 하면 안 된다
+            들임창.들임폴더.setText(str(Path(tmp) / "없는폴더"))
+            들임창.들임살펴보기()
+            assert "그런 폴더가 없어" in 들임창.들임말.text(), 들임창.들임말.text()
+            # 한꺼번에 되돌린다 — 뒤에 사람이 적은 글은 남는다
+            n.write(Note(title="내가 적은 글", body="남아야 한다"))
+            들임창.들임폴더.setText(str(볼트자리))
+            들임창.들임되돌리기()
+            assert n.read("첫 글") is None and n.read("둘째 글") is None, "되돌렸는데 남았다"
+            assert n.read("내가 적은 글") is not None, "사람이 적은 글까지 뺐다"
+            들임창.deleteLater()
 
             # 저장이 막히면 창을 안 닫고 알린다 — 적은 것이 사라지지 않게
             막힘 = open_dialog(win, n)
