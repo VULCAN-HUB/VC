@@ -289,6 +289,19 @@ PIECE_RE = re.compile(r'(-?)(?:(\w+):)?(?:"([^"]*)"|(\S+))')
 
 # 좁히는 말과 그것이 걸리는 곳. 여기 없는 이름(`tag:`가 아닌 `xyz:`)은 **그냥 낱말
 # 둘**로 친다 — 값만 남기고 이름을 버리면 `결정:22` 같은 진짜 글자가 조용히 사라진다.
+def 앞머리값(v) -> str:
+    """앞머리 값을 **찾을 수 있는 한 줄**로 편다.
+
+    옵시디언 앞머리는 글자·숫자·참거짓뿐 아니라 목록(`tags: [a, b]`)도 온다.
+    찾을 때 필요한 건 「그 말이 들었나」이므로 목록은 사이를 띄워 붙인다.
+    """
+    if isinstance(v, (list, tuple)):
+        return " ".join(앞머리값(x) for x in v)
+    if isinstance(v, dict):
+        return " ".join(f"{k} {앞머리값(x)}" for k, x in v.items())
+    return str(v).strip()
+
+
 NARROW = {
     "tag": "태그", "태그": "태그",
     "path": "경로", "경로": "경로",
@@ -305,7 +318,7 @@ class Ask:
 
     __slots__ = ("terms", "phrases", "narrow", "minus_terms", "minus_phrases", "raw", "또는")
 
-    def __init__(self, raw: str) -> None:
+    def __init__(self, raw: str, 앞머리이름: frozenset | set | None = None) -> None:
         self.raw = raw
         # ★ **「이것 아니면 저것」도 찾을 수 있어야 한다.** 옵시디언은 `TODO OR FIXME` 가
         #   되는데 우리는 낱말을 늘 AND 로 묶어 **0건**이었다. 「하나라도 든 것」은
@@ -324,6 +337,12 @@ class Ask:
             if not word:
                 continue
             kind = NARROW.get((key or "").lower())
+            # ★★ **창고가 실제로 지닌 앞머리면 그 값으로 찾는다**(오너 2026-09-20).
+            #   볼트마다 앞머리가 달라 이름을 코드에 손으로 적어 둘 수 없다 — 창고를
+            #   보고 가른다. 없는 이름은 **지금까지처럼 낱말로** 친다(글 속의 `C:\` 나
+            #   `09:30` 을 찾을 때 0장이 되면 안 된다).
+            if kind is None and key and 앞머리이름 and key in 앞머리이름:
+                kind = "앞머리:" + key
             if kind and not minus:
                 self.narrow.append((kind, word))
                 continue
@@ -437,6 +456,17 @@ CREATE TABLE IF NOT EXISTS tags (
     PRIMARY KEY (title, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags (tag);
+
+-- 앞머리 값. `status: active` 처럼 **사람이(또는 남의 볼트가) 적은 것**을 그대로 담는다.
+-- 옵시디언 볼트를 들이니 `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이
+-- 없었다** — `status:active` 가 83장을 두고 2장을 내놓았다(모르는 이름은 낱말로 쳤다).
+CREATE TABLE IF NOT EXISTS props (
+    title TEXT NOT NULL,
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (title, key)
+);
+CREATE INDEX IF NOT EXISTS idx_props_key ON props (key, value);
 
 -- 별칭. 다른 이름으로도 [[링크]]가 닿는다. 별칭은 온 저장소에서 하나뿐이다.
 CREATE TABLE IF NOT EXISTS aliases (
@@ -1226,6 +1256,19 @@ class Notes:
             self.conn.execute("DROP TABLE vectors")
             self.conn.execute("UPDATE notes SET vec_mtime = 0")
         self.conn.executescript(VECTOR_SCHEMA)
+        # ★★ **새 표는 만들어져도 비어 있다.** `CREATE TABLE IF NOT EXISTS` 는 표만
+        #   만들고 내용을 안 채운다 — 쓰던 색인에서는 `props` 가 텅 빈 채라
+        #   `status:active` 가 **0장**을 내놓는다. 「되기는 되는데 아무것도 안 나온다」가
+        #   제일 나쁜 꼴이다(같은 함정을 `links` 흐림 칸에서 이미 한 번 밟았다).
+        #   글이 있는데 앞머리가 하나도 없으면 **한 번 다시 훑어 채운다.**
+        self._앞머리이름 = None
+        try:
+            글있음 = self.conn.execute("SELECT 1 FROM notes LIMIT 1").fetchone() is not None
+            앞머리있음 = self.conn.execute("SELECT 1 FROM props LIMIT 1").fetchone() is not None
+            self._앞머리채울까 = bool(글있음 and not 앞머리있음)
+        except sqlite3.Error:
+            self._앞머리채울까 = False
+
         # 이미 쓰던 색인에는 이 칸이 없다. 색인은 다시 만들 수 있지만 2만 개를
         # 다시 훑게 하느니 칸 하나를 붙이는 게 싸다.
         # ★★ **칸을 더할 때는 반드시 여기에도 적는다.** `CREATE TABLE IF NOT EXISTS`
@@ -2066,7 +2109,10 @@ class Notes:
         느려지면 그때 파일 감시로 바꾼다.
         """
         seen, changed = set(), 0
-        known = {
+        # ★ 앞머리 표가 새로 생겨 비어 있으면 **이번 한 번은 전부** 다시 읽는다.
+        #   파일이 안 바뀌었으니 평소 같으면 건너뛰는데, 그러면 `status:` 가 영영 0장이다.
+        처음채우기 = getattr(self, "_앞머리채울까", False)
+        known = {} if 처음채우기 else {
             r["path"]: r["mtime"]
             for r in self.conn.execute("SELECT path, mtime FROM notes")
         }
@@ -2111,6 +2157,8 @@ class Notes:
             self.forget(gone, commit=False)
             changed += 1
         self.conn.commit()
+        self._앞머리채울까 = False
+        self._앞머리이름 = None
         return changed
 
     def forget(self, gone: str | Path, commit: bool = True) -> None:
@@ -2267,6 +2315,7 @@ class Notes:
             self.conn.execute(f"DELETE FROM {table} WHERE {'src' if table == 'links' else 'title'} = ?",
                               (note.title,))
         self.conn.execute("DELETE FROM aliases WHERE title = ?", (note.title,))
+        self.conn.execute("DELETE FROM props WHERE title = ?", (note.title,))
         # ★ **AI 가 부어 넣은 글 안의 `[[ ]]` 는 「사람이 이은 것」이 아니다.**
         # 흡수한 글이 남의 항목 이름을 인용만 해도 굳은 선이 생겼다 — 상태줄의
         # 「적은 것」이 2에서 4로 늘었는데 사람은 아무것도 안 이었다.
@@ -2290,6 +2339,13 @@ class Notes:
             "INSERT OR IGNORE INTO aliases (alias, title) VALUES (?, ?)",
             [(a, note.title) for a in note.aliases if a != note.title],
         )
+        # 앞머리 값. 목록·사전은 글로 펴서 담는다 — 찾을 때는 「그 말이 들었나」면 된다.
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO props (title, key, value) VALUES (?, ?, ?)",
+            [(note.title, str(k), 앞머리값(v)) for k, v in (note.extra or {}).items()
+             if str(k).strip() and v not in (None, "")],
+        )
+        self._앞머리이름 = None      # 새 이름이 생겼을 수 있다
         if commit:
             self.conn.commit()
 
@@ -2316,18 +2372,48 @@ class Notes:
         "제목": lambda v: "%" + 제목맞춤(v) + "%",
     }
 
+    #  앞머리로 좁히기. 이름과 값 **둘**을 받으므로 물음표가 두 개다.
+    _앞머리SQL = ("EXISTS (SELECT 1 FROM props p WHERE p.title = n.title "
+               "AND p.key = ? AND p.value LIKE ?)")
+
     def _narrow_sql(self, narrow: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
         """좁히는 말을 SQL 조건으로. 모르는 이름은 조용히 버린다."""
         where, args = [], []
         for kind, value in narrow:
             drop = kind.startswith("빼기:")
             base = kind[3:] if drop else kind
+            if base.startswith("앞머리:"):
+                # 값은 **앞자리 일치**로 본다(태그와 같은 규칙) — `status:resolved` 가
+                # 「resolved  # 원인 확정…」처럼 뒤에 말이 붙은 값도 잡는다.
+                where.append(f"NOT ({self._앞머리SQL})" if drop else self._앞머리SQL)
+                args.extend([base[4:], value + "%"])
+                continue
             sql = self._NARROW_SQL.get(base)
             if sql is None:
                 continue
             where.append(f"NOT ({sql})" if drop else sql)
             args.append(self._NARROW_ARG[base](value))
         return where, args
+
+    def 앞머리모음(self, titles) -> dict:
+        """그 글들의 앞머리를 `{제목: {이름: 값}}` 으로. 좁히기 제안이 이것을 센다."""
+        titles = [t for t in titles if t]
+        if not titles:
+            return {}
+        낸다: dict = {}
+        칸 = ",".join("?" * len(titles))
+        for t, k, v in self.conn.execute(
+                f"SELECT title, key, value FROM props WHERE title IN ({칸})", titles):
+            낸다.setdefault(t, {})[k] = v
+        return 낸다
+
+    def 앞머리이름들(self) -> frozenset:
+        """창고가 실제로 지닌 앞머리 이름들. 검색이 이것으로 `이름:값` 을 가른다."""
+        있는것 = getattr(self, "_앞머리이름", None)
+        if 있는것 is None:
+            있는것 = frozenset(r[0] for r in self.conn.execute("SELECT DISTINCT key FROM props"))
+            self._앞머리이름 = 있는것
+        return 있는것
 
     _정규식꼴 = re.compile(r"(?:(?<=\s)|^)/((?:\\/|[^/\s]|(?<=\\)\s)(?:\\/|[^/])*)/(?=\s|$)")
 
@@ -2377,7 +2463,7 @@ class Notes:
         — 사용자가 직접 말한 것은 관찰에 밀리지 않는다(결정 22).
         """
         q = unicodedata.normalize("NFC", q)           # 맥(NFD)에서 친 물음도 같게
-        ask = Ask(q)
+        ask = Ask(q, self.앞머리이름들())
         rows: list[sqlite3.Row] = []
         where, args = self._narrow_sql(ask.narrow)
         match = ask.match() if self.fts else ""
@@ -3799,6 +3885,42 @@ def _self_check() -> None:
         assert got('"정확한 구절"') == {"검색 모듈"}, got('"정확한 구절"')
         assert got('"구절 정확한"') == set(), "구절은 순서가 맞아야 한다"
         assert got("tag:없는것ZZZ") == set(), "좁혔는데 없으면 0건이 옳은 답이다"
+
+        # ★★ **앞머리 값으로도 찾는다**(오너 2026-09-20). 옵시디언 볼트를 들이니
+        #   `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이 없었다** —
+        #   `status:active` 가 83장을 두고 **2장**을 내놓았다(모르는 이름은 낱말로 쳤다).
+        #   0장이 아니라 2장이라, 사람은 그게 전부인 줄 안다. 그런 답이 제일 나쁘다.
+        n.write(Note(title="앞머리 가", body="몸", extra={"status": "active", "source": "오너 지시"}))
+        n.write(Note(title="앞머리 나", body="몸", extra={"status": "draft"}))
+        n.write(Note(title="앞머리 다", body="몸",
+                     extra={"status": "resolved  # 원인 확정", "tags": ["급함", "배포"]}))
+        n.reindex()
+        assert got("status:active") == {"앞머리 가"}, got("status:active")
+        assert got("status:draft") == {"앞머리 나"}, got("status:draft")
+        # 값은 앞자리로 본다 — 뒤에 주석이 붙어도 걸린다
+        assert got("status:resolved") == {"앞머리 다"}, got("status:resolved")
+        assert got("source:오너") == {"앞머리 가"}, got("source:오너")
+        # 목록 값도 펴서 담는다
+        assert "앞머리 다" in got("tags:급함"), got("tags:급함")
+        # 빼기도 된다
+        assert "앞머리 가" not in got("-status:active status:draft OR status:active"), "빼기가 안 먹는다"
+        # ★ **창고에 없는 이름은 지금까지처럼 낱말로 친다.** 글 속의 `09:30` 이나
+        #   `C:` 를 찾을 때 0장이 되면 안 된다 — 되던 것이 조용히 막히는 쪽이 더 나쁘다.
+        n.write(Note(title="시각 메모", body="회의는 09:30 에 시작한다"))
+        n.reindex()
+        assert got("09:30") == {"시각 메모"}, got("09:30")
+        assert "status" in n.앞머리이름들() and "09" not in n.앞머리이름들(), sorted(n.앞머리이름들())
+
+        # ★★ **쓰던 색인에도 채워져야 한다.** `CREATE TABLE IF NOT EXISTS` 는 표만
+        #   만들고 내용을 안 채운다 — 표만 생기고 비면 `status:` 가 **0장**이 되는데
+        #   「되기는 되는데 아무것도 안 나온다」가 제일 나쁜 꼴이다.
+        n.conn.execute("DELETE FROM props")
+        n.conn.commit()
+        n._앞머리이름 = None
+        n._앞머리채울까 = True       # 색인을 열 때 이 상태가 된다
+        n.reindex()
+        assert got("status:active") == {"앞머리 가"}, "쓰던 색인에 앞머리가 안 채워진다"
+        assert not n._앞머리채울까, "한 번 채우고 나서도 매번 전부 다시 읽는다"
         assert got("path:notes") >= {"배포 준비"}, got("path:notes")
         # ★★ **사람은 `/` 로 적는데 윈도우 경로는 `\` 다.** `path:2026/09` 가 영영
         #   안 걸렸다 — 0장이 나오는데 왜인지도 안 보였다. 적는 대로 걸려야 한다.

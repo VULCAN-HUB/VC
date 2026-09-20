@@ -30,8 +30,17 @@ def _년월(path: str) -> tuple[str, str]:
     return "", ""
 
 
-def 세기(행들: list[dict]) -> dict[str, dict[str, int]]:
-    """찾은 것들에서 갈래·태그·해·폴더를 센다."""
+# 좁히기로 쓸모가 없는 앞머리. 날짜는 `year:`·`path:` 가 이미 하고, `들인곳` 은
+# 어느 폴더에서 왔는지라 글 고르는 데 안 쓴다.
+안셀앞머리 = frozenset({"date", "날짜", "created", "들인곳", "id", "지은이"})
+
+
+def 세기(행들: list[dict], 앞머리: dict | None = None) -> dict[str, dict[str, int]]:
+    """찾은 것들에서 갈래·태그·해·폴더를 세고, **앞머리 값**도 같이 센다.
+
+    ★ 앞머리(`status: active`)는 창고가 남의 볼트에서 받아 온 것이라 이름이 저마다 다르다.
+      부르는 쪽이 `{제목: {이름: 값}}` 을 넘겨 준다 — 이 모듈은 창고를 모른다.
+    """
     표: dict[str, dict[str, int]] = {"kind": {}, "tag": {}, "year": {}, "path": {}}
 
     def 더하기(칸: str, 값: str) -> None:
@@ -45,6 +54,14 @@ def 세기(행들: list[dict]) -> dict[str, dict[str, int]]:
         더하기("path", 달)
         for t in set(TAG.findall(str(r.get("body") or ""))):
             더하기("tag", t)
+        for 이름, 값 in (앞머리 or {}).get(str(r.get("title") or ""), {}).items():
+            if 이름 in 안셀앞머리:
+                continue
+            값 = str(값).split("#")[0].strip()
+            # 값이 길면 좁히기가 안 된다 — 한 글에만 있는 긴 글귀는 권할 말이 못 된다
+            if 값 and len(값) <= 24:
+                표.setdefault(이름, {})
+                표[이름][값] = 표[이름].get(값, 0) + 1
     return 표
 
 
@@ -72,7 +89,7 @@ def 낱말제안(행들: list[dict], 물은말: str = "", 최대: int = 3) -> li
     return [w for _, _, w in 골라[:최대]]
 
 
-def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5) -> list[str]:
+def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5, 앞머리: dict | None = None) -> list[str]:
     """`["kind:결정(12)", "tag:고기(7)"]`. 좁힐 만한 게 없으면 빈 목록.
 
     [적어도] 개보다 적게 찾았으면 아무것도 안 권한다 — 몇 개 안 되면 그냥 보는 게 빠르다.
@@ -81,7 +98,7 @@ def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5) -> list[str]
     if 전체 < 적어도:
         return []
     나온것 = []
-    for 칸, 값들 in 세기(행들).items():
+    for 칸, 값들 in 세기(행들, 앞머리).items():
         for 값, 수 in 값들.items():
             if 수 < 2 or 수 >= 전체:      # 하나뿐이거나 전부면 좁히기가 아니다
                 continue
@@ -104,7 +121,7 @@ def 제안(행들: list[dict], 최대: int = 3, 적어도: int = 5) -> list[str]
     return 골라
 
 
-def 한줄(행들: list[dict], 최대: int = 3, 물은말: str = "") -> str:
+def 한줄(행들: list[dict], 최대: int = 3, 물은말: str = "", 앞머리: dict | None = None) -> str:
     """사람에게 보일 한 줄. 권할 게 없으면 빈 글.
 
     **낱말을 먼저** 권한다 — 쉼표로 덧붙이는 것이 `kind:` 문법보다 손에 익다(오너 2026-09-20).
@@ -117,7 +134,7 @@ def 한줄(행들: list[dict], 최대: int = 3, 물은말: str = "") -> str:
         첫 = 낱말[0]
         고른 = " · ".join(낱말)
         말.append(f"쉼표로 더 좁혀 — 「{물은말.strip()}, {첫}」 (쓸 만한 말: {고른})")
-    got = 제안(행들, 최대)
+    got = 제안(행들, 최대, 앞머리=앞머리)
     if got:
         말.append(f"갈래·태그로는 — {' · '.join(got)}")
     return " / ".join(말)
@@ -184,6 +201,29 @@ def _self_check() -> None:
     assert 한줄(셋, 물은말="고기").startswith("쉼표로 더 좁혀"), 한줄(셋, 물은말="고기")
     # 둘 이하면 안 권한다 — 그냥 보면 된다
     assert not 한줄(셋[:2], 물은말="고기").startswith("쉼표로")
+    # ★★ **앞머리도 좁히는 길로 권한다**(오너 2026-09-20). 되는데 안 알려 주면
+    #   없는 것과 같다 — 쉼표 좁히기도 되고 있었는데 아무도 몰랐던 것과 같은 자리다.
+    행들2 = [{"title": f"글{i}", "body": "몸", "kind": "note", "path": "2026/09/x.md"}
+           for i in range(8)]
+    # ★ 날짜·들인곳을 **반쯤 가르게** 둔다 — 그러지 않으면 「하나뿐/전부」 규칙에
+    #   저절로 걸러져, 빼는 규칙이 없어도 검사가 통과해 버린다(그래서 한 번 놓쳤다).
+    앞 = {f"글{i}": {"status": "active" if i < 3 else "draft",
+                   "date": "2026-09-01" if i < 4 else "2026-09-02",
+                   "들인곳": "볼트가" if i < 4 else "볼트나"} for i in range(8)}
+    권 = 제안(행들2, 최대=4, 앞머리=앞)
+    assert any(말.startswith("status:active(3)") for 말 in 권), 권
+    assert not any(말.startswith("date:") for 말 in 권), f"날짜를 권한다: {권}"
+    assert not any(말.startswith("들인곳") for 말 in 권), f"들인곳을 권한다: {권}"
+    # 앞머리를 안 넘기면 예전과 똑같이 돈다 — 창고를 모르는 자리에서도 쓴다
+    assert not any("status" in 말 for 말 in 제안(행들2, 최대=4)), "안 넘겼는데 앞머리가 나온다"
+    # 값이 길면 권하지 않는다(한 글에만 있는 긴 글귀는 좁히는 말이 못 된다)
+    긴앞 = {f"글{i}": {"note": "아주 길고 긴 설명이 여기에 계속 이어진다 정말로" if i < 4
+                            else "또 다른 아주 길고 긴 설명이 여기에 이어진다"} for i in range(8)}
+    assert not any(말.startswith("note:") for 말 in 제안(행들2, 최대=4, 앞머리=긴앞)), "긴 값을 권한다"
+    # ★ **사람이 보는 한 줄까지 와야 한다.** 제안만 되고 화면 문구에 안 실리면 없는 길이다.
+    줄 = 한줄(행들2, 최대=4, 물은말="글", 앞머리=앞)
+    assert "status:active" in 줄, f"앞머리가 사람이 보는 줄에 안 온다: {줄}"
+
     print("facets self-check 통과")
 
 

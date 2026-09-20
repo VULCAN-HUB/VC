@@ -1600,7 +1600,9 @@ class MainWindow(QWidget):
             # ★★ **찾은 것들 자체를 세어 좁히는 길을 권한다**(오너 2026-09-19).
             #   「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
             #   진짜로 갈라지는 것만 권한다 — 전부에 붙은 값·하나뿐인 값은 뺀다.
-            좁힐길 = facets.한줄([dict(r) for r in rows], 물은말=text)
+            _행 = [dict(r) for r in rows]
+            좁힐길 = facets.한줄(_행, 물은말=text,
+                             앞머리=self.notes.앞머리모음([r.get("title") for r in _행]))
             if 좁힐길:
                 said += f" {좁힐길}"
         else:
