@@ -1777,6 +1777,24 @@ class EBServer(ThreadingHTTPServer):
             except Exception as e:
                 _알림(f"[정리 짐작 실패] {type(e).__name__}")
                 짐작 = {}
+            # ★★ **합치기(Compile)** — `raw/` 에 모인 원본을 읽어 `wiki/` 쪽을 만든다
+            #   (오너 2026-09-20 · 카파시 LLM Wiki). 손은 갈아 끼울 수 있다 —
+            #   지금은 로컬 1차, 나중에 더 좋은 모델을 같은 문에 끼운다.
+            try:
+                import synth
+
+                import report as _자국9
+
+                # ★ **합치기는 답이 길다**(JSON 네 칸). 정리 짐작과 같은 300토큰으로 부르면
+                #   답이 잘려 아무것도 안 만들어진다 — 실측으로 `<think>` 가 400을 다 썼다.
+                합치기손 = None
+                if 모델 and (self.cfg.get("backend") or {}).get("kind") == "local":
+                    합치기손 = lambda 말: self.backend.chat(말, 모델, temperature=0, max_tokens=600)
+                합침 = synth.합치기(self.notes, 합치기손, 적기=lambda 줄: _자국9.trail(줄))
+                for 쪽 in 합침.get("만든것", []):
+                    self.notes.embed_one(self.notes.path_of(쪽))
+            except Exception as e:
+                _알림(f"[합치기 실패] {type(e).__name__}: {e}")
             got = consolidate.run(self.notes, 짐작)
             # 녹음 받아쓰기(편의 기능 14번) — 붙은 녹음을 몇 개씩. 요약은 대화 모델이 있을 때만
             try:
@@ -3084,6 +3102,54 @@ def _self_check() -> None:
     assert status == 200 and got["skills"][0]["start_tier"] == "pc"
 
     tmp.cleanup()
+
+    # ★★ **합치기(Compile)가 실제로 돈다**(오너 2026-09-20). 모델이 없으면 조용히 넘어가고,
+    #   있으면 `raw/` 원본에서 `wiki/` 요약 쪽이 생긴다. 여기서는 가짜 손을 끼워 잰다.
+    import synth as _합9
+    import tempfile as _임9
+
+    with _임9.TemporaryDirectory() as _합창고:
+        _표9 = Path(_합창고) / "합쳤다.json"
+        note_store.write(notes.Note(title="합칠 원본", body="- https://example.com/x\n몸",
+                                    kind="원본"))
+        _가짜9 = lambda 말들: '{"요점": "예제", "갈래": "개념", "태그": ["시험"], "이어질것": ["example"]}'
+        _난9 = _합9.합치기(note_store, _가짜9, 어디=_표9)
+        assert "합칠 원본 요점" in _난9["만든것"], _난9
+        _쪽9 = note_store.read("합칠 원본 요점")
+        assert _쪽9 is not None and "[[합칠 원본]]" in _쪽9.body, _쪽9
+        assert note_store.path_of("합칠 원본").parent.parent.parent.name == "raw"
+        assert note_store.path_of(_쪽9.title).parent.parent.parent.name == "wiki"
+        # 모델이 없으면 아무 일도 안 난다
+        assert _합9.합치기(note_store, None, 어디=_표9)["만든것"] == []
+
+    # ★★ **배선까지 잰다.** 위는 `합치기` 를 직접 부른 것이라, 주기 정리에서 **안 부르게**
+    #   고쳐도 통과한다(막이를 되돌려 보고 알았다). 실제 길(`consolidate_now`)로 돌려 본다.
+    note_store.write(notes.Note(title="배선 원본", body="- https://example.com/y\n몸", kind="원본"))
+    _옛백9, _옛골9, _옛설9 = server.backend, server.picked, server.cfg
+    # ★★ **검사가 진짜 앱 자리를 건드리면 안 된다.** 합치기는 「합쳤다」 표시를 기계 자리에
+    #   남기는데, 그것을 그대로 쓰면 **두 번째 실행부터 건너뛰어** 배선 검사가 터진다
+    #   (단독으로는 통과하고 `--모두검사` 에서만 터졌다 — 앞선 실행이 남긴 표시 때문이다).
+    import os as _os9
+
+    _옛상태9 = _os9.environ.get("VC_STATE")
+    _임시상태9 = _임9.TemporaryDirectory()
+    _os9.environ["VC_STATE"] = _임시상태9.name
+    try:
+        server.backend = type("가짜백엔드", (), {
+            "chat": lambda self, 말들, 모델, **곁:
+                '{"요점": "배선 시험", "갈래": "개념", "태그": [], "이어질것": []}'})()
+        server.picked = {**server.picked, "using": {"chat": "가짜모델"}}
+        server.cfg = {**server.cfg, "backend": {"kind": "local"}}
+        server.consolidate_now()
+    finally:
+        server.backend, server.picked, server.cfg = _옛백9, _옛골9, _옛설9
+        if _옛상태9 is None:
+            _os9.environ.pop("VC_STATE", None)
+        else:
+            _os9.environ["VC_STATE"] = _옛상태9
+        _임시상태9.cleanup()
+    assert note_store.read("배선 원본 요점") is not None, (
+        "주기 정리에서 합치기를 안 부른다 — 모아만 두고 영영 안 합쳐진다")
 
     # ★★ **어디서 왔는지 적힌다**(오너 2026-09-20 · 모으기). 공유로 온 원본은 `raw/` 로,
     #   내가 적은 것은 `wiki/` 로 간다 — 밖에서 가져온 것과 내 글은 다루는 법이 다르다.
