@@ -35,6 +35,7 @@ import brain
 import model_store
 import models_config
 import notes
+import wiki
 import plugins as 확장들
 import remote
 import skills
@@ -282,17 +283,29 @@ class Handler(BaseHTTPRequestHandler):
 
         # ★★ **없는 글에 처음 덧붙이는 것도 `append` 로 보낸다.** 전에는 「없으면 새로 쓰기」로 갈라져
         #   잠금 밖이었다 — 두 AI 가 같은 새 글에 동시에 쌓으면 서로 덮어 줄이 사라졌다(재 봤다).
+        # ★ **어디서 왔는지 적어 둔다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   밖에서 가져온 것과 내가 적은 것은 다루는 법이 다르다 — 원본은 안 고치고,
+        #   내 글은 고친다. 나중에 `출처:공유` 로 모아 볼 수도 있다.
+        출처 = body.get("source")
+        더할앞머리 = {}
+        if isinstance(출처, str) and 출처 in wiki.앞머리규약["출처"]:
+            더할앞머리["출처"] = 출처
+        갈래 = body.get("kind", old.kind if old else "note")
         if mode == "append":
-            path = self.server.notes.append(title, text,
-                                            body.get("kind", old.kind if old else "note"),
+            path = self.server.notes.append(title, text, 갈래,
                                             pinned=body.get("pinned") is True)
+            if 더할앞머리 and (붙인글 := self.server.notes.read(title)) is not None:
+                if not set(더할앞머리) <= set(붙인글.extra):
+                    붙인글.extra = {**더할앞머리, **붙인글.extra}
+                    path = self.server.notes.write(붙인글, path)
         else:
             note = notes.Note(
                 title=title,
                 body=text,
-                kind=body.get("kind", old.kind if old else "note"),
+                kind=갈래,
                 pinned=body.get("pinned") is True or bool(old and old.pinned),   # "false" 는 거짓
                 aliases=old.aliases if old else [],
+                extra={**더할앞머리, **(old.extra if old else {})},
             )
             path = self.server.notes.write(note)
         # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
@@ -3071,6 +3084,27 @@ def _self_check() -> None:
     assert status == 200 and got["skills"][0]["start_tier"] == "pc"
 
     tmp.cleanup()
+
+    # ★★ **어디서 왔는지 적힌다**(오너 2026-09-20 · 모으기). 공유로 온 원본은 `raw/` 로,
+    #   내가 적은 것은 `wiki/` 로 간다 — 밖에서 가져온 것과 내 글은 다루는 법이 다르다.
+    import wiki as _위키9
+
+    _받기 = lambda 몸: call("POST", "/eb/v1/memory", 몸)
+    _받기({"title": "공유로 온 원본", "text": "- https://example.com/a",
+          "kind": _위키9.원본갈래, "source": "공유", "mode": "replace"})
+    _온것 = note_store.read("공유로 온 원본")
+    assert _온것 is not None and _온것.kind == _위키9.원본갈래, _온것
+    assert _온것.extra.get("출처") == "공유", _온것.extra
+    assert note_store.path_of("공유로 온 원본").parent.parent.parent.name == _위키9.RAW, \
+        note_store.path_of("공유로 온 원본")
+    # 폰에서 적은 것은 **원본이 아니다** — 내 생각이라 `wiki/` 로 간다
+    _받기({"title": "폰에서 적은 것", "text": "곱창 먹었다", "source": "폰", "mode": "replace"})
+    _폰것 = note_store.read("폰에서 적은 것")
+    assert _폰것.extra.get("출처") == "폰", _폰것.extra
+    assert note_store.path_of("폰에서 적은 것").parent.parent.parent.name == _위키9.WIKI
+    # ★ 모르는 출처는 **적지 않는다** — 아무 말이나 앞머리에 들어가면 셀 수가 없다
+    _받기({"title": "엉뚱한 출처", "text": "몸", "source": "어디선가", "mode": "replace"})
+    assert "출처" not in (note_store.read("엉뚱한 출처").extra or {}), "모르는 출처를 그대로 적었다"
 
     server.shutdown()
 

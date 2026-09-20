@@ -1213,6 +1213,39 @@ def run() -> None:
         win.refresh()
         win.clear_detail()
 
+        # ★★ **모으기(Clip)** — 주소 하나만 치면 찾는 게 아니라 **모은다**(오너 2026-09-20).
+        #   카파시 LLM Wiki 의 첫 일이다. 오너는 크롬을 주로 쓰는데 크롬 공유는 주소만 준다.
+        import wiki as _위키8
+
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/2065297")
+        win.settle()
+        모은것 = win.notes.read("링크 · quasarzone.com")
+        assert 모은것 is not None, "주소를 쳤는데 안 모았다"
+        assert 모은것.kind == _위키8.원본갈래, 모은것.kind
+        # ★ 제목이 **주소가 아니어야** 한다 — 주소를 제목에 쓰면 파일 이름이 깨진다
+        #   (크롬에서 공유한 주소가 `https：／／…md` 로 저장된 적이 있다)
+        assert "://" not in 모은것.title and "／" not in 모은것.title, 모은것.title
+        자리 = win.notes.path_of(모은것.title).relative_to(win.notes.root).as_posix()
+        assert 자리.startswith(_위키8.RAW + "/"), f"원본이 raw 로 안 갔다: {자리}"
+        assert 모은것.extra.get("출처") == "공유", 모은것.extra
+        assert "모았어" in win._say_text, win._say_text
+        # 같은 집의 다른 주소는 **한 글에 붙는다** — 링크마다 글을 만들면 목록이 터진다
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/999")
+        win.settle()
+        assert win.notes.read("링크 · quasarzone.com").body.count("- http") == 2
+        # 같은 주소를 또 치면 **안 쌓고 알려 준다**
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/999")
+        win.settle()
+        assert win.notes.read("링크 · quasarzone.com").body.count("- http") == 2, "같은 주소가 두 번 쌓였다"
+        assert "이미 있어" in win._say_text, win._say_text
+        # ★ 주소가 아닌 말은 **그대로 찾기**여야 한다 — 모으기가 검색을 삼키면 안 된다
+        win.ask("확장")
+        win.settle()
+        assert win.notes.read("링크 · 확장") is None, "찾는 말을 모아 버렸다"
+        win.notes.delete("링크 · quasarzone.com")
+        win.refresh()
+        win.clear_detail()
+
         # ★★ **둘레만 보기**(로컬 그래프 · 오너 2026-09-20). 오너가 옵시디언에서 쓰던
         #   기능은 아니지만 「만들어 두고 필요하면 쓰게」 지시로 넣었다.
         win.notes.write(Note(title="둘레 가운데", body="[[둘레 이웃1]] 과 [[둘레 이웃2]]"))

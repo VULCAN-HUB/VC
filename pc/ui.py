@@ -69,6 +69,7 @@ from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT, GraphView
 import notes as notes_module
 import facets
 import orders
+import wiki
 import piles
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
 from skills import Skill, SkillStore, analyze
@@ -1521,6 +1522,14 @@ class MainWindow(QWidget):
             return
         started = time.monotonic()
 
+        # ★★ **주소 하나만 친 것은 찾는 말이 아니라 「모을 것」이다**(오너 2026-09-20).
+        #   카파시 LLM Wiki 의 첫 일이 **모으기(Clip)** 다 — 사람은 던지기만 하고 정리는
+        #   안 한다. 오너는 크롬을 주로 쓰는데 크롬 공유는 **주소만** 준다(쪽 제목을 안 준다).
+        #   주소를 찾는 말로 치는 일은 사실상 없으므로 여기서 가른다.
+        if wiki.주소인가(text):
+            self.원본모으기(text)
+            return
+
         # **시키는 말이면 그대로 한다.** 검색칸이 곧 지시칸이다 — 따로 두면 어느 칸에
         # 쳐야 하는지를 사람이 외워야 한다. 못 알아들으면 `None` 이라 그냥 검색으로 간다.
         # 알아듣는 일은 `orders.py` 가 하고 여기는 시키기만 한다 — 나중에 말로 시킬 때
@@ -1641,6 +1650,35 @@ class MainWindow(QWidget):
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    def 원본모으기(self, 주소: str) -> str:
+        """주소를 **원본으로 모은다**(모으기 · Clip). `raw/` 에 갈래 `원본` 으로 들어간다.
+
+        ★ 제목은 `링크 · quasarzone.com` 꼴이다. 주소를 그대로 제목에 쓰면 파일 이름이
+          `https：／／…` 로 깨진다(크롬에서 공유한 주소가 실제로 그렇게 저장됐다).
+        """
+        주소 = 주소.strip()
+        제목 = wiki.원본제목(주소)
+        있던 = self.notes.read(제목)
+        # 같은 집에서 온 것이 이미 있으면 **덧붙인다** — 링크마다 글을 하나씩 만들면
+        # 「링크 · quasarzone.com」 이 수십 개가 된다.
+        몸 = f"- {주소}"
+        if 있던 is not None and 주소 in 있던.body:
+            self.show_note(제목)
+            self.report(f"「{제목}」 에 이미 있어.", [제목])
+            return 제목
+        if 있던 is not None:
+            self.notes.append(제목, 몸, kind=wiki.원본갈래)
+        else:
+            self.notes.write(Note(title=제목, body=f"# {제목}\n\n{몸}\n",
+                                  kind=wiki.원본갈래,
+                                  extra={"출처": "공유", "상태": "살아있음"}))
+        self.refresh()
+        # ★ **글을 먼저 열고 말은 나중에.** 거꾸로 하면 여는 쪽이 자기 말로 덮어
+        #   「모았어」가 사라진다(재 보고 알았다 — 「링크 · … 얘기야」만 남았다).
+        self.show_note(제목)
+        self.report(f"모았어 — 「{제목}」 ({wiki.RAW}/ 에 둔다). 합치기는 VC 가 한다.", [제목])
+        return 제목
 
     def 둘레보기(self) -> None:
         """지금 보는 글과 **이어진 것만** 그래프에 남긴다. 다시 부르면 전체로 돌아간다.

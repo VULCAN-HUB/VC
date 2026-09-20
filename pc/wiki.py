@@ -74,6 +74,33 @@ def 자리(갈래: str, 연월: str) -> str:
     return f"{층(갈래)}/{연월}"
 
 
+_주소꼴 = __import__("re").compile(r"^https?://\S+$", __import__("re").I)
+
+
+def 주소인가(글: str) -> bool:
+    """친 말이 **주소 하나뿐**인가. 앞뒤 공백은 봐 준다."""
+    return bool(_주소꼴.match((글 or "").strip()))
+
+
+def 원본제목(주소: str) -> str:
+    """주소로 모은 원본의 제목. `링크 · quasarzone.com` 꼴.
+
+    ★★ 주소를 그대로 제목에 쓰면 **파일 이름이 엉망이 된다** — 크롬에서 공유한 주소가
+      `https：／／quasarzone.com／bbs／qn_hardware／v.md` 로 저장됐다(`:` `/` 가 전각으로
+      바뀐다). 크롬은 대개 **주소만** 주고 쪽 제목을 안 준다(사파리는 준다) —
+      「보내는 쪽이 제목을 주겠지」에 기대면 안 된다.
+    """
+    from urllib.parse import urlparse
+
+    집 = ""
+    try:
+        집 = (urlparse(주소.strip()).hostname or "").strip()
+    except ValueError:
+        집 = ""
+    집 = 집[4:] if 집.startswith("www.") else 집
+    return f"링크 · {집}" if 집 else "링크"
+
+
 def 스키마글() -> str:
     """창고에 두는 규칙 글. **위 표에서 짓는다** — 손으로 다시 적지 않는다."""
     줄 = ["# 이 창고를 쓰는 법", "",
@@ -127,6 +154,16 @@ def _self_check() -> None:
     assert 아는갈래(기본갈래) and not 아는갈래("없는갈래ZZZ")
     assert 자리("결정", "2026/09") == "wiki/2026/09", 자리("결정", "2026/09")
     assert 자리(원본갈래, "2026/09") == "raw/2026/09", 자리(원본갈래, "2026/09")
+
+    # ★ 주소 하나만 친 것은 **찾는 말이 아니라 모을 것**이다(오너는 크롬을 주로 쓴다).
+    assert 주소인가("https://quasarzone.com/bbs/qn_hardware/views/2065297")
+    assert 주소인가("  http://example.com/a?b=1  ")
+    assert not 주소인가("고기 먹음") and not 주소인가("http://a b")
+    assert not 주소인가(""), "빈 글을 주소로 본다"
+    # 제목은 **주소가 아니라 사람 말**이어야 한다 — 주소를 제목에 쓰면 파일 이름이 깨진다
+    assert 원본제목("https://www.quasarzone.com/bbs/x") == "링크 · quasarzone.com"
+    assert 원본제목("https://example.com") == "링크 · example.com"
+    assert "/" not in 원본제목("https://a.b/c/d") and ":" not in 원본제목("https://a.b/c/d")
 
     글 = 스키마글()
     # ★★ **글은 표에서 짓는다.** 두 군데 적으면 갈라진다 — 갈래를 더하고 글을 안 고치면
