@@ -28,7 +28,7 @@ from typing import Callable
 
 import paths
 import wiki
-from notes import Note, Notes
+from notes import Note, Notes, parse_links
 
 메모 = "vc-합쳤다.json"
 한바퀴 = 3          # 한 번에 몇 장. 많이 잡으면 모델이 오래 돌아 화면이 굳는다
@@ -208,6 +208,25 @@ def 요약글(원본제목: str, 난것: dict) -> str:
     if 태그:
         줄 += ["", " ".join(f"#{t.lstrip('#')}" for t in 태그)]
     return chr(10).join(줄) + chr(10)
+
+
+_원본줄 = re.compile(r"(?m)^\s*원본\s*:\s*(.+)$")
+
+
+def 원본선언(몸: str) -> set[str]:
+    """이 쪽이 「**내 원본은 이것**」이라고 밝힌 것들.
+
+    `요약글()` 이 반드시 다는 `원본: [[…]]` 줄을 읽는다. 사람이 손으로 쓴 쪽도 같은
+    줄을 쓰므로 **누가 지었든 같은 표시**다.
+
+    ★ 그냥 원본을 **가리키기만** 하는 것(엮음 글의 「읽은 것」 목록)과 다르다.
+      그 둘을 안 가르면 엮음 글 하나가 원본 여섯을 「내가 요약했다」고 주장하게 된다.
+    """
+    낸다 = set()
+    for m in _원본줄.finditer(몸 or ""):
+        for 이름, _ in parse_links(m.group(1)):
+            낸다.add(이름)
+    return 낸다
 
 
 def 합치기(창고: Notes, 부르기: Callable[[list[dict]], str] | None,
