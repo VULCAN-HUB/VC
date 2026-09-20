@@ -1176,13 +1176,14 @@ def _self_check() -> None:
             # 살펴보면 **무엇이 들어가는지 숫자로** 보인다 — 창고는 아직 그대로다
             들임창.들임살펴보기()
             본말 = 들임창.들임말.text()
-            assert "2장" in 본말 and "error" in 본말, 본말
+            # 갈래는 **새 기준 이름**으로 옮겨져 들어온다(2026-09-21) —  가 아니라 
+            assert "2장" in 본말 and "오류" in 본말, 본말
             assert n.read("첫 글") is None, "살펴보기가 창고를 건드렸다"
             들임창.들임들이기()
             assert "2장 들였다" in 들임창.들임말.text(), 들임창.들임말.text()
             assert "**" not in 들임창.들임말.text(), f"별표가 글자로 보인다: {들임창.들임말.text()}"
             들어온 = n.read("첫 글")
-            assert 들어온 is not None and 들어온.kind == "error", 들어온
+            assert 들어온 is not None and 들어온.kind == "오류", 들어온
             # ★ 별칭으로 열린다 = 볼트의 [[링크]]가 이어진다
             assert n.read("2026-06-12-b") is not None and n.read("2026-06-12-b").title == "둘째 글"
             # ★★ **들인 뒤 곧바로 찾아져야 한다.** 파일만 놓고 색인을 안 고치면 글은

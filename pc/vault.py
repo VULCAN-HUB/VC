@@ -32,10 +32,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import ingest
+import wiki
 from notes import Note, Notes, parse_links, 제목맞춤
 
 # 들인 글에 적어 두는 열쇠. 한글이라 볼트의 `source`·`type` 과 부딪히지 않는다.
 온곳열쇠 = "들인곳"
+
+#  ★★ **폴더가 갈래를 말해 준다.** 옵시디언 볼트는 폴더로 종류를 갈라 두는 것이 흔하고
+#  (오너 볼트가 그랬다: `wiki/errors`·`wiki/decisions`…), `type` 앞머리보다 **더 믿을 만하다** —
+#  날짜가 없어 `type` 이 빠진 글도 폴더는 제 자리에 있었다(실측: 「검사가 다 통과해도 구운
+#  것으로는 안 돌 수 있다」가 `type` 없이 `wiki/guidelines` 에 있었다).
+#  새 기준(`wiki.갈래들`)으로 **옮겨** 담는다 — 옛 이름을 그대로 두면 기준이 둘이 된다.
+폴더갈래 = {
+    "dev-tasks": "작업", "dev-task": "작업",
+    "errors": "오류", "error": "오류",
+    "decisions": "결정", "decision": "결정",
+    "projects": "엔티티", "project": "엔티티",
+    "guidelines": "규칙", "guideline": "규칙",
+    "design": "설계", "sources": "출처요약", "source": "출처요약",
+    "concepts": "개념", "concept": "개념",
+    "conversations": "메모",
+}
+
+#  창고를 **돌리던 틀**이 사는 자리. 새 창고에는 이미 제 스키마·지도·일지가 있으므로
+#  이것들이 기준 노릇을 하면 안 된다 — 버리지는 않고 `상태: 끝남` 으로 내려 둔다.
+#  (오너 2026-09-21: 「현재 구현한 창고의 기준이 메인이다」)
+틀폴더 = ("", "prompts", "scripts", "templates")
+
+#  남의 `status` 를 우리 `상태` 로. **원래 값은 지우지 않는다**(`status` 로도 찾을 수 있다).
+상태옮김 = {
+    "active": "살아있음", "open": "살아있음", "wip": "살아있음",
+    "draft": "보류", "planning": "보류", "todo": "보류", "paused": "보류",
+    "resolved": "끝남", "done": "끝남", "closed": "끝남", "design-complete": "끝남",
+    "superseded": "버림", "archived": "버림", "dropped": "버림",
+}
 
 _표제 = re.compile(r"^#[ \t]+(.+?)[ \t]*$", re.M)
 _앞날짜 = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
@@ -152,16 +182,34 @@ def 한장(파일: Path, 뿌리: Path) -> 들일것 | None:
     # ★ `Note.loads` 는 앞머리가 없으면 갈래를 기본값 `note` 로 채운다 — 그것과
     #   **사람이 적은 `kind: note`** 를 구별해야 「날짜도 갈래도 없는 틀 문서」를 가려낼 수 있다.
     적힌갈래 = bool(re.search(r"^kind:[ \t]*\S", raw.split("---", 2)[1], re.M)) if _앞머리.match(raw) else False
-    갈래 = str(남의것.pop("type", "") or (임시.kind if 적힌갈래 else "") or "").strip()
+    상대 = 파일.relative_to(뿌리).as_posix()
+    안 = "/".join(상대.split("/")[:-1])
+    마지막칸 = 안.split("/")[-1] if 안 else ""
+    옛갈래 = str(남의것.pop("type", "") or (임시.kind if 적힌갈래 else "") or "").strip()
+    # 폴더 → 옛 갈래 이름 → (마지막으로) 날짜 유무. 폴더가 가장 믿을 만하다.
+    갈래 = 폴더갈래.get(마지막칸) or 폴더갈래.get(옛갈래) or ""
+    끝난것 = 마지막칸 in 틀폴더 and not 갈래
     날짜 = 날짜뽑기(남의것, 파일.stem, 파일)
     # 날짜가 글에도 이름에도 없으면 **기록이 아니라 틀**이다(볼트에서 23장이 그랬다:
     # README·START_HERE·AGENTS·index·log·prompts/*). 갈래로 갈라 두면 평소 검색에 안 섞인다.
-    있는날짜 = bool(str(남의것.get("date") or 남의것.get("날짜") or "").strip()
-                 or _앞날짜.match(파일.stem))
     if not 갈래:
-        갈래 = "note" if 있는날짜 else "틀"
+        갈래 = wiki.기본갈래          # 모르면 `메모` — 나중에 합치기가 다시 본다
+    # 남의 `status` 를 우리 `상태` 로. 원래 값은 그대로 둔다(둘 다로 찾을 수 있다).
+    남의상태 = str(남의것.get("status") or "").split("#")[0].strip().lower()
+    새상태 = 상태옮김.get(남의상태, "")
+    if 끝난것:
+        새상태 = "끝남"            # 옛 창고를 돌리던 틀 — 기준 노릇을 하면 안 된다
+    if 새상태:
+        남의것["상태"] = 새상태
+    # ★ 남의 앞머리에 이미 `출처` 가 있으면 **비켜 준다.** 우리 규약과 이름만 같고 뜻이 다르다
+    #   (실측: 「VC v0.1.32~33 작업(2026-09-02), 실측」). 지우지 않고 `원래출처` 로 옮긴다 —
+    #   안 옮기면 규약 밖 값이 남아 살피기가 매번 걸고, 덮으면 적어 둔 것을 잃는다.
+    남의출처 = str(남의것.get("출처") or "").strip()
+    if 남의출처 and 남의출처 not in wiki.앞머리규약["출처"]:
+        남의것.setdefault("원래출처", 남의출처)
+        남의것.pop("출처", None)
+    남의것.setdefault("출처", "볼트")
     별칭 = list(임시.aliases)
-    상대 = 파일.relative_to(뿌리).as_posix()
     # ★★ 별칭 둘: **파일 이름**과 **폴더까지 붙은 이름**. 옵시디언은 `[[post-build-qa]]` 로도
     #   `[[prompts/post-build-qa]]` 로도 같은 글을 가리킨다 — 실제 볼트에 둘 다 있었다
     #   (경로꼴 링크 6개가 끊긴 것으로 세어져 잡았다). 이 두 줄이 [[링크]] 775개를 잇는다.
@@ -266,7 +314,19 @@ def _self_check() -> None:
         assert len(본다.것들) == 4, [것.제목 for 것 in 본다.것들]
         # 줄끝이 CRLF 여도 앞머리가 읽혀야 한다
         윈 = next(것 for 것 in 본다.것들 if 것.제목 == "윈도우에서 적은 글")
-        assert 윈.갈래 == "dev-task", f"CRLF 파일의 갈래가 날아갔다: {윈.갈래}"
+        # ★ **폴더가 `type` 을 이긴다.** 날짜가 없어 `type` 이 빠진 글도 폴더는 제 자리에
+        #   있었다(실측). 둘이 어긋나면 폴더를 믿는다 — 여기서는 `wiki/errors` 라 `오류`.
+        assert 윈.갈래 == "오류", f"폴더를 안 믿는다: {윈.갈래}"
+        assert 윈.남의것.get("status") == "active", "남의 status 를 지웠다"
+        assert 윈.남의것.get("상태") == "살아있음", f"상태를 새 규약으로 안 옮겼다: {윈.남의것}"
+        assert 윈.남의것.get("출처") == "볼트", 윈.남의것
+        # 남의 `출처` 는 비켜 주되 **안 지운다**
+        (뿌리 / "wiki" / "errors" / "2026-07-02-남의출처.md").write_text(
+            "---\ntype: error\ndate: 2026-07-02\n출처: 어느 세션에서 실측\n---\n"
+            "# 남의 출처가 있는 글\n\n본문.\n", encoding="utf-8")
+        남 = next(것 for 것 in 살펴보기(뿌리).것들 if 것.제목 == "남의 출처가 있는 글")
+        assert 남.남의것.get("출처") == "볼트", 남.남의것
+        assert 남.남의것.get("원래출처") == "어느 세션에서 실측", 남.남의것
         assert 윈.날짜.startswith("2026-07"), 윈.날짜
         assert 윈.남의것.get("status") == "active", 윈.남의것
         assert "\r" not in 윈.몸, "본문에 윈도우 줄끝이 남았다"
@@ -280,28 +340,33 @@ def _self_check() -> None:
         # 폴더까지 붙은 이름으로도 가리킬 수 있어야 한다(옵시디언이 그렇게 쓴다).
         # ※ `/` 는 파일 이름에 못 쓰므로 창고가 전각 `／` 로 모은다 — 찾는 쪽도 같은 길을 지난다.
         assert 제목맞춤("wiki/errors/2026-06-12-qt-korean-path") in 하나.별칭, 하나.별칭
-        assert 하나.갈래 == "error", 하나.갈래                      # type → 갈래
+        assert 하나.갈래 == "오류", 하나.갈래       # 폴더(`wiki/errors`) → 새 갈래
         assert 하나.날짜.startswith("2026-06"), 하나.날짜            # date → 연/월 자리
         assert 하나.남의것.get("status") == "done", 하나.남의것       # 남의 앞머리는 지고 간다
         assert "type" not in 하나.남의것, "갈래로 옮긴 것이 두 번 적힌다"
         # ★ **쪼개지 않는다.** ingest 는 110/119 장을 도막냈다.
         assert "[[2026-08-05-grilling]]" in 하나.몸 and "#긴급" in 하나.몸, 하나.몸
         assert not 하나.몸.lstrip().startswith("---"), "앞머리가 본문에 남았다"
-        # 날짜가 없는 것은 **틀**이다
+        # ★ 창고 **맨 위**의 글은 그 창고를 돌리던 틀이다 — 새 기준과 경쟁하면 안 되므로
+        #   `메모` + `상태: 끝남` 으로 내려 둔다(오너 2026-09-21: 「새 창고 기준이 메인」).
         틀 = next(것 for 것 in 본다.것들 if 것.제목 == "볼트 안내")
-        assert 틀.갈래 == "틀", 틀.갈래
+        assert 틀.갈래 == wiki.기본갈래, 틀.갈래
+        assert 틀.남의것.get("상태") == "끝남", 틀.남의것
+        # 모든 갈래가 **새 기준 안**에 있어야 한다 — 옛 이름이 섞이면 기준이 둘이 된다
+        for 것 in 본다.것들:
+            assert wiki.아는갈래(것.갈래) and 것.갈래 not in ("dev-task", "error"), 것.갈래
         # 끊긴 링크는 있는 그대로 알린다 — 이어진 것을 끊겼다고 세면 안 된다
         끊긴 = {이름 for _, 이름 in 본다.끊긴링크}
         assert 끊긴 == {"없는 글"}, 본다.끊긴링크
         assert not 본다.겹침 and not 본다.못읽음, (본다.겹침, 본다.못읽음)
-        assert 본다.갈래셈.get("error") == 1 and 본다.갈래셈.get("틀") == 1, 본다.갈래셈
-        assert "4장" in 본다.한줄() and "error" in 본다.한줄(), 본다.한줄()
+        assert 본다.갈래셈.get("오류") == 3 and 본다.갈래셈.get(wiki.기본갈래) == 1, 본다.갈래셈
+        assert "4장" in 본다.한줄() and "오류" in 본다.한줄(), 본다.한줄()
 
         창고 = Notes(Path(tmp) / "창고")
         난것 = 들이기(창고, 본다)
         assert len(난것["넣음"]) == 4 and not 난것["터짐"], 난것
         들어온것 = 창고.read("Qt 가 한글 경로를 버린다")
-        assert 들어온것 is not None and 들어온것.kind == "error"
+        assert 들어온것 is not None and 들어온것.kind == "오류"
         assert 들어온것.extra.get("status") == "done", 들어온것.extra
         assert 들어온것.extra.get(온곳열쇠, "").startswith("내볼트/"), 들어온것.extra
         # ★★ **별칭으로 열린다** = 볼트의 [[링크]]가 이어진다는 뜻이다
@@ -326,7 +391,7 @@ def _self_check() -> None:
 
         # 한꺼번에 되돌린다 — 사람이 적은 글은 남는다
         뺀것 = 되돌리기(창고, "내볼트")
-        assert len(뺀것) == 3, 뺀것
+        assert len(뺀것) == 4, 뺀것
         assert 창고.read("Qt 가 한글 경로를 버린다") is None, "되돌렸는데 남았다"
         assert 창고.read("볼트 안내") is not None, "사람이 적은 글까지 뺐다"
 
