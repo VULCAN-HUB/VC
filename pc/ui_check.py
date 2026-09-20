@@ -1287,6 +1287,40 @@ def run() -> None:
             win.notes.delete(t)
         win.refresh()
 
+        # ★★ **살핌 칸**(오너 2026-09-20 · 카파시 LLM Wiki 의 넷째 일). 위키는 저절로
+        #   자라니 스스로 어긋난다 — 가리키는데 없는 글, 아무와도 안 이어진 쪽,
+        #   모아만 두고 안 합친 원본. **모델이 없어도 돈다**(기계가 확실히 아는 것만 본다).
+        import audit as _살핌8
+        import wikilog as _일지7
+
+        assert win.audit_fold.head.text().rstrip().endswith("+"), "살핌 칸이 펴진 채다"
+        win.notes.write(Note(title="살핌 개념", body="[[없는 글ZZZ]] 을 가리킨다", kind="개념"))
+        win.notes.write(Note(title="살핌 원본", body="- https://a.example/1", kind=_위키8.원본갈래))
+        win.refresh()
+        win.살핌그리기()
+        win.settle()
+        살핌줄 = [b.text() for b in win.audit.findChildren(QPushButton)]
+        붙인 = " ".join(살핌줄)
+        assert "살핌 개념" in 붙인 and "없는 글ZZZ" in 붙인, 살핌줄
+        assert "살핌 원본" in 붙인, 살핌줄
+        # ★ 줄을 누르면 그 글로 간다 — 보여 주기만 하고 못 가면 소용없다
+        갈줄 = [b for b in win.audit.findChildren(QPushButton) if b.text().strip().startswith("살핌 개념")]
+        assert 갈줄, 살핌줄
+        갈줄[0].click()
+        win.settle()
+        assert win.detail_title.text() == "살핌 개념", win.detail_title.text()
+        # ★ 살핀 것도 일이다 — 일지에 남는다
+        일지2 = (Path(win.notes.root) / _일지7.LOG).read_text(encoding="utf-8")
+        assert " | 살피기 | " in 일지2, 일지2[-200:]
+        # ★ **고치지 않는다** — 살피기는 보여 주기만 한다
+        전몸 = win.notes.read("살핌 개념").body
+        win.살핌그리기()
+        assert win.notes.read("살핌 개념").body == 전몸, "살피다가 글을 고쳤다"
+        for t in ("살핌 개념", "살핌 원본"):
+            win.notes.delete(t)
+        win.refresh()
+        win.clear_detail()
+
         # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 자리다.
         win.notes.write(Note(title="폴더칸 글", body="몸", created="2019-04-07T09:00:00Z"))
         win.refresh()

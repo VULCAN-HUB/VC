@@ -785,6 +785,17 @@ class MainWindow(QWidget):
         self._앞머리연것 = ""
         self.props_fold = Folded("앞머리", "글에 적힌 값(status·source…). 눌러 그 값만 모아 본다", self.props)
 
+        # ★ **살핌 칸**(오너 2026-09-20 · 카파시 LLM Wiki 의 넷째 일). 위키는 저절로 자라니
+        #   **스스로 어긋난다** — 가리키는데 없는 글, 아무와도 안 이어진 쪽, 모아만 두고
+        #   안 합친 원본. 펼 때 살핀다(늘 돌면 큰 창고에서 켤 때마다 훑게 된다).
+        self.audit = QWidget()
+        self._살핌줄 = QVBoxLayout(self.audit)
+        self._살핌줄.setContentsMargins(0, 0, 0, 0)
+        self._살핌줄.setSpacing(2)
+        self.audit_fold = Folded("살핌", "창고가 성한지 본다 — 끊긴 링크·외톨이 쪽·안 합친 원본",
+                                 self.audit)
+        self.audit_fold.head.clicked.connect(lambda: self._later(self.살핌그리기))
+
         # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 「파일 탐색기」
         #   자리다. VC 는 새 글을 연/월에 두지만 **사람이 옮겨 둔 자리는 지키므로**
         #   창고에는 제 나름의 폴더가 생긴다. 평소엔 접어 둔다.
@@ -796,6 +807,7 @@ class MainWindow(QWidget):
 
         self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
         self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
+        side.addWidget(self.audit_fold)
         side.addWidget(self.folders_fold)
         side.addWidget(self.props_fold)
         side.addWidget(self.gaps_fold)
@@ -2204,6 +2216,45 @@ class MainWindow(QWidget):
             return
         for 이름, 수 in 이름들:
             줄(f"{이름}  {수}", lambda k=이름: self._앞머리열기(k))
+
+    def 살핌그리기(self) -> None:
+        """창고를 살펴 어긋난 것을 줄로 늘어놓는다. 누르면 그 글로 간다."""
+        import audit
+
+        while self._살핌줄.count():
+            w = self._살핌줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+        def 줄(말: str, 눌렀을때=None, 흐리게: bool = False) -> None:
+            b = QPushButton(말)
+            b.setObjectName("quiet")
+            b.setMinimumWidth(1)
+            b.setStyleSheet("text-align:left; padding:1px 4px;"
+                            + (f"color:{theme.T.DIM.name()};" if 흐리게 else ""))
+            if 눌렀을때 is not None:
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(lambda _=False: self._later(눌렀을때))
+            self._살핌줄.addWidget(b)
+
+        난것 = audit.살피기(self.notes)
+        self._살핀것 = 난것
+        if all(not v for v in 난것.values()):
+            줄("창고는 성하다 — 어긋난 데가 없어", 흐리게=True)
+            return
+        for 갈래, 것들 in 난것.items():
+            if not 것들:
+                continue
+            줄(f"{audit.제목들[갈래]}  {len(것들)}", 흐리게=True)
+            for 하나 in 것들[:6]:
+                제목 = 하나[0] if isinstance(하나, tuple) else 하나
+                꼬리 = f" → {하나[1]}" if isinstance(하나, tuple) else ""
+                줄(f"    {제목}{꼬리}", lambda t=제목: self.show_note(t))
+            if len(것들) > 6:
+                줄(f"    … {len(것들) - 6}개 더", 흐리게=True)
+        # 살핀 것도 일이다 — 일지에 한 줄 남긴다
+        wikilog.적기(self.notes, "살피기", audit.한줄(난것))
 
     def 폴더그리기(self) -> None:
         """폴더 나무를 다시 짓는다. 누르면 그 안의 글만 모은다."""
