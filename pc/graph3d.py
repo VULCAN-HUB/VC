@@ -49,8 +49,8 @@ OLD_ROOT = "이비"  # 옛 이름. 켤 때 한 번 옮긴다
 # 값이 흩어지면 언젠가 갈라진다(같은 판단을 두 군데서 하면 갈라진다: `태그인가` 의 교훈).
 # 오너 2026-09-20: 「활성화됐을 때 선 두께와 밝기만 줄여줘」 — 굵은 깔개(5px)를 빼고
 # 가는 선 하나로. 이어진 것이 112개인 항목이 있어 굵게 밝히면 화면이 통째로 붉어졌다.
-손선굵기 = 1.0
-손선밝기 = 150
+손선굵기 = 0.8
+손선밝기 = 105
 
 RADIUS = {"agent": 33.6, "skill": 19.2}
 RADIUS_OTHER = 8.4
@@ -1172,19 +1172,13 @@ class GraphView(QGraphicsView):
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
 
         # 연결선. 말하는 항목에 닿은 선은 함께 밝아진다 — 말이 어디로 흐르는지 보이게.
-        # ★★ **평소 선은 표식을 피해 간다**(오너 2026-09-20). 표식은 뒤가 비치는 위젯이라
-        #   선이 획 사이로 보여 글자를 가로지르는 것처럼 읽혔다. 표식이 앉은 자리를
-        #   그리지 않는 곳으로 잘라 둔다 — 손 얹은 선은 `_선위층` 이 그 위에 다시 그린다.
+        # ★★ **표식에 가려지는 것은 표식 스스로 한다**(오너 2026-09-20).
+        #   처음엔 표식 자리를 둥글게 잘라내 선을 피하게 했는데, **잘린 자리가 그대로
+        #   둥근 테두리로 보였다** — 오너가 「로고 주변에 원이 생긴다」고 짚었다.
+        #   표식은 뷰포트 자식 위젯이라 장면의 선보다 늘 위에 그려진다. 그냥 두면
+        #   **획이 있는 자리에서만** 선이 가려진다 — 그것이 바라는 모습이다.
+        #   (손 얹은 선만 `_선위층` 이 표식 위에 다시 그려 끊기지 않게 한다.)
         painter.save()
-        표식자리 = self.mapToScene(self.mark.geometry()).boundingRect() if self.mark.isVisible() else None
-        if 표식자리 is not None:
-            # 글자와 불티 링만 비운다. 네모째로 비우면 둘레가 휑하게 잘려 보인다.
-            반 = min(표식자리.width(), 표식자리.height()) * 0.30
-            비울 = QPainterPath()
-            비울.addEllipse(표식자리.center(), 반, 반)
-            온통 = QPainterPath()
-            온통.addRect(rect)
-            painter.setClipPath(온통.subtracted(비울))
 
         for src, dst in self.edges:
             a, b = self.nodes.get(src), self.nodes.get(dst)
@@ -2052,7 +2046,11 @@ def _self_check() -> None:
     # (검사 글 자체가 세어지지 않게 조각을 붙여 만든다)
     꼴 = "theme.T.ACCENT, " + "손선밝기), " + "손선굵기"
     assert 본문.count(꼴) == 2, f"손 얹은 선을 두 곳에서 따로 그린다: {본문.count(꼴)}군데"
-    assert 손선굵기 <= 1.2 and 손선밝기 <= 170, (손선굵기, 손선밝기)
+    assert 손선굵기 <= 1.0 and 손선밝기 <= 130, (손선굵기, 손선밝기)
+    # ★ **로고 둘레에 원을 그리지 않는다.** 표식 자리를 둥글게 잘라냈더니 그 자리가
+    #   테두리로 보였다(오너가 짚었다). 가리는 일은 표식 위젯이 제 모양대로 한다.
+    자름 = "set" + "ClipPath"
+    assert 자름 not in 본문, "표식 자리를 잘라낸다 — 로고 둘레에 원이 생긴다"
 
     치우.set_hover(None)
     치우.deleteLater()
