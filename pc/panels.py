@@ -765,6 +765,12 @@ def _꾸밈벗기기(글: str) -> str:
     return 글
 
 
+def 번호뗀말(말: str) -> str:
+    """줄 앞에 붙인 번호(`3. `)를 뗀 **제목 그대로**. 번호는 보여 주려고만 붙인다."""
+    앞, 점, 뒤 = 말.partition(". ")
+    return 뒤 if 앞.isdigit() and 뒤 else 말
+
+
 class Results(QWidget):
     """찾은 것 목록. 제목과 **걸린 자리 한 줄**을 같이 보여준다.
 
@@ -775,9 +781,13 @@ class Results(QWidget):
     picked = pyqtSignal(str)
     picked_at = pyqtSignal(str)   # 그 파일을 콕 집어 열 때(제목이 겹칠 수 있다)
 
-    def __init__(self, limit: int = 8) -> None:
+    def __init__(self, limit: int = 8, 번호매김: bool = False) -> None:
         super().__init__()
         self.limit = limit
+        # ★ 찾은 것 목록만 줄 앞에 번호를 적는다(오너 2026-09-20 · 마우스 없이 쓰기).
+        #   `Ctrl+1`~`9` 로 바로 여는데 **번호가 안 보이면 줄을 세어야 한다** — 그럼 안 쓴다.
+        #   최근 목록에는 안 적는다: 거기 숫자키는 아무 데도 안 걸려서 거짓말이 된다.
+        self.번호매김 = 번호매김
         self.rows = QVBoxLayout(self)
         self.rows.setContentsMargins(2, 0, 2, 0)
         self.rows.setSpacing(1)
@@ -834,12 +844,13 @@ class Results(QWidget):
             w.setParent(None)
             w.deleteLater()
         self.items = []
-        for hit in hits[:self.limit]:
+        for 몇, hit in enumerate(hits[:self.limit]):
             # 파일 자리까지 온 것은 **그 파일**을 연다. 제목만 보고 다시 찾으면
             # 같은 이름이 둘일 때 엉뚱한 쪽이 열린다.
             title, body, where = (tuple(hit) + ("", ""))[:3]
             갈래 = (tuple(hit) + ("", "", "", ""))[3]
-            b = QPushButton(title)
+            # 번호는 아홉까지만 — 열째부터는 누를 키가 없으니 적지 않는다(없는 길을 알리지 않는다)
+            b = QPushButton(f"{몇 + 1}. {title}" if self.번호매김 and 몇 < 9 else title)
             b.setObjectName("quiet")
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet("text-align:left; padding:2px 6px;")

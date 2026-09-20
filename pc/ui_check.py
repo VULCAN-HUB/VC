@@ -29,7 +29,7 @@ import theme
 import ui
 from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT
 from notes import Note, Notes, flip_task, headings, section
-from panels import ServerLink
+from panels import ServerLink, 번호뗀말
 from store import Store
 from ui import GRAPH_LIMIT, MainWindow
 from ui import ModelPicker, QLabel, QPushButton, RemoteGateCard
@@ -1035,7 +1035,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("확장")
-        줄들 = [b.text() for b in win.results.findChildren(QPushButton)]
+        줄들 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
         assert any("확장 계획" in t for t in 줄들), f"글이 안 보인다: {줄들}"
         assert any(t.startswith("\u2699") and "창 열기" in t for t in 줄들), f"창 줄이 없다: {줄들}"
         assert "설정 창" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
@@ -1059,7 +1059,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("상태창열어줘")
-        줄들2 = [b.text() for b in win.results.findChildren(QPushButton)]
+        줄들2 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
         assert any("상태창열어줘" in t for t in 줄들2), f"말끝이 붙은 제목의 글이 사라졌다: {줄들2}"
 
         # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
@@ -1084,7 +1084,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("설정창")
-        줄들3 = [b.text() for b in win.results.findChildren(QPushButton)]
+        줄들3 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
         assert any("설정창" == t for t in 줄들3), f"그 글이 안 보인다: {줄들3}"
         assert any(t.startswith("\u2699") for t in 줄들3), f"창 여는 줄이 사라졌다: {줄들3}"
         assert not any("창 창" in t for t in 줄들3), f"「창」이 두 번 적힌다: {줄들3}"
@@ -1095,7 +1095,7 @@ def run() -> None:
         win.graph.clear_focus()
         win.clear_detail()
         win.ask("설정창열어줘")
-        줄들4 = [b.text() for b in win.results.findChildren(QPushButton)]
+        줄들4 = [번호뗀말(b.text()) for b in win.results.findChildren(QPushButton)]
         assert any("설정창열어줘" == t for t in 줄들4), f"그 글이 안 보인다: {줄들4}"
         assert any(t.startswith("\u2699") for t in 줄들4), f"창 여는 줄이 사라졌다: {줄들4}"
         assert "설정 창이야" not in win._say_text, f"글을 제목 그대로 쳤는데 창이 열렸다: {win._say_text}"
@@ -1130,9 +1130,71 @@ def run() -> None:
         _글자 = _키9(_이벤트9.KeyPress, Qt.Key_A, Qt.NoModifier)
         assert win.eventFilter(win.ask_box, _글자) is not True, "거름망이 글자 키까지 먹는다"
 
+        # ★★ **숫자로 바로 고르기**(오너 2026-09-20). ↑↓ 로 여덟 번 내려가는 것과
+        #   `Ctrl+3` 한 번은 다른 물건이다. 번호가 **보여야** 쓸 수 있으므로 화면에
+        #   적히는 것까지 같이 잰다.
+        assert 줄들5[0].text().startswith("1. "), f"결과 줄에 번호가 안 보인다: {줄들5[0].text()!r}"
+        assert 번호뗀말(줄들5[1].text()) != 줄들5[1].text(), "둘째 줄에 번호가 없다"
+        assert not any(b.text().startswith(("1. ", "2. "))
+                       for b in win.recent.findChildren(QPushButton)), "최근 목록에 없는 숫자키를 적었다"
+        win.editing = None
+        둘째 = 번호뗀말(줄들5[1].text())
+        _둘 = _키9(_이벤트9.KeyPress, Qt.Key_2, Qt.ControlModifier)
+        assert win.eventFilter(win.ask_box, _둘) is True, "Ctrl+2 가 안 걸린다"
+        win.settle()
+        assert win.editing == 둘째, f"Ctrl+2 로 둘째 줄이 안 열렸다: {win.editing} ≠ {둘째}"
+        # 결과 줄에 손이 가 있으면 **맨숫자**로도 열린다(Ctrl 을 같이 누를 일이 없다)
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들6 = win._결과단추들()
+        # ⚙(창 여는 줄)은 글이 아니라 창을 연다 — 글인 줄을 골라 잰다
+        글줄 = next(i for i, b in enumerate(줄들6) if not 번호뗀말(b.text()).startswith("\u2699"))
+        그글 = 번호뗀말(줄들6[글줄].text())
+        win.editing = None
+        _맨n = _키9(_이벤트9.KeyPress, Qt.Key_1 + 글줄, Qt.NoModifier)
+        assert win.eventFilter(줄들6[글줄], _맨n) is True, "결과 줄에서 숫자키가 안 걸린다"
+        win.settle()
+        assert win.editing == 그글, f"숫자키로 그 줄이 안 열렸다: {win.editing} ≠ {그글}"
+        # ★ **찾기 칸에서 치는 숫자는 건드리지 않는다.** 이걸 먹으면 「2026」을 못 친다.
+        assert win.eventFilter(win.ask_box, _맨n) is not True, "찾기 칸의 숫자를 거름망이 먹는다"
+        # 없는 번호는 조용히 지나간다 — 세 줄뿐인데 Ctrl+9 로 엉뚱한 것이 열리면 안 된다
+        _아홉 = _키9(_이벤트9.KeyPress, Qt.Key_9, Qt.ControlModifier)
+        if len(줄들6) < 9:
+            assert win.eventFilter(win.ask_box, _아홉) is not True, "없는 번호를 먹는다"
+
+        # ★★ **그래프도 키보드로 돈다**(오너 2026-09-20). 전에는 끌어야만 옮겨졌다.
+        win.clear_detail()
+        간데 = win.graph.키로시작()
+        assert 간데, "그래프에 손을 못 얹는다"
+        assert win.graph.hover == 간데, f"손 얹은 자리가 안 잡힌다: {win.graph.hover}"
+        다음 = win.graph.키로옮기기(1)
+        assert 다음 and 다음 != 간데 or len(win.graph.nodes) == 1, f"옆으로 못 옮긴다: {간데} → {다음}"
+        assert win.graph.키로옮기기(-1) == 간데, "되돌아오지 못한다 — 앞뒤가 안 맞는다"
+        열린것 = []
+        win.graph.node_clicked.connect(lambda t: 열린것.append(t))
+        win.graph.keyPressEvent(_키9(_이벤트9.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        assert 열린것 == [win.graph.hover], f"그래프에서 Enter 가 안 먹는다: {열린것}"
+        win.graph.keyPressEvent(_키9(_이벤트9.KeyPress, Qt.Key_Right, Qt.NoModifier))
+        assert win.graph.hover != 간데 or len(win.graph.nodes) == 1, "→ 가 안 먹는다"
+        assert win.graph.focusPolicy() != Qt.NoFocus, "그래프가 초점을 못 받는다 — 키가 오지 않는다"
+        win.graph.clear_focus()
+
         # 단축키 목록(F1)에 이 길이 적혀 있어야 한다 — 되는데 안 적히면 없는 길이다
         도움 = win.단축키글()
         assert "결과" in 도움 and "↓" in 도움, 도움[-200:]
+        assert "Ctrl+1" in 도움, f"숫자키가 안 적혔다: {도움[-300:]}"
+        # ★ 글에 적힌 것만 보면 모자란다 — 「Ctrl+G 로 들어간다」는 안내문이 창안키 줄에
+        #   있어서, 단축키를 **떼어내도** 글에는 그대로 남았다(막이 되돌리기에서 잡혔다).
+        #   그러니 **표에 진짜 매여 있는지**, 그리고 눌렀을 때 그래프가 잡히는지를 잰다.
+        그키 = [f for k, f, _ in win.단축키표 if k == "Ctrl+G"]
+        assert 그키, f"Ctrl+G 가 단축키 표에 없다: {[k for k, _, _ in win.단축키표]}"
+        win.graph.clear_focus()
+        win.graph.hover = None
+        그키[0]()
+        assert win.graph.hover, "Ctrl+G 를 눌렀는데 그래프에 손이 안 얹힌다"
+        assert "그래프" in win._say_text, f"어디로 갔는지 말해 주지 않는다: {win._say_text}"
+        assert "Ctrl+G" in 도움 and "그래프" in 도움, f"그래프 키가 안 적혔다: {도움[-300:]}"
 
         # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
         win.graph.clear_focus()
@@ -1264,7 +1326,7 @@ def run() -> None:
         # 태그를 누르면 그 태그가 붙은 것끼리 모인다. 하위 태그는 상위로도 걸린다.
         win.show_tag("팔월")
         win.settle()
-        titles = [w.text() for w in win.results.items if isinstance(w, QPushButton)]
+        titles = [번호뗀말(w.text()) for w in win.results.items if isinstance(w, QPushButton)]
         assert set(titles) == {"8월 계획", "주간 보고"}, titles
 
         # 없는 이름을 따라가면 그 자리에서 만든다 — 끊긴 채로 두지 않는다.
@@ -1375,7 +1437,7 @@ def run() -> None:
         win.refresh()
         assert "24" in [b.text() for b in win.years.buttons], [b.text() for b in win.years.buttons]
         win.show_year("2024")
-        found = [w.text() for w in win.results.items if isinstance(w, QPushButton)]
+        found = [번호뗀말(w.text()) for w in win.results.items if isinstance(w, QPushButton)]
         assert found == ["재작년 견적"], found
         notes.delete("재작년 견적")
         win.show_results([])

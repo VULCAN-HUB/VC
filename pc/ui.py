@@ -626,7 +626,7 @@ class MainWindow(QWidget):
         # 신호를 받는 자리에서 곧장 미룬다 — 한 곳에서 막아야 새로 잇는 것도 안전하다.
         self.years.picked.connect(lambda y: self._later(lambda: self.show_year(y)))
 
-        self.results = Results()
+        self.results = Results(번호매김=True)
         self.results.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
         self.results.picked_at.connect(lambda w: self._later(lambda: self._목록에서열기(w)))
         self.results_head = theme.section("찾은 것", "검색·태그로 걸린 항목. 눌러서 연다")
@@ -1200,6 +1200,8 @@ class MainWindow(QWidget):
             #   아니라 창 안에서 도는 키라 표에 「(키)」로만 적는다 — F1 목록에서 보이게.
             ("F1", lambda: self.단축키보기(), "이 목록"),
             ("F11", lambda: settings.toggle_full(self), "전체화면 켜고 끄기"),
+            # ★ 마우스 없이 그래프를 돌기(오너 2026-09-20). 지금 보는 글부터 잡는다.
+            ("Ctrl+G", lambda: self.그래프잡기(), "그래프로 — ↑↓←→ 로 옮기고 Enter 로 열기"),
             ("Ctrl+,", lambda: settings.open_dialog(self, self.notes), "설정 · 내 정보"),
             ("Esc", self.escape, "닫기 · 목록 접기"),
         )
@@ -1218,7 +1220,9 @@ class MainWindow(QWidget):
     창안키 = (("↓", "찾기 칸에서 결과 목록으로"),
             ("↑ · ↓", "결과 줄 오르내리기 (맨 위에서 ↑ 면 찾기 칸으로)"),
             ("Enter", "고른 결과 열기"),
-            ("Esc", "결과에서 찾기 칸으로 돌아가기"))
+            ("Ctrl+1~9", "결과 몇째 줄을 바로 열기 (결과에 손이 가 있으면 숫자만)"),
+            ("Esc", "결과에서 찾기 칸으로 돌아가기"),
+            ("↑↓←→", "그래프에서 이어진 것 사이를 옮기기 (Ctrl+G 로 들어간다)"))
 
     def 단축키글(self) -> str:
         """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""
@@ -1276,7 +1280,14 @@ class MainWindow(QWidget):
         #   창 단축키가 Esc 를 먼저 가로채므로 여기서 처리해야 걸린다 — 거름망에 둬 봤자 안 온다.
         from PyQt5.QtWidgets import QApplication as _앱
 
-        if self._결과줄(_앱.instance().focusWidget()) is not None:
+        손 = _앱.instance().focusWidget()
+        # ★ 그래프에 손이 얹혀 있으면(Ctrl+G) Esc 로 찾기 칸에 돌아온다 — 들어갈 길만
+        #   있고 나올 길이 없으면 키보드만 쓰는 사람은 **갇힌다**.
+        if 손 is not None and (손 is self.graph or self.graph.isAncestorOf(손)):
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
+            return
+        if self._결과줄(손) is not None:
             self.ask_box.setFocus()
             self.ask_box.selectAll()
             return
@@ -1307,6 +1318,15 @@ class MainWindow(QWidget):
         #   찾기 칸에서 ↓ 를 누르면 결과 첫 줄로, 결과에서 ↑↓ 로 오르내리고 Enter 로 연다.
         #   전에는 결과로 가려면 **탭을 여남은 번** 눌러야 했다 — 검색→고르기→열기가
         #   키보드로 끊겨 있었다. 이 고리가 없으면 「키보드로 다 된다」는 말이 거짓이다.
+        # ★ **숫자로 바로 고르기**(오너 2026-09-20). `Ctrl+1`~`9` 는 어디서든, 결과 줄에
+        #   손이 가 있으면 숫자만 눌러도 된다 — 찾기 칸에서는 숫자를 **글자로** 쳐야 하므로
+        #   Ctrl 이 붙을 때만 받는다(안 그러면 「2026」을 못 친다).
+        if event.type() == QEvent.KeyPress and Qt.Key_1 <= event.key() <= Qt.Key_9:
+            컨트롤 = bool(event.modifiers() & Qt.ControlModifier)
+            if 컨트롤 or self._결과줄(obj) is not None:
+                if self._결과고르기(event.key() - Qt.Key_1):
+                    return True
+
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Down, Qt.Key_Up):
             if obj is self.ask_box and event.key() == Qt.Key_Down:
                 if self._결과줄로(0) is not None:
@@ -1590,6 +1610,15 @@ class MainWindow(QWidget):
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
 
+    def 그래프잡기(self) -> None:
+        """그래프에 손을 얹는다(Ctrl+G). 지금 펼친 글이 있으면 그 점부터."""
+        지금 = self.detail_title.text().strip() or None
+        간데 = self.graph.키로시작(지금)
+        if 간데 is None:
+            self.report("그래프에 아직 점이 없어.", [ROOT])
+            return
+        self.report(f"그래프야 — 지금 {간데}. ↑↓←→ 로 옮기고 Enter 로 열어. Esc 면 찾기 칸.", [간데])
+
     def _결과단추들(self) -> list:
         """결과 목록의 줄 단추들(차례대로). 키보드로 오르내릴 때 쓴다."""
         from PyQt5.QtWidgets import QPushButton
@@ -1597,6 +1626,14 @@ class MainWindow(QWidget):
         # ★ **보이기 여부에 기대지 않는다.** 창을 안 띄운 자리(자체점검·오프스크린)에서는
         #   `isVisible()` 이 거짓이라 줄을 하나도 못 찾았다 — 결과가 비면 단추 자체가 없다.
         return list(self.results.findChildren(QPushButton))
+
+    def _결과고르기(self, 몇: int) -> bool:
+        """결과 목록의 `몇` 번째 줄을 누른 것처럼 연다(숫자키). 없으면 False."""
+        줄들 = self._결과단추들()
+        if not (0 <= 몇 < len(줄들)):
+            return False
+        줄들[몇].click()
+        return True
 
     def _결과줄(self, obj) -> int | None:
         """이 위젯이 결과 목록의 몇 번째 줄인가. 아니면 None."""

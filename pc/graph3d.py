@@ -368,6 +368,8 @@ class GraphView(QGraphicsView):
         # 손을 안 댄 채 이만큼 지나면 표식을 저절로 제자리로 되돌린다(초). **0이면 끔.**
         # 값은 설정에서 정하고 `ui` 가 넣어 준다 — 여기 기본은 「아무것도 안 함」이다.
         self.자동제자리초 = 0.0
+        # 키보드로도 그래프를 돌 수 있어야 한다(오너 2026-09-20) — 초점을 받게 둔다
+        self.setFocusPolicy(Qt.StrongFocus)
         self.focus: set[str] = set()
         # 장면에서 뺀 노드를 한 판 동안 붙들어 두는 자리(위 `load` 설명 참고).
         self._retired: list = []
@@ -1194,6 +1196,78 @@ class GraphView(QGraphicsView):
         while item is not None and not isinstance(item, NodeItem):
             item = item.parentItem()
         return item if isinstance(item, NodeItem) else None
+
+    # --- 키보드로 그래프 돌기(오너 2026-09-20: 마우스 없이도 써야 한다) ------------
+    def 이웃들(self, title: str) -> list[str]:
+        """그 항목과 **이어진 것들**(이름순). 없으면 빈 목록."""
+        got = set()
+        for src, dst in self.edges:
+            if src == title:
+                got.add(dst)
+            elif dst == title:
+                got.add(src)
+        return sorted(g for g in got if g in self.nodes)
+
+    def 키로시작(self, title: str | None = None) -> str | None:
+        """그래프에 손을 얹는다. 고른 것이 없으면 가운데(또는 첫 항목)부터.
+
+        여기서 **기준**을 잡는다 — 이제 ←→ 는 이 기준에 이어진 것들만 돈다.
+        """
+        if title and title in self.nodes:
+            머물 = title
+        elif self.hover and self.hover in self.nodes:
+            머물 = self.hover
+        else:
+            보이는 = [t for t, n in self.nodes.items() if not n.dim] or list(self.nodes)
+            if not 보이는:
+                return None
+            머물 = ROOT if ROOT in 보이는 else 보이는[0]
+        self._키기준 = 머물
+        self.set_hover(머물)
+        self.setFocus()
+        return 머물
+
+    def _키고리(self) -> list[str]:
+        """지금 도는 차례 — **기준과 거기 이어진 것들**. 이어진 게 없으면 온 항목."""
+        기준 = getattr(self, "_키기준", None)
+        if 기준 not in self.nodes:
+            return sorted(self.nodes)
+        이웃 = self.이웃들(기준)
+        return [기준] + 이웃 if 이웃 else sorted(self.nodes)
+
+    def 키로옮기기(self, 걸음: int) -> str | None:
+        """기준에 이어진 것들 사이를 한 칸 옮긴다.
+
+        ★ **차례를 기준에 붙박아 둔다.** 옮길 때마다 「지금 것의 이웃」으로 차례를 다시
+          짜면 → 다음 ← 가 **온 자리로 안 돌아온다**(실기에서 잡혔다). 앞뒤가 안 맞는
+          움직임은 사람이 길을 잃는다. 이어진 것을 더 파고들려면 Enter 로 들어간다.
+        """
+        if not self.nodes:
+            return None
+        if getattr(self, "_키기준", None) not in self.nodes:
+            return self.키로시작()
+        돌목록 = self._키고리()
+        지금 = self.hover if self.hover in 돌목록 else self._키기준
+        자리 = 돌목록.index(지금) if 지금 in 돌목록 else 0
+        다음 = 돌목록[(자리 + 걸음) % len(돌목록)]
+        self.set_hover(다음)
+        return 다음
+
+    def keyPressEvent(self, event) -> None:
+        """↑↓←→ 로 옮기고 Enter 로 연다. **마우스가 없어도 그래프를 돈다.**"""
+        키 = event.key()
+        if 키 in (Qt.Key_Left, Qt.Key_Up):
+            self.키로옮기기(-1)
+            return
+        if 키 in (Qt.Key_Right, Qt.Key_Down):
+            self.키로옮기기(1)
+            return
+        if 키 in (Qt.Key_Return, Qt.Key_Enter) and self.hover:
+            # 들어간 자리를 **새 기준**으로 삼는다 — 이제 ←→ 는 그것의 이웃을 돈다
+            self._키기준 = self.hover
+            self.node_clicked.emit(self.hover)
+            return
+        super().keyPressEvent(event)
 
     def set_hover(self, title: str | None) -> None:
         """손 얹힌 항목과 **그에 이어진 것들**에 표시를 건다.
