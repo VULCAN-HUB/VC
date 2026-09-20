@@ -641,11 +641,28 @@ def 둘레(body: str, 물음: str, 폭: int = 400) -> tuple[str, bool]:
     return body[start:end], (start > 0 or end < len(body))
 
 
+_울타리 = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)")
+_홑따옴 = re.compile(r"`[^`\n]*`")
+
+
+def _코드지우기(body: str) -> str:
+    """코드 울타리와 홑따옴표 안을 **빈칸으로 지운다.**
+
+    ★★ 규칙·서식 글은 `[[링크]]` 꼴을 **예시로** 적는다. 그것을 링크로 세면
+       「가리키는데 없는 글」이 계속 잡히고(실제로 `[[링크]]`·`[[제목]]`·`[[다른이름]]`
+       6개가 그랬다), 그래프에 **아무것도 아닌 점**이 생긴다. 옵시디언도 코드 안은 안 센다.
+    """
+    지움 = _울타리.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), body)
+    return _홑따옴.sub(lambda m: " " * len(m.group(0)), 지움)
+
+
 def parse_links(body: str) -> list[tuple[str, str]]:
     """본문에서 (대상, 소제목)을 뽑는다. 보이는 글자는 연결과 무관해서 버린다.
 
     첨부(`![[사진.png]]`)는 뺀다 — 항목이 아니라 파일이다.
+    **코드 울타리·홑따옴표 안은 안 센다** — 거기 적힌 것은 예시다.
     """
+    body = _코드지우기(body)
     # ponytail: 경로 구분자(/ \)는 안 바꾼다 — 「A/B」 제목으로 건 링크는 resolve 가 잡지만
     #   역링크 목록에서는 빠진다. 그런 제목이 흔해지면 링크 표에 맞춘 꼴을 따로 둔다.
     return [(_링크맞춤(m.group(1).strip()), (m.group(2) or "").strip())
@@ -2837,6 +2854,15 @@ class Notes:
         row = self.conn.execute("SELECT title FROM aliases WHERE alias = ?", (name,)).fetchone()
         if row:
             return row["title"]
+        # ★★ **대소문자는 안 가린다** — 옵시디언이 그렇다. 별칭은 소문자 슬러그로 들어오는데
+        #   사람은 `[[SnapStamp]]` 라고 적는다. 안 가려야 그 링크가 닿는다(6개가 끊겼었다).
+        #   정확히 맞는 것이 다 진 다음의 마지막 길이라, 제 이름으로 불린 글이 밀리지 않는다.
+        for 표, 칸 in (("notes", "title"), ("aliases", "alias")):
+            row = self.conn.execute(
+                f"SELECT title FROM {표} WHERE {칸} = ? COLLATE NOCASE "
+                "ORDER BY title LIMIT 1", (name,)).fetchone()
+            if row:
+                return row["title"]
         # 경로로 건 링크 — 옵시디언은 `[[폴더/노트]]`를 받는다. 실제 기록에 그렇게 적힌
         # 링크가 있어서, 마지막 조각으로 한 번 더 찾는다.
         if "/" in name or "\\" in name:
@@ -3292,6 +3318,16 @@ def _self_check() -> None:
         assert n.resolve("직장") == "회사" and n.resolve("사무실") == "회사"
         assert n.resolve("회사") == "회사"
         assert n.resolve("없는이름") is None
+        # ★★ **대소문자는 안 가린다** — 볼트 별칭은 소문자 슬러그(`snapstamp`)로 들어오는데
+        #   사람은 `[[SnapStamp]]` 라고 적는다. 안 가려야 닿는다(실제로 6개가 끊겼었다).
+        n.write(Note(title="SnapStamp (프로젝트 4번)", body="네 번째.", aliases=["snapstamp"]))
+        assert n.resolve("SnapStamp") == "SnapStamp (프로젝트 4번)", n.resolve("SnapStamp")
+        assert n.resolve("SNAPSTAMP") == "SnapStamp (프로젝트 4번)"
+        # 정확히 맞는 것이 늘 먼저다 — 대소문자 무시가 제 이름을 빼앗으면 안 된다
+        n.write(Note(title="snapstamp", body="딴 글이다."))
+        assert n.resolve("snapstamp") == "snapstamp", n.resolve("snapstamp")
+        n.delete("snapstamp")
+        n.delete("SnapStamp (프로젝트 4번)")
         assert n.neighbors("아침") == ["회사"], n.neighbors("아침")
         assert n.neighbors("회사") == ["아침"], "별칭으로 온 역링크를 놓친다"
         # ★ **열기도 별칭으로 돼야 한다.** 링크만 닿고 `read` 는 404 였다 —
@@ -3872,6 +3908,13 @@ def _self_check() -> None:
         assert not is_attachment("그냥 항목")
         # 표 안 링크 `[[제목\|보일 말]]` — 제목 끝에 `\` 가 붙으면 끊긴 링크다
         assert parse_links("| [[제품 · a-1\\|a-1]] | [[회의#8월\\|보기]] |") == [("제품 · a-1", ""), ("회의", "8월")]
+        # ★★ **코드 안의 `[[…]]` 는 링크가 아니다** — 규칙 글은 그 꼴을 예시로 적는다
+        assert parse_links("앞 `[[링크]]` 뒤") == [], parse_links("앞 `[[링크]]` 뒤")
+        assert parse_links("```\n[[예시]]\n```\n[[진짜]]") == [("진짜", "")], \
+            parse_links("```\n[[예시]]\n```\n[[진짜]]")
+        assert parse_links("~~~md\n[[예시]]\n~~~") == []
+        # 울타리가 안 닫혀도 끝까지 코드로 본다 — 반만 지우면 뒤가 제멋대로다
+        assert parse_links("```\n[[예시]]") == []
         # 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번)
         n.write(Note(title="표시 시험", body="몸"))
         g = n.mark("표시 시험", pinned=True, archived=True, color="노랑")

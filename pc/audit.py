@@ -63,7 +63,12 @@ def 살피기(창고: Notes) -> dict[str, list]:
         이름 = 제목맞춤(str(이름).split("#")[0].split("|")[0].strip())
         if 이름 in 글들 or 이름 in 온창고:
             return 이름
-        return 별칭.get(이름, "")
+        if 이름 in 별칭:
+            return 별칭[이름]
+        # ★★ 여기서 멈추면 **살피기가 제 나름의 링크 풀이를 갖게 된다.** 실제로 갈라졌다 —
+        #   창고는 대소문자를 안 가리는데(`[[SnapStamp]]` → `snapstamp`) 여기는 가려서,
+        #   멀쩡히 닿는 링크 6개를 「없는 글」이라고 했다. 진짜 풀이에 물어 끝낸다.
+        return 창고.resolve(이름) or ""
 
     끊긴링크, 가리킨수 = [], {t: 0 for t in 글들}
     나간수 = {t: 0 for t in 글들}
@@ -86,8 +91,11 @@ def 살피기(창고: Notes) -> dict[str, list]:
     # 모아만 두고 안 합친 원본 — 요약 쪽이 없는 것
     import synth
 
+    # ★ 제목 규칙만 보지 않는다 — **아무 쪽도 안 가리키는** 원본이 진짜 「안 합친」 것이다
+    #   (큰 정리가 지은 쪽은 제 이름을 갖는다).
+    이어진 = synth.이미이어진것(창고)
     안합친원본 = sorted(t for t in 글들
-                   if 층of[t] == wiki.RAW and synth.요약제목(t) not in 글들)
+                   if 층of[t] == wiki.RAW and synth.요약제목(t) not in 글들 and t not in 이어진)
 
     # 지도에 실렸나. 지도가 없으면 **전부 지도 밖**이다(아직 한 번도 안 지었다).
     지도 = ""
@@ -180,6 +188,11 @@ def _self_check() -> None:
                        kind="개념"))
         난것2 = 살피기(창고)
         assert 난것2["안합친원본"] == [], 난것2["안합친원본"]
+        # ★ 제목이 달라도 **원본을 가리키면** 합쳐진 것이다
+        창고.write(Note(title="원본 나", body="- https://b.example/2", kind=wiki.원본갈래))
+        assert "원본 나" in 살피기(창고)["안합친원본"]
+        창고.write(Note(title="딴 이름 요약", body="요점.\n\n원본: [[원본 나]]", kind="개념"))
+        assert "원본 나" not in 살피기(창고)["안합친원본"], "제목만 보고 안 합쳤다고 한다"
         # 이어졌으니 원본도 「가리켜진」 것이 된다
         assert "원본 가 요점" not in 난것2["외톨이"], 난것2["외톨이"]
 
