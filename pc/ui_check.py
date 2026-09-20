@@ -1213,6 +1213,23 @@ def run() -> None:
         win.refresh()
         win.clear_detail()
 
+        # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 자리다.
+        win.notes.write(Note(title="폴더칸 글", body="몸", created="2019-04-07T09:00:00Z"))
+        win.refresh()
+        win.settle()
+        assert win.folders_fold.head.text().rstrip().endswith("+"), "폴더 칸이 펴진 채다"
+        폴더줄 = [b.text() for b in win.folders.findChildren(QPushButton)]
+        assert any("2019" in t for t in 폴더줄), 폴더줄
+        assert any(t.startswith("    ") for t in 폴더줄), f"나무가 안 접혀 보인다: {폴더줄}"
+        누를 = [b for b in win.folders.findChildren(QPushButton) if b.text().strip().startswith("04")]
+        assert 누를, 폴더줄
+        누를[0].click()
+        win.settle()
+        assert win.ask_box.text().startswith("path:2019"), f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}"
+        assert "폴더칸 글" in {줄제목(b) for b in win.results.findChildren(QPushButton)}
+        win.notes.delete("폴더칸 글")
+        win.refresh()
+
         # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 오른쪽에 늘 띄워 두던
         #   칸이다(볼트 `workspace.json` 으로 확인). `status:` 로 찾는 것은 되는데
         #   창고가 **무엇을 적어 왔는지 한눈에 보는** 길이 없었다.

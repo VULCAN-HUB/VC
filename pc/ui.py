@@ -783,8 +783,18 @@ class MainWindow(QWidget):
         self._앞머리연것 = ""
         self.props_fold = Folded("앞머리", "글에 적힌 값(status·source…). 눌러 그 값만 모아 본다", self.props)
 
+        # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 「파일 탐색기」
+        #   자리다. VC 는 새 글을 연/월에 두지만 **사람이 옮겨 둔 자리는 지키므로**
+        #   창고에는 제 나름의 폴더가 생긴다. 평소엔 접어 둔다.
+        self.folders = QWidget()
+        self._폴더줄 = QVBoxLayout(self.folders)
+        self._폴더줄.setContentsMargins(0, 0, 0, 0)
+        self._폴더줄.setSpacing(2)
+        self.folders_fold = Folded("폴더", "창고의 폴더. 눌러 그 안의 글만 모아 본다", self.folders)
+
         self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
         self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
+        side.addWidget(self.folders_fold)
         side.addWidget(self.props_fold)
         side.addWidget(self.gaps_fold)
         side.addWidget(self.years_fold)
@@ -1022,6 +1032,7 @@ class MainWindow(QWidget):
         self.years.show_years(self.notes.by_year())
         self._최근채우기()
         self.앞머리그리기()      # 창고가 무엇을 적어 왔는지도 같이 새로 센다
+        self.폴더그리기()
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
@@ -2119,6 +2130,40 @@ class MainWindow(QWidget):
             return
         for 이름, 수 in 이름들:
             줄(f"{이름}  {수}", lambda k=이름: self._앞머리열기(k))
+
+    def 폴더그리기(self) -> None:
+        """폴더 나무를 다시 짓는다. 누르면 그 안의 글만 모은다."""
+        while self._폴더줄.count():
+            w = self._폴더줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        나무 = self.notes.폴더나무()
+        if not 나무:
+            빈줄 = QPushButton("아직 폴더가 없어")
+            빈줄.setObjectName("quiet")
+            빈줄.setMinimumWidth(1)
+            빈줄.setStyleSheet(f"text-align:left; padding:1px 4px; color:{theme.T.DIM.name()};")
+            self._폴더줄.addWidget(빈줄)
+            return
+        길: list[str] = []
+        for 이름, 깊이, 수 in 나무:
+            del 길[깊이:]
+            길.append(이름)
+            안 = "/".join(길)
+            b = QPushButton("    " * 깊이 + f"{이름}  {수}")
+            b.setObjectName("quiet")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumWidth(1)
+            b.setStyleSheet("text-align:left; padding:1px 4px;")
+            b.clicked.connect(lambda _=False, a=안: self._later(lambda: self._폴더로찾기(a)))
+            self._폴더줄.addWidget(b)
+
+    def _폴더로찾기(self, 안: str) -> None:
+        """그 폴더 글만 모은다. 앞머리 칸과 같이 **친 말을 찾기 칸에도 적는다.**"""
+        말 = f"path:{안}"
+        self.ask_box.setText(말)
+        self.ask(말)
 
     def _앞머리로찾기(self, 이름: str, 값: str) -> None:
         """그 값으로 찾는다. **친 말을 찾기 칸에도 적는다** — 왜 이것이 나왔는지 보이고,

@@ -289,6 +289,19 @@ PIECE_RE = re.compile(r'(-?)(?:(\w+):)?(?:"([^"]*)"|(\S+))')
 
 # 좁히는 말과 그것이 걸리는 곳. 여기 없는 이름(`tag:`가 아닌 `xyz:`)은 **그냥 낱말
 # 둘**로 친다 — 값만 남기고 이름을 버리면 `결정:22` 같은 진짜 글자가 조용히 사라진다.
+def 라이크(값: str) -> str:
+    """`LIKE` 에 넣을 글자에서 **와일드카드를 막는다.**
+
+    ★★ SQL `LIKE` 에서 `_` 는 「아무 글자 하나」, `%` 는 「아무 글자들」이다. 그대로 넣으면
+      **찾는 글자가 아닌 것이 걸린다** — 실제로 `path:_정리` 가 「_정리 폴더의 1장」 대신
+      「제목에 '정리'가 든 3장」까지 **4장**을 내놓았다(폴더 칸을 만들다 잡았다).
+      창고에는 `_서식`·`_정리` 처럼 밑줄로 시작하는 폴더가 있고, 제목·태그에도 들어갈 수 있다.
+      쓰는 쪽은 반드시 `ESCAPE '\\'` 를 같이 적는다.
+    """
+    return (str(값).replace("\\", "\\\\")
+            .replace("%", "\\%").replace("_", "\\_"))
+
+
 def 앞머리값(v) -> str:
     """앞머리 값을 **찾을 수 있는 한 줄**로 편다.
 
@@ -2353,28 +2366,29 @@ class Notes:
 
     #  좁히는 말이 걸리는 곳. 값 하나를 물음표로 받는다.
     _NARROW_SQL = {
-        "태그": "EXISTS (SELECT 1 FROM tags g WHERE g.title = n.title AND g.tag LIKE ?)",
-        "경로": "n.path LIKE ?",
+        "태그": ("EXISTS (SELECT 1 FROM tags g WHERE g.title = n.title "
+               "AND g.tag LIKE ? ESCAPE '\\')"),
+        "경로": "n.path LIKE ? ESCAPE '\\'",
         "종류": "n.kind = ?",
         "해": "substr(n.created, 1, 4) = ?",
-        "제목": "n.title LIKE ?",
+        "제목": "n.title LIKE ? ESCAPE '\\'",
     }
     _NARROW_ARG = {
-        "태그": lambda v: v.lstrip("#") + "%",
+        "태그": lambda v: 라이크(v.lstrip("#")) + "%",
         # ★★ **윈도우 경로는 `\` 인데 사람은 `/` 로 적는다.** `path:2026/09` 가 영영
         #   안 걸렸다 — 0장이 나오는데 왜인지도 안 보였다. 적는 대로 걸리게 바꿔 준다.
         #   ※ 전에는 `chr(92)` 로 **늘** 바꿔서, 「맥·리눅스에서는 아무 일도 안 일어난다」는
         #     주석과 달리 맥에서는 `2026/09` 가 `2026\09` 가 되어 되레 0장이 됐다.
         #     `os.sep` 를 쓰면 윈도우에서만 바뀌고 맥은 적은 그대로 간다.
-        "경로": lambda v: "%" + v.replace("/", os.sep) + "%",
+        "경로": lambda v: "%" + 라이크(v.replace("/", os.sep)) + "%",
         "종류": lambda v: v,
         "해": lambda v: v,
-        "제목": lambda v: "%" + 제목맞춤(v) + "%",
+        "제목": lambda v: "%" + 라이크(제목맞춤(v)) + "%",
     }
 
     #  앞머리로 좁히기. 이름과 값 **둘**을 받으므로 물음표가 두 개다.
     _앞머리SQL = ("EXISTS (SELECT 1 FROM props p WHERE p.title = n.title "
-               "AND p.key = ? AND p.value LIKE ?)")
+               "AND p.key = ? AND p.value LIKE ? ESCAPE '\\')")
 
     def _narrow_sql(self, narrow: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
         """좁히는 말을 SQL 조건으로. 모르는 이름은 조용히 버린다."""
@@ -2386,7 +2400,7 @@ class Notes:
                 # 값은 **앞자리 일치**로 본다(태그와 같은 규칙) — `status:resolved` 가
                 # 「resolved  # 원인 확정…」처럼 뒤에 말이 붙은 값도 잡는다.
                 where.append(f"NOT ({self._앞머리SQL})" if drop else self._앞머리SQL)
-                args.extend([base[4:], value + "%"])
+                args.extend([base[4:], 라이크(value) + "%"])
                 continue
             sql = self._NARROW_SQL.get(base)
             if sql is None:
@@ -2405,6 +2419,40 @@ class Notes:
         for t, k, v in self.conn.execute(
                 f"SELECT title, key, value FROM props WHERE title IN ({칸})", titles):
             낸다.setdefault(t, {})[k] = v
+        return 낸다
+
+    def 폴더나무(self) -> list[tuple[str, int, int]]:
+        """창고의 폴더를 `(보일 이름, 깊이, 글 수)` 로. **빈 폴더는 안 낸다.**
+
+        옵시디언의 「파일 탐색기」가 하는 일이다. VC 는 새 글을 연/월에 두지만
+        **사람이 옮겨 둔 자리는 지키므로**, 창고에는 제 나름의 폴더가 생긴다.
+        """
+        셈: dict[str, int] = {}
+        for (자리,) in self.conn.execute("SELECT path FROM notes"):
+            try:
+                안 = Path(자리).parent.relative_to(self.root).as_posix()
+            except ValueError:
+                continue
+            if 안 == "." or any(조각.startswith(".") for 조각 in Path(안).parts):
+                안 = "" if 안 == "." else 안
+                if 안 == "" :
+                    셈[""] = 셈.get("", 0) + 1
+                continue
+            셈[안] = 셈.get(안, 0) + 1
+        # 위 폴더도 세어 둔다 — 「2026」 을 눌러 그 해 전부를 볼 수 있어야 한다
+        모두: dict[str, int] = {}
+        for 안, 수 in 셈.items():
+            모두[안] = 모두.get(안, 0) + 수
+            조각 = Path(안).parts if 안 else ()
+            for i in range(1, len(조각)):
+                위 = "/".join(조각[:i])
+                모두[위] = 모두.get(위, 0) + 수
+        낸다 = []
+        for 안 in sorted(x for x in 모두 if x):
+            조각 = Path(안).parts
+            낸다.append((조각[-1], len(조각) - 1, 모두[안]))
+        if 셈.get(""):
+            낸다.insert(0, ("(맨 위)", 0, 셈[""]))
         return 낸다
 
     def 앞머리세기(self, 최대: int = 20) -> list[tuple[str, int]]:
@@ -2515,9 +2563,10 @@ class Notes:
             # **아무것도 못 찾는 것보다는 낫다.** 좁히는 말이 있었다면 안 한다 —
             # `tag:없는것`이 0건인 것은 옳은 답이지 실패가 아니다.
             rows = self.conn.execute(
-                "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? "
+                "SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' "
+                "   OR body LIKE ? ESCAPE '\\' "
                 "ORDER BY pinned DESC, created DESC LIMIT ?",
-                (f"%{q}%", f"%{q}%", k),
+                (f"%{라이크(q)}%", f"%{라이크(q)}%", k),
             ).fetchall()
         # ★ 뜻으로 채우기 **전에** 낱말로 몇 개 걸렸는지 남긴다. 화면이 이것 없이
         #   「관련 N개야」라고 해서, 어느 글에도 없는 말에도 관련이 있다고 말했다(시험 쪽 9).
@@ -2657,14 +2706,16 @@ class Notes:
         `eb`를 다 쳤는데 `eb-stage0-decisions`가 먼저 뜨면 한 번 더 손이 간다.
         """
         part = 제목맞춤(part)   # 「질문?」 으로 쳐도 「질문？ 답」 이 걸리게
-        like = f"%{part}%"
-        head = f"{part}%"
+        like = f"%{라이크(part)}%"
+        head = f"{라이크(part)}%"
         rows = self.conn.execute(
-            "SELECT title AS name, (title = ?) AS same, (title LIKE ?) AS head, use_count "
-            "  FROM notes WHERE title LIKE ? "
+            "SELECT title AS name, (title = ?) AS same, "
+            "       (title LIKE ? ESCAPE '\\') AS head, use_count "
+            "  FROM notes WHERE title LIKE ? ESCAPE '\\' "
             "UNION ALL "
-            "SELECT alias AS name, (alias = ?) AS same, (alias LIKE ?) AS head, 0 "
-            "  FROM aliases WHERE alias LIKE ? "
+            "SELECT alias AS name, (alias = ?) AS same, "
+            "       (alias LIKE ? ESCAPE '\\') AS head, 0 "
+            "  FROM aliases WHERE alias LIKE ? ESCAPE '\\' "
             "ORDER BY same DESC, head DESC, use_count DESC, name LIMIT ?",
             (part, head, like, part, head, like, k),
         ).fetchall()
@@ -3909,6 +3960,30 @@ def _self_check() -> None:
         assert got('"정확한 구절"') == {"검색 모듈"}, got('"정확한 구절"')
         assert got('"구절 정확한"') == set(), "구절은 순서가 맞아야 한다"
         assert got("tag:없는것ZZZ") == set(), "좁혔는데 없으면 0건이 옳은 답이다"
+
+        # ★★ **`_` 와 `%` 가 와일드카드로 새면 안 된다**(2026-09-20 · 폴더 칸을 만들다 잡았다).
+        #   SQL `LIKE` 에서 `_` 는 「아무 글자 하나」다. 그대로 넣었더니 `path:_정리` 가
+        #   「`_정리` 폴더의 1장」 대신 **「제목에 '정리'가 든 3장」까지 4장**을 내놓았다.
+        #   창고에는 `_서식`·`_정리` 처럼 밑줄로 시작하는 폴더가 있다.
+        밑줄방 = n.root / "_정리"
+        밑줄방.mkdir(exist_ok=True)
+        n.write(Note(title="정리함 글", body="여기 있다"), at=밑줄방 / "정리함 글.md")
+        n.write(Note(title="딴 곳의 정리 글", body="제목에 정리가 들었을 뿐"))
+        n.write(Note(title="퍼센트 글", body="몸", extra={"status": "100%끝"}))
+        # ★ `%` 를 안 막으면 「100 + 아무거나 + 끝」 이 되어 **이것까지 걸린다**
+        n.write(Note(title="퍼센트 아닌 글", body="몸", extra={"status": "100아무거나끝"}))
+        n.reindex()
+        assert got("path:_정리") == {"정리함 글"}, got("path:_정리")
+        assert got("status:100%끝") == {"퍼센트 글"}, got("status:100%끝")
+        assert 라이크("a_b%c") == r"a\_b\%c", 라이크("a_b%c")
+
+        # ★ **폴더 나무는 위 폴더도 센다** — 「2019」 를 눌러 그해 전부를 볼 수 있어야 한다.
+        n.write(Note(title="나무 시험 글", body="몸", created="2019-04-07T09:00:00Z"))
+        n.reindex()
+        나무 = n.폴더나무()
+        assert ("2019", 0, 1) in 나무, 나무
+        assert ("04", 1, 1) in 나무, 나무
+        assert [x for x in 나무 if x[0] == "_정리"], 나무
 
         # ★★ **앞머리 값으로도 찾는다**(오너 2026-09-20). 옵시디언 볼트를 들이니
         #   `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이 없었다** —
