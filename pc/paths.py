@@ -658,8 +658,11 @@ def _self_check() -> None:
 
     assert app_dir().exists()
     # 소스로 돌 때는 지금 자리다 — 개발 중에 문서 폴더가 더럽혀지면 안 된다.
+    # ★ 단 `기록자리.txt` 가 있으면 **그것이 이긴다**(2026-09-20). 켜는 폴더마다 창고가
+    #   갈리는 것을 막으려고 쪽지로 못 박았다 — 아래 「어디서 켜도 같은 창고」 검사 참조.
     assert not frozen()
-    assert data_dir() == Path.cwd(), data_dir()
+    if _적어둔자리() is None:
+        assert data_dir() == Path.cwd(), data_dir()
     assert models_dir() == app_dir().parent / "models", models_dir()
     # 뜻 검색 모델은 **받은 것이 먼저**다. 둘 다 없으면 모델 자리 그대로 돌려준다.
     assert meaning_dir() in (models_dir(), models_dir() / "e5-base"), meaning_dir()
@@ -770,7 +773,7 @@ def _self_check() -> None:
         finally:
             del os.environ["VC_DATA"], os.environ["VC_MODELS"]
 
-    assert data_dir() == Path.cwd(), "환경 변수를 지웠는데 안 돌아왔다"
+    assert data_dir() == (_적어둔자리() or Path.cwd()), "환경 변수를 지웠는데 안 돌아왔다"
     # C++ 런타임 붙들기. **순서가 전부다** — Qt 가 먼저 올라오면 되돌릴 수 없고,
     # 그때 onnxruntime 을 올리면 프로세스가 통째로 죽는다.
     if os.name == "nt":
@@ -891,7 +894,13 @@ def _self_check() -> None:
 
     # ★★ **기계 파일은 앱 자리로, 옛 창고는 복사 → 확인 → 원본 지움**(오너 결정 2026-09-15).
     #   소스로 돌 때는 기록 자리 그대로 · VC_DATA 를 주면 따라간다(시험 격리) · 확인 못 한 것은 원본을 남기고 옛 자리를 계속 쓴다.
-    assert state_dir() == data_dir(), "소스로 돌 때 기계 파일 자리가 기록 자리를 떠났다 — 개발 흐름이 바뀐다"
+    # ★ `기록자리.txt` 를 쓰면 기계 파일은 **앱 자리**로 간다 — 오너 결정(2026-09-15):
+    #   기록 폴더는 사람이 여는 곳이라 메모만 둔다(문서 폴더는 iCloud 로 올라갈 수 있고,
+    #   그러면 열쇠·db 가 따라 올라간다). 쪽지가 없을 때만 기록 자리와 같아야 한다.
+    if _적어둔자리() is None:
+        assert state_dir() == data_dir(), "소스로 돌 때 기계 파일 자리가 기록 자리를 떠났다 — 개발 흐름이 바뀐다"
+    else:
+        assert state_dir() == _앱자리기본(), state_dir()
     옛판 = sys.platform
     옛환경 = {k: os.environ.get(k) for k in ("VC_DATA", "VC_STATE", "LOCALAPPDATA")}
     try:
@@ -939,6 +948,36 @@ def _self_check() -> None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+    # ★★ **어디서 켜도 같은 창고를 봐야 한다**(2026-09-20). 소스로 돌 때는 `Path.cwd()`
+    #   를 창고로 삼는데, 그래서 **켜는 폴더에 따라 창고가 갈렸다** — 볼트 119장이
+    #   `VC/pc/data/notes` 에 들어갔는데 `VC/` 에서 켠 VC 는 3장짜리 창고를 보고 있었다.
+    #   「기록이 사라졌다」로 보이는 종류라, `기록자리.txt` 로 못 박고 **그것이 이기는지**를 잰다.
+    import os as _os8
+    import tempfile as _임시8
+
+    with _임시8.TemporaryDirectory() as _잠깐8:
+        옛데이터 = _os8.environ.pop("VC_DATA", None)
+        옛cwd = _os8.getcwd()
+        쪽지 = app_dir() / SPOT
+        옛쪽지 = 쪽지.read_text(encoding="utf-8") if 쪽지.exists() else None
+        try:
+            둘것 = Path(_잠깐8) / "정한자리"
+            쪽지.write_text(str(둘것), encoding="utf-8")
+            본것 = []
+            for 어디 in (_잠깐8, str(app_dir()), str(app_dir().parent)):
+                _os8.chdir(어디)
+                본것.append(str(data_dir()))
+            assert len(set(본것)) == 1, f"켜는 자리마다 창고가 다르다: {본것}"
+            assert 본것[0] == str(둘것), (본것[0], 둘것)
+        finally:
+            _os8.chdir(옛cwd)
+            if 옛쪽지 is None:
+                쪽지.unlink(missing_ok=True)
+            else:
+                쪽지.write_text(옛쪽지, encoding="utf-8")
+            if 옛데이터 is not None:
+                _os8.environ["VC_DATA"] = 옛데이터
 
     print("paths self-check 통과")
 

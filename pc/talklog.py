@@ -191,7 +191,14 @@ def _self_check() -> None:
 
     global LOG_PATH, AUDIO_DIR
     # 녹음은 기록 자리 아래다 — 작업 폴더를 따르면 딴 폴더에서 켤 때 엉뚱한 데 쌓이거나 못 만든다
-    assert paths.data_dir() in _audio().parents, f"녹음 폴더가 작업 폴더를 따른다: {AUDIO_DIR}"
+    # ★ 재려는 것은 **「작업 폴더를 따라다니지 않는다」**이다. 녹음은 기계 파일이라
+    #   `기록자리.txt` 를 쓰면 앱 자리로 간다(오너 결정 2026-09-15: 기록 폴더엔 메모만).
+    #   기록 자리든 앱 자리든 좋지만, cwd 밑이면 켜는 자리마다 녹음이 흩어진다.
+    둘자리 = _audio().resolve()
+    assert (paths.data_dir() in 둘자리.parents or paths.state_dir() in 둘자리.parents), (
+        f"녹음 폴더가 엉뚱한 자리다: {둘자리}")
+    assert Path.cwd().resolve() not in 둘자리.parents or paths.data_dir() == Path.cwd().resolve(), (
+        f"녹음 폴더가 작업 폴더를 따른다: {둘자리}")
 
     old = LOG_PATH
     try:

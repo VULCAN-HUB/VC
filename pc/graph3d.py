@@ -1870,10 +1870,12 @@ def _self_check() -> None:
 
     # ★ **자전이 파일에도 남겨야 한다.** 세기만 하고 안 남기면 `--report` 는
     # 영영 「안 돌았다」를 본다 — 174분을 켜 두고도 그랬다.
-    import os as _os
-    from pathlib import Path as _Path
+    import paths as _자리9
 
-    자전표 = _Path(_os.environ.get("VC_DATA") or ".") / "vc-자전.json"
+    # ★ 자리를 **짐작하지 않고 물어본다.** 여기서 `VC_DATA` 나 cwd 로 찍었더니,
+    #   `기록자리.txt` 로 창고를 못 박자 기계 파일이 앱 자리로 옮겨가 검사만 깨졌다
+    #   (코드는 멀쩡했다). 쓰는 쪽과 **같은 함수**로 묻는 것이 맞다.
+    자전표 = _자리9.기계자리("vc-자전.json")
     # **먼저 지운다.** 안 지우면 묵은 파일이 남아 있어, 안 남기게 고쳐 놔도
     # 검사가 통과한다 — 실제로 그렇게 한 번 헛통과했다.
     묵은 = 자전표.read_text(encoding="utf-8") if 자전표.exists() else None
