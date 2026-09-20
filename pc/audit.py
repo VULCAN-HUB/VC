@@ -55,19 +55,27 @@ def 살피기(창고: Notes) -> dict[str, list]:
         갈래of[글.title] = 줄["kind"] or ""
 
     별칭 = {a: t for a, t in 창고.conn.execute("SELECT alias, title FROM aliases")}
+    # ★ **닿는지는 창고 전체로 본다.** 층 밖(서식·정리·가운데 항목)에도 글이 있다 —
+    #   층 안만 보면 멀쩡히 있는 글을 「없는 글」이라고 한다(실제로 `VC` 가 그랬다).
+    온창고 = {r[0] for r in 창고.conn.execute("SELECT title FROM notes")}
 
     def 풀기(이름: str) -> str:
         이름 = 제목맞춤(str(이름).split("#")[0].split("|")[0].strip())
-        return 이름 if 이름 in 글들 else 별칭.get(이름, "")
+        if 이름 in 글들 or 이름 in 온창고:
+            return 이름
+        return 별칭.get(이름, "")
 
     끊긴링크, 가리킨수 = [], {t: 0 for t in 글들}
     나간수 = {t: 0 for t in 글들}
     for 제목, 글 in 글들.items():
         for 가리킨, _ in parse_links(글.body):
+            # ★ **건 것은 끊겼어도 「이으려 한 것」이다.** 닿는지와 무관하게 나간 것으로 센다 —
+            #   안 그러면 링크를 아홉 개 걸어 놓고도 「아무와도 안 이어졌다」로 잡힌다
+            #   (실제로 그랬다). 끊긴 것은 아래에서 따로 알려 주므로 놓치지 않는다.
+            나간수[제목] += 1
             닿은 = 풀기(가리킨)
             if 닿은:
                 가리킨수[닿은] = 가리킨수.get(닿은, 0) + 1
-                나간수[제목] += 1
             else:
                 끊긴링크.append((제목, 제목맞춤(str(가리킨).split("#")[0].split("|")[0].strip())))
 
@@ -174,6 +182,21 @@ def _self_check() -> None:
         assert 난것2["안합친원본"] == [], 난것2["안합친원본"]
         # 이어졌으니 원본도 「가리켜진」 것이 된다
         assert "원본 가 요점" not in 난것2["외톨이"], 난것2["외톨이"]
+
+        # ★ **건 것은 끊겼어도 「이으려 한 것」이다** — 링크를 걸어 놓고 외톨이로 잡히면 안 된다
+        창고.write(Note(title="걸었지만 끊긴 글", body="[[없는 이름AAA]] 하나만 가리킨다", kind="메모"))
+        난것3 = 살피기(창고)
+        assert "걸었지만 끊긴 글" not in 난것3["외톨이"], 난것3["외톨이"]
+        assert ("걸었지만 끊긴 글", "없는 이름AAA") in 난것3["끊긴링크"], 난것3["끊긴링크"]
+
+        # ★ **층 밖 글도 링크 대상이다** — 층 안만 보면 멀쩡한 글을 「없는 글」이라 한다
+        창고.write(Note(title="층 밖 글", body="서식 자리에 있는 셈 친다", kind="agent"))
+        창고.conn.execute("UPDATE notes SET path = ? WHERE title = ?",
+                         (str(Path(창고.root) / "2026" / "09" / "층 밖 글.md"), "층 밖 글"))
+        창고.conn.commit()
+        창고.write(Note(title="층 밖을 가리킴", body="[[층 밖 글]] 을 가리킨다", kind="메모"))
+        끊긴2 = {이름 for _, 이름 in 살피기(창고)["끊긴링크"]}
+        assert "층 밖 글" not in 끊긴2, 끊긴2
 
         # ★ **별칭으로 닿는 링크는 끊긴 것이 아니다** — 볼트 링크가 그렇게 이어진다
         창고.write(Note(title="딴 이름 글", body="몸", kind="메모", aliases=["별명"]))
