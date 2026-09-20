@@ -194,10 +194,14 @@ def _self_check() -> None:
     # ★ 재려는 것은 **「작업 폴더를 따라다니지 않는다」**이다. 녹음은 기계 파일이라
     #   `기록자리.txt` 를 쓰면 앱 자리로 간다(오너 결정 2026-09-15: 기록 폴더엔 메모만).
     #   기록 자리든 앱 자리든 좋지만, cwd 밑이면 켜는 자리마다 녹음이 흩어진다.
+    # ★ 양쪽 다 `resolve()` 한다 — 맥의 `/var` 는 `/private/var` 로 가는 이음이라
+    #   한쪽만 풀면 같은 자리를 다른 자리로 본다(가둔 검사 자리에서 실제로 터졌다).
     둘자리 = _audio().resolve()
-    assert (paths.data_dir() in 둘자리.parents or paths.state_dir() in 둘자리.parents), (
+    기록 = paths.data_dir().resolve()
+    기계 = paths.state_dir().resolve()
+    assert (기록 in 둘자리.parents or 기계 in 둘자리.parents), (
         f"녹음 폴더가 엉뚱한 자리다: {둘자리}")
-    assert Path.cwd().resolve() not in 둘자리.parents or paths.data_dir() == Path.cwd().resolve(), (
+    assert Path.cwd().resolve() not in 둘자리.parents or 기록 == Path.cwd().resolve(), (
         f"녹음 폴더가 작업 폴더를 따른다: {둘자리}")
 
     old = LOG_PATH

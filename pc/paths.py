@@ -261,6 +261,40 @@ def documents_dir() -> Path:
     return Path(os.path.expanduser("~")) / "Documents"
 
 
+_검사자리: Path | None = None
+_가둘까 = True          # 검사 안에서 「쪽지가 이기는지」를 잴 때만 잠시 끈다
+
+
+def 검사중인가() -> bool:
+    """이 프로세스가 **자체점검**으로 돌고 있나.
+
+    ★★ 자체점검이 **진짜 자리를 건드리면 안 된다.** 실제로 그랬다(2026-09-21):
+       `server` 검사가 진짜 `eb_config.json` 을 읽고 쓰는데, 그 사이 떠 있던 VC 가
+       반쯤 쓰인 파일을 읽고 **「설정이 깨졌다」며 새로 만들었다**(자국에 남았다:
+       「폰은 다시 짝지어야 한다」). `eb.db` 도 같은 식으로 「깨져서 옆에 치웠다」.
+       검사 한 번에 **쓰던 사람의 VC 가 망가진다** — 그것도 조용히.
+
+    ★ 전에는 안 났다. 소스로 돌 때 자리가 `Path.cwd()` 라 검사가 소스 폴더에 떨어졌기
+      때문이다. `기록자리.txt` 로 창고를 못 박으면서 **검사도 진짜 자리를 쓰게 됐다.**
+
+    `paths` 는 모든 모듈이 들여오므로 **여기 한 자리**에서 가둔다.
+    """
+    return _가둘까 and "--check" in sys.argv[1:]
+
+
+def _가둔자리() -> Path:
+    """검사가 쓸 임시 자리. 프로세스마다 하나, 끝나면 지운다."""
+    global _검사자리
+    if _검사자리 is None:
+        import atexit
+        import shutil
+        import tempfile
+
+        _검사자리 = Path(tempfile.mkdtemp(prefix="vc-검사-"))
+        atexit.register(lambda: shutil.rmtree(_검사자리, ignore_errors=True))
+    return _검사자리
+
+
 def data_dir() -> Path:
     """기록·색인·설정이 사는 자리. 없으면 만든다.
 
@@ -269,6 +303,8 @@ def data_dir() -> Path:
     """
     if env := os.environ.get("VC_DATA"):
         here = Path(env)
+    elif 검사중인가():
+        here = _가둔자리() / "기록"      # 검사는 진짜 창고를 안 건드린다
     elif (적힌 := _적어둔자리()) is not None:
         here = 적힌
     elif frozen():
@@ -307,6 +343,8 @@ def state_dir() -> Path:
     """
     if env := os.environ.get("VC_STATE"):
         here = Path(env)
+    elif 검사중인가() and not os.environ.get("VC_DATA"):
+        here = _가둔자리() / "기계"      # 설정·db·열쇠도 진짜 것을 안 건드린다
     elif os.environ.get("VC_DATA"):
         here = data_dir()
     elif frozen() or _적어둔자리() is not None:
@@ -634,6 +672,7 @@ class 잠근연결(_sq.Connection):
 
 
 def _self_check() -> None:
+    global _가둘까      # 「쪽지가 이기는지」를 재는 구간에서만 가둠을 잠시 푼다
     import tempfile
 
     # 잠근연결: 딴 실이 잠금을 쥐면 execute 가 기다린다. 겹쳐 터지는 것은 우연이라 재현 대신 기다림을 본다.
@@ -661,7 +700,7 @@ def _self_check() -> None:
     # ★ 단 `기록자리.txt` 가 있으면 **그것이 이긴다**(2026-09-20). 켜는 폴더마다 창고가
     #   갈리는 것을 막으려고 쪽지로 못 박았다 — 아래 「어디서 켜도 같은 창고」 검사 참조.
     assert not frozen()
-    if _적어둔자리() is None:
+    if _적어둔자리() is None and not 검사중인가():
         assert data_dir() == Path.cwd(), data_dir()
     assert models_dir() == app_dir().parent / "models", models_dir()
     # 뜻 검색 모델은 **받은 것이 먼저**다. 둘 다 없으면 모델 자리 그대로 돌려준다.
@@ -773,7 +812,9 @@ def _self_check() -> None:
         finally:
             del os.environ["VC_DATA"], os.environ["VC_MODELS"]
 
-    assert data_dir() == (_적어둔자리() or Path.cwd()), "환경 변수를 지웠는데 안 돌아왔다"
+    # 검사 중에는 **가둔 자리**로 돌아온다(진짜 창고를 안 건드린다)
+    assert data_dir() == (_가둔자리() / "기록" if 검사중인가()
+                          else (_적어둔자리() or Path.cwd())), "환경 변수를 지웠는데 안 돌아왔다"
     # C++ 런타임 붙들기. **순서가 전부다** — Qt 가 먼저 올라오면 되돌릴 수 없고,
     # 그때 onnxruntime 을 올리면 프로세스가 통째로 죽는다.
     if os.name == "nt":
@@ -791,6 +832,7 @@ def _self_check() -> None:
         쪽지 = app_dir() / SPOT
         원래 = 쪽지.read_text(encoding="utf-8") if 쪽지.is_file() else None
         환경 = os.environ.pop("VC_DATA", None)
+        _가둘까 = False      # 이 구간은 **쪽지가 이기는지**를 재는 자리다
         적기 = lambda 글: 쪽지.write_text(글, encoding="utf-8")
         try:
             # 첫 줄이 자리, 그 아래는 사람이 왜 그리 했는지 적는 자리다
@@ -847,6 +889,7 @@ def _self_check() -> None:
             적기(str(잠깐 / "기록"))
             assert data_dir() == 잠깐 / "환경", data_dir()
         finally:
+            _가둘까 = True
             os.environ.pop("VC_DATA", None)
             if 환경 is not None:
                 os.environ["VC_DATA"] = 환경
@@ -897,7 +940,9 @@ def _self_check() -> None:
     # ★ `기록자리.txt` 를 쓰면 기계 파일은 **앱 자리**로 간다 — 오너 결정(2026-09-15):
     #   기록 폴더는 사람이 여는 곳이라 메모만 둔다(문서 폴더는 iCloud 로 올라갈 수 있고,
     #   그러면 열쇠·db 가 따라 올라간다). 쪽지가 없을 때만 기록 자리와 같아야 한다.
-    if _적어둔자리() is None:
+    if 검사중인가():
+        pass          # 가둔 자리 안에서 기록·기계가 갈려 있다(바로 위에서 쟀다)
+    elif _적어둔자리() is None:
         assert state_dir() == data_dir(), "소스로 돌 때 기계 파일 자리가 기록 자리를 떠났다 — 개발 흐름이 바뀐다"
     else:
         assert state_dir() == _앱자리기본(), state_dir()
@@ -962,6 +1007,7 @@ def _self_check() -> None:
         쪽지 = app_dir() / SPOT
         옛쪽지 = 쪽지.read_text(encoding="utf-8") if 쪽지.exists() else None
         try:
+            _가둘까 = False      # 이 구간만 — **쪽지가 이기는지**를 재야 한다
             둘것 = Path(_잠깐8) / "정한자리"
             쪽지.write_text(str(둘것), encoding="utf-8")
             본것 = []
@@ -971,6 +1017,7 @@ def _self_check() -> None:
             assert len(set(본것)) == 1, f"켜는 자리마다 창고가 다르다: {본것}"
             assert 본것[0] == str(둘것), (본것[0], 둘것)
         finally:
+            _가둘까 = True
             _os8.chdir(옛cwd)
             if 옛쪽지 is None:
                 쪽지.unlink(missing_ok=True)
@@ -978,6 +1025,21 @@ def _self_check() -> None:
                 쪽지.write_text(옛쪽지, encoding="utf-8")
             if 옛데이터 is not None:
                 _os8.environ["VC_DATA"] = 옛데이터
+
+    # ★★ **검사는 진짜 자리를 안 건드린다**(2026-09-21에 실제로 망가뜨리고 알았다).
+    #   `server` 검사가 진짜 `eb_config.json` 을 읽고 쓰는 사이, 떠 있던 VC 가 반쯤 쓰인
+    #   파일을 보고 **「설정이 깨졌다」며 새로 만들었다** — 자국에 「폰은 다시 짝지어야
+    #   한다」가 남았다. `eb.db` 도 「깨져서 옆에 치웠다」. **검사 한 번에 쓰던 사람의
+    #   VC 가 조용히 망가진다.** `--check` 로 도는 동안은 통째로 임시 자리에 가둔다.
+    assert 검사중인가(), "이 검사는 `--check` 로 도는데 그렇게 안 보인다"
+    진짜창고 = _적어둔자리()
+    if 진짜창고 is not None:
+        assert data_dir() != 진짜창고, "검사가 진짜 창고를 쓴다 — 쓰던 사람 기록이 위험하다"
+        assert _가둔자리() in data_dir().parents or data_dir() == _가둔자리(), data_dir()
+    assert _가둔자리() in state_dir().parents or state_dir() == _가둔자리(), state_dir()
+    assert config_path().parent == state_dir(), config_path()
+    # 같은 프로세스 안에서는 **늘 같은 자리**다 — 매번 새로 만들면 검사끼리 못 이어진다
+    assert _가둔자리() == _가둔자리()
 
     print("paths self-check 통과")
 
