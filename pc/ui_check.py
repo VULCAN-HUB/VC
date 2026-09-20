@@ -1213,6 +1213,43 @@ def run() -> None:
         win.refresh()
         win.clear_detail()
 
+        # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 오른쪽에 늘 띄워 두던
+        #   칸이다(볼트 `workspace.json` 으로 확인). `status:` 로 찾는 것은 되는데
+        #   창고가 **무엇을 적어 왔는지 한눈에 보는** 길이 없었다.
+        win.notes.write(Note(title="앞머리칸 가", body="몸", extra={"status": "active"}))
+        win.notes.write(Note(title="앞머리칸 나", body="몸", extra={"status": "active"}))
+        win.notes.write(Note(title="앞머리칸 다", body="몸", extra={"status": "draft"}))
+        win.refresh()
+        win.settle()
+        # ※ `isVisible()` 로는 못 잰다 — 자체점검 창에서는 부모가 안 보여 **늘 거짓**이라
+        #   펴 두어도 통과한다(막이를 되돌려 보고 알았다). 머리글의 `+`/`−` 로 잰다.
+        assert win.props_fold.head.text().rstrip().endswith("+"), (
+            f"앞머리 칸이 펴진 채다 — 가끔 보는 것은 접어 둔다: {win.props_fold.head.text()!r}")
+        이름줄 = [b.text() for b in win.props.findChildren(QPushButton)]
+        assert any(t.startswith("status") and t.endswith("3") for t in 이름줄), 이름줄
+        # 이름을 누르면 값 목록으로
+        win._앞머리열기("status")
+        win.settle()
+        값줄 = [b.text() for b in win.props.findChildren(QPushButton)]
+        assert any(t.startswith("active") and t.endswith("2") for t in 값줄), 값줄
+        assert any(t.startswith("←") for t in 값줄), f"되돌아갈 길이 없다: {값줄}"
+        # 값을 누르면 그 값만 모인다 — **찾기 칸에도 적혀야** 왜 나왔는지 알고 더 좁힌다
+        고를 = [b for b in win.props.findChildren(QPushButton) if b.text().startswith("active")][0]
+        고를.click()
+        win.settle()
+        assert win.ask_box.text() == "status:active", f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}"
+        나온것 = {줄제목(b) for b in win.results.findChildren(QPushButton)}
+        assert "앞머리칸 가" in 나온것 and "앞머리칸 다" not in 나온것, 나온것
+        # ← 로 이름 목록에 돌아온다
+        [b for b in win.props.findChildren(QPushButton) if b.text().startswith("←")][0].click()
+        win.settle()
+        assert any(t.startswith("status") for t in
+                   [b.text() for b in win.props.findChildren(QPushButton)]), "돌아가지 못한다"
+        for t in ("앞머리칸 가", "앞머리칸 나", "앞머리칸 다"):
+            win.notes.delete(t)
+        win.refresh()
+        win.clear_detail()
+
         # 단축키 목록(F1)에 이 길이 적혀 있어야 한다 — 되는데 안 적히면 없는 길이다
         도움 = win.단축키글()
         assert "결과" in 도움 and "↓" in 도움, 도움[-200:]

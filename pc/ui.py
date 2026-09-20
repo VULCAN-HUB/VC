@@ -772,8 +772,20 @@ class MainWindow(QWidget):
         side.addWidget(self.recent)
         side.addWidget(theme.Divider())
         # 가끔 보는 것은 접어 둔다 — 늘 펴 두니 오른쪽 칸이 번잡했다.
+        # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 **오른쪽에 늘 띄워 두던**
+        #   칸이다(볼트의 `workspace.json` 에서 확인했다: 백링크·나가는 링크·태그·속성·목차).
+        #   `status:` 로 **찾는** 것은 되는데, 창고가 **무엇을 적어 왔는지 한눈에 보는** 길이
+        #   없었다. 평소엔 접어 둔다 — 쓸 때만 편다.
+        self.props = QWidget()
+        self._앞머리줄 = QVBoxLayout(self.props)
+        self._앞머리줄.setContentsMargins(0, 0, 0, 0)
+        self._앞머리줄.setSpacing(2)
+        self._앞머리연것 = ""
+        self.props_fold = Folded("앞머리", "글에 적힌 값(status·source…). 눌러 그 값만 모아 본다", self.props)
+
         self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
         self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
+        side.addWidget(self.props_fold)
         side.addWidget(self.gaps_fold)
         side.addWidget(self.years_fold)
         side.addWidget(self.proposals_fold)
@@ -1009,6 +1021,7 @@ class MainWindow(QWidget):
         )
         self.years.show_years(self.notes.by_year())
         self._최근채우기()
+        self.앞머리그리기()      # 창고가 무엇을 적어 왔는지도 같이 새로 센다
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
@@ -2071,6 +2084,52 @@ class MainWindow(QWidget):
                 self._칩줄.addWidget(b)
             self._칩줄.addStretch(1)
         self._칩맞추기()      # 칸에 안 들어가는 칩은 접는다 — 안 그러면 칸이 창 밖으로 밀린다
+
+    def 앞머리그리기(self) -> None:
+        """앞머리 칸을 다시 짓는다. 이름 목록 → 누르면 값 목록 → 누르면 그 값으로 찾기."""
+        while self._앞머리줄.count():
+            w = self._앞머리줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+        def 줄(말: str, 눌렀을때, 흐리게: bool = False) -> None:
+            b = QPushButton(말)
+            b.setObjectName("quiet")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumWidth(1)
+            b.setStyleSheet(
+                "text-align:left; padding:1px 4px;"
+                + (f"color:{theme.T.DIM.name()};" if 흐리게 else ""))
+            b.clicked.connect(lambda _=False: self._later(눌렀을때))
+            self._앞머리줄.addWidget(b)
+
+        if self._앞머리연것:
+            이름 = self._앞머리연것
+            줄(f"← {이름}", lambda: self._앞머리열기(""), 흐리게=True)
+            값들 = self.notes.앞머리값들(이름)
+            if not 값들:
+                줄("(값이 없다)", lambda: None, 흐리게=True)
+            for 값, 수 in 값들:
+                줄(f"{값}  {수}", lambda v=값, k=이름: self._앞머리로찾기(k, v))
+            return
+        이름들 = self.notes.앞머리세기()
+        if not 이름들:
+            줄("아직 적힌 앞머리가 없어", lambda: None, 흐리게=True)
+            return
+        for 이름, 수 in 이름들:
+            줄(f"{이름}  {수}", lambda k=이름: self._앞머리열기(k))
+
+    def _앞머리로찾기(self, 이름: str, 값: str) -> None:
+        """그 값으로 찾는다. **친 말을 찾기 칸에도 적는다** — 왜 이것이 나왔는지 보이고,
+        거기서 쉼표로 더 좁힐 수 있다(칸이 비어 있으면 둘 다 못 한다)."""
+        말 = f"{이름}:{값}"
+        self.ask_box.setText(말)
+        self.ask(말)
+
+    def _앞머리열기(self, 이름: str) -> None:
+        self._앞머리연것 = 이름
+        self.앞머리그리기()
 
     def _칩골라(self, 값: str) -> None:
         self._목록갈래 = "" if self._목록갈래 == 값 else 값

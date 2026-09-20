@@ -2407,6 +2407,30 @@ class Notes:
             낸다.setdefault(t, {})[k] = v
         return 낸다
 
+    def 앞머리세기(self, 최대: int = 20) -> list[tuple[str, int]]:
+        """어떤 앞머리가 몇 장에 붙어 있나. **많은 것부터.**
+
+        옵시디언의 「속성」 칸이 하는 일이다 — 볼트가 무엇을 적어 왔는지 한눈에 본다.
+        글마다 다른 것(`들인곳`·`id`)은 세어 봐야 고르는 데 안 쓰이므로 뺀다.
+        """
+        안셈 = ("들인곳", "id", "created", "지은이")
+        빈칸 = ",".join("?" * len(안셈))
+        return [(r[0], r[1]) for r in self.conn.execute(
+            f"SELECT key, count(*) c FROM props WHERE key NOT IN ({빈칸}) "
+            "GROUP BY key ORDER BY c DESC, key LIMIT ?", (*안셈, 최대))]
+
+    def 앞머리값들(self, 이름: str, 최대: int = 20) -> list[tuple[str, int]]:
+        """그 앞머리에 어떤 값이 몇 장인지. **많은 것부터.**"""
+        낸다: dict[str, int] = {}
+        for (값,) in self.conn.execute("SELECT value FROM props WHERE key = ?", (이름,)):
+            깔끔 = str(값).split("#")[0].strip()
+            if not 깔끔:
+                continue
+            if len(깔끔) > 40:          # 긴 글귀는 고르는 말이 못 된다
+                깔끔 = 깔끔[:39] + "…"
+            낸다[깔끔] = 낸다.get(깔끔, 0) + 1
+        return sorted(낸다.items(), key=lambda kv: (-kv[1], kv[0]))[:최대]
+
     def 앞머리이름들(self) -> frozenset:
         """창고가 실제로 지닌 앞머리 이름들. 검색이 이것으로 `이름:값` 을 가른다."""
         있는것 = getattr(self, "_앞머리이름", None)
