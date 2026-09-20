@@ -1864,15 +1864,15 @@ class Notes:
 
     # --- 파일 -----------------------------------------------------------
 
-    def path_of(self, title: str, created: str = "") -> Path:
+    def path_of(self, title: str, created: str = "", kind: str = "") -> Path:
         """항목의 파일 자리.
 
         **이미 있으면 그 자리를 그대로 쓴다.** 사람이 옮겨 둔 폴더를 저장할 때마다
         되돌리면, 정리해 둔 것이 매번 흐트러진다.
 
-        새로 만드는 것은 `연/월` 폴더에 넣는다. 20년치를 한 폴더에 쌓으면 탐색기도
-        옵시디언도 버거워진다. 훑는 속도는 폴더를 나눠도 같지만(실측), 사람이 열어
-        볼 때가 다르다.
+        새로 만드는 것은 **층 아래 `연/월`** 폴더에 넣는다 — `raw/2026/09` 또는
+        `wiki/2026/09`(오너 결정 2026-09-20 · 카파시 LLM Wiki 기준). 층은 `wiki.py` 가
+        **갈래로** 정한다. 20년치를 한 폴더에 쌓으면 탐색기도 옵시디언도 버거워진다.
         """
         title = 제목맞춤(title)   # 맥(NFD)·못 쓰는 글자를 한 꼴로
         row = self.conn.execute(
@@ -1882,7 +1882,12 @@ class Notes:
             return Path(row["path"])
         stamp = (created or _now())[:7]              # YYYY-MM
         year, _, month = stamp.partition("-")
-        folder = self.root / year / month if year.isdigit() else self.root
+        if year.isdigit():
+            # 층은 갈래가 정한다. 갈래를 모르면 `wiki/` 다 — **원본은 일부러 그렇게 적어야**
+            # `raw/` 로 간다. 손 안 대는 자리에 실수로 들어가면 사람이 고치기 곤란하다.
+            folder = self.root / wiki.자리(kind or "", f"{year}/{month}")
+        else:
+            folder = self.root
         folder.mkdir(parents=True, exist_ok=True)
         이름 = safe_title(title)
         자리 = folder / f"{이름}.md"
@@ -1939,7 +1944,7 @@ class Notes:
         note.본문앞머리끌어올리기()
         note.id = note.id or f"{int(time.time() * 1000):x}"
         note.created = note.created or _now()
-        path = Path(at) if at else self.path_of(note.title, note.created)
+        path = Path(at) if at else self.path_of(note.title, note.created, note.kind)
         fresh = note.dumps()
         # 덮어쓰기 전에 지난 판을 남긴다. **내용이 같으면 안 남긴다** — 안 바뀐 저장이
         # 판만 늘리면 정작 되돌리고 싶은 지점이 밀려나 사라진다.
@@ -3958,8 +3963,11 @@ def _self_check() -> None:
         n.write(Note(title="나무 시험 글", body="몸", created="2019-04-07T09:00:00Z"))
         n.reindex()
         나무 = n.폴더나무()
-        assert ("2019", 0, 1) in 나무, 나무
-        assert ("04", 1, 1) in 나무, 나무
+        # 층(`wiki/`) 아래에 연/월이 선다 — 그래서 한 단계 깊다(오너 결정 2026-09-20)
+        assert ("wiki", 0, 1) in [(t, d, c) for t, d, c in 나무 if t == "wiki"] or \
+               any(t == "wiki" and d == 0 for t, d, c in 나무), 나무
+        assert ("2019", 1, 1) in 나무, 나무
+        assert ("04", 2, 1) in 나무, 나무
         assert [x for x in 나무 if x[0] == "_정리"], 나무
 
         # ★★ **앞머리 값으로도 찾는다**(오너 2026-09-20). 옵시디언 볼트를 들이니
@@ -4350,6 +4358,30 @@ def _self_check() -> None:
         for 일 in wiki.연산들:
             assert f"**{일}**" in 규칙글, f"일 「{일}」 이 창고의 규칙 글에 없다"
         assert 규칙글 == wiki.스키마글(), "창고에 적힌 규칙이 wiki.py 와 다르다 — 갈라졌다"
+
+        # ★★ **층은 갈래가 정한다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   `원본` 은 `raw/` 에, 나머지는 `wiki/` 에. 그 아래에 연/월이 선다.
+        with tempfile.TemporaryDirectory() as _층창고:
+            _층 = Notes(Path(_층창고) / "notes")
+            난것 = {}
+            for 갈, 제 in (("원본", "원본 글"), ("결정", "결정 글"), ("", "갈래 없는 글")):
+                자리 = _층.write(Note(title=제, body="몸", kind=갈,
+                                    created="2026-09-07T09:00:00Z"))
+                난것[제] = 자리.relative_to(_층.root).as_posix()
+            assert 난것["원본 글"].startswith("raw/2026/09/"), 난것
+            assert 난것["결정 글"].startswith("wiki/2026/09/"), 난것
+            # ★ 갈래를 모르면 **`wiki/`** 다 — 손 안 대는 `raw/` 에 실수로 들어가면
+            #   「고치지 않는 자리」에 사람 글이 섞여 규칙이 무너진다. 일부러 적어야 raw 다.
+            assert 난것["갈래 없는 글"].startswith("wiki/2026/09/"), 난것
+            # 사람이 옮겨 둔 자리는 그대로 지킨다 — 층이 생겼다고 되돌리지 않는다
+            옮긴곳 = _층.root / "내가정리한곳"
+            옮긴곳.mkdir()
+            옛자리 = _층.root / 난것["결정 글"]
+            옛자리.replace(옮긴곳 / 옛자리.name)
+            _층.reindex()
+            글2 = _층.read("결정 글")
+            assert 글2 is not None and _층.write(글2).parent.name == "내가정리한곳", "옮긴 자리를 되돌렸다"
+            _층.conn.close()
 
         # ★ **옛 이름 규칙 글이 있으면 새로 만들지 않는다.** 사람이 고쳐 뒀을 수 있는 글을
         #   같은 자리에 둘씩 늘리면 어느 것이 규칙인지 알 수 없게 된다.

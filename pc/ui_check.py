@@ -1261,7 +1261,9 @@ def run() -> None:
         assert 누를, 폴더줄
         누를[0].click()
         win.settle()
-        assert win.ask_box.text().startswith("path:2019"), f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}"
+        # 층() 아래에 연/월이 서므로  가 된다(오너 결정 2026-09-20)
+        assert win.ask_box.text().startswith("path:") and "2019" in win.ask_box.text(), (
+            f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}")
         assert "폴더칸 글" in {줄제목(b) for b in win.results.findChildren(QPushButton)}
         win.notes.delete("폴더칸 글")
         win.refresh()
