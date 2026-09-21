@@ -24,12 +24,14 @@ from notes import Note, Notes
 MIN_EVIDENCE = 3  # 이만큼 반복돼야 제안한다. 한두 번은 우연이다.
 
 
-# ★★ **쓰는 이름은 하나, 읽는 이름은 둘.** 2026-09-21 에 `skill` → 「솜씨」로 옮겼는데
-#   쓰는 쪽만 바꾸고 **읽는 질의를 안 바꿔서** 솜씨가 통째로 안 실렸다(검사가 잡았다).
-#   그래서 한 자리에 둔다 — 첫째가 쓰는 이름, 나머지는 옛 글을 받는 이름이다.
+# ★★ **쓰는 이름과 읽는 이름을 한 자리에 둔다.** 2026-09-21 에 갈래 이름을 옮겨 보다가
+#   쓰는 쪽만 바꾸고 **읽는 질의(`WHERE kind = …`)를 안 바꿔서** 솜씨가 통째로 안 실렸다
+#   (검사가 잡았다). 이름은 `skill` 로 되돌렸지만(오너 지시) 이 자리는 남긴다 —
+#   다음에 또 옮길 때 **여기 한 줄만** 고치면 쓰는 쪽과 읽는 쪽이 같이 움직인다.
+#   첫째가 쓰는 이름, 나머지는 옛 글을 받는 이름이다.
 import wiki
 
-갈래들 = ("솜씨", "skill")
+갈래들 = ("skill",)
 
 
 @dataclass
@@ -273,18 +275,24 @@ def _self_check() -> None:
         assert s.version == 1 and s.previous is None
 
         # ★★ **쓰는 이름을 옮겼으면 읽는 쪽도 같이 옮겨야 한다.** 2026-09-21 에
-        #   `skill` → 「솜씨」로 옮기면서 쓰는 쪽만 바꿨더니 **솜씨가 통째로 안 실렸다.**
-        #   쓸 때는 새 이름, 읽을 때는 **옛 이름까지** — 옛 글이 남아 있다.
-        assert s.to_note().kind == 갈래들[0] == "솜씨", s.to_note().kind
-        assert wiki.아는갈래("솜씨"), "새 갈래가 규칙 표에 없다"
-        옛것 = Skill(name="옛 솜씨", triggers=["옛"],
-                   steps=[{"module": "navigate", "params": {"to": "집"}}]).to_note()
-        옛것.kind = "skill"                      # 옮기기 전에 쓰인 글
-        notes.write(옛것)
+        #   이름을 옮겨 보다가 쓰는 쪽만 바꿨더니 **솜씨가 통째로 안 실렸다.**
+        #   쓰는 갈래는 `갈래들[0]`, 읽는 질의도 같은 `갈래들` 을 본다.
+        import pathlib as _길
+        t = _길.Path(__file__).read_text(encoding="utf-8")
+        assert s.to_note().kind == 갈래들[0], s.to_note().kind
+        assert wiki.아는갈래(갈래들[0]), f"쓰는 갈래가 규칙 표에 없다: {갈래들[0]}"
+        assert "WHERE kind IN" in t and "'skill'" not in t.split("def all")[-1], \
+            "읽는 질의가 갈래 이름을 제 손으로 적는다 — 옮길 때 또 갈린다"
+        for 갈 in 갈래들:
+            것 = Skill(name=f"{갈} 글", triggers=["x"],
+                     steps=[{"module": "navigate", "params": {"to": "집"}}]).to_note()
+            것.kind = 갈
+            notes.write(것)
         notes.reindex()
-        assert sorted(x.name for x in skills.all()) == ["옛 솜씨", "출근 준비"], \
-            f"옛 이름으로 적힌 솜씨를 놓친다: {[x.name for x in skills.all()]}"
-        notes.delete("옛 솜씨")
+        assert len(skills.all()) == 1 + len(갈래들), \
+            f"갈래들에 적힌 이름을 다 안 읽는다: {[x.name for x in skills.all()]}"
+        for 갈 in 갈래들:
+            notes.delete(f"{갈} 글")
         notes.reindex()
 
         # ★★ **스킬은 코드가 아니라 데이터다 — 나쁜 선언문이 와도 안 깨져야 한다.**
