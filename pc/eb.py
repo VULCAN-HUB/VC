@@ -163,7 +163,9 @@ def _사람이손댄것(뿌리) -> list[str]:
 
     for f in _notes.훑어내림(_P(뿌리), (".md",)):   # 연결 폴더는 안 따라간다
         조각 = f.relative_to(뿌리).parts
-        if ".이력" in 조각 or "_서식" in 조각:
+        import wiki as _위키2
+        서식이름들 = (_위키2.서식폴더, *_위키2.옛서식폴더들)
+        if ".이력" in 조각 or any(이름 in 조각 for 이름 in 서식이름들):
             continue
         try:
             글 = f.read_text(encoding="utf-8", errors="replace")

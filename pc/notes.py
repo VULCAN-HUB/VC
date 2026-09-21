@@ -167,7 +167,7 @@ HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든�
 
 # 서식(템플릿)을 두는 곳. 밑줄로 시작해 항목 목록에서 눈에 안 띄되, 사람이 열어
 # 고칠 수 있게 **보이는** 폴더로 둔다(`_첨부`와 같은 자리).
-TEMPLATE_DIR = "_서식"
+TEMPLATE_DIR = wiki.서식폴더
 # 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 요약을 적는 자리(결정 17). 기계가 쓴 글이라 항목으로 안 센다.
 VC_LOG_DIR = "_VC기록"
 
@@ -1267,6 +1267,7 @@ class Notes:
         self.conn.commit()
         self._heal_search()
         self._heal_vectors()
+        self._서식폴더옮기기()      # 옛 이름 폴더를 먼저 끌어온다 — 안 그러면 규칙 글이 둘이 된다
         self.write_rules()
         if index_now:
             self.reindex()
@@ -1623,6 +1624,37 @@ class Notes:
 
     def template_root(self) -> Path:
         return self.root / TEMPLATE_DIR
+
+    def _서식폴더옮기기(self) -> bool:
+        """옛 이름(`_서식`)으로 된 폴더가 있으면 **새 이름으로 옮긴다.**
+
+        ★★ 이걸 안 하면 쓰던 사람에게는 **서식이 통째로 사라진 것처럼 보인다** —
+           제품 서식도, 규칙 글도, 폰 서식 목록도 빈다. 옮기는 길은 한 번만 돈다.
+        ★ 새 이름 폴더가 이미 있으면 **겹치지 않는 것만** 옮기고 옛 폴더는 남긴다 —
+          둘 다 손으로 만든 자리일 수 있어 우리가 지울 것이 아니다.
+        """
+        새자리 = self.template_root()
+        옮김 = False
+        for 옛이름 in wiki.옛서식폴더들:
+            옛자리 = self.root / 옛이름
+            if not 옛자리.is_dir() or 옛자리 == 새자리:
+                continue
+            try:
+                if not 새자리.exists():
+                    옛자리.rename(새자리)
+                    옮김 = True
+                    continue
+                for 것 in 옛자리.iterdir():
+                    목표 = 새자리 / 것.name
+                    if not 목표.exists():
+                        것.rename(목표)
+                        옮김 = True
+                if not any(옛자리.iterdir()):
+                    옛자리.rmdir()
+            except OSError as e:
+                _알림(f"[서식 옮기기] 못 옮겼다 — {type(e).__name__}")
+                break
+        return 옮김
 
     def templates(self) -> list[str]:
         """쓸 수 있는 서식 이름들."""
@@ -5194,6 +5226,39 @@ def _self_check() -> None:
                 "사람이 고친 규칙 글을 덮었다"
         finally:
             wiki.스키마글 = 원래스키마
+
+    # ★★ **옛 이름(`_서식`) 폴더를 따라 옮긴다.** 안 옮기면 쓰던 사람에게는 제품 서식도
+    #   규칙 글도 폰 서식 목록도 **통째로 사라진 것처럼 보인다**(2026-09-21 영문 이름으로 옮김).
+    with tempfile.TemporaryDirectory() as tmp서식:
+        뿌리 = Path(tmp서식) / "notes"
+        옛자리 = 뿌리 / wiki.옛서식폴더들[0]
+        옛자리.mkdir(parents=True)
+        (옛자리 / "제품.md").write_text("# 옛 서식" + chr(10), encoding="utf-8")
+        (옛자리 / Notes.RULE_FILE).write_text("# 옛 규칙" + chr(10), encoding="utf-8")
+        n서식 = Notes(뿌리)
+        새자리 = n서식.template_root()
+        assert 새자리.name == "_templates", 새자리.name
+        assert not 옛자리.exists(), "옛 이름 폴더가 남았다"
+        assert (새자리 / "제품.md").read_text(encoding="utf-8") == "# 옛 서식" + chr(10), \
+            "서식을 안 따라 옮겼다"
+        assert (새자리 / Notes.RULE_FILE).read_text(encoding="utf-8") == "# 옛 규칙" + chr(10), \
+            "사람이 고쳤을 수 있는 규칙 글을 덮었다"
+        assert "제품" in n서식.templates(), n서식.templates()
+        # 서식은 **항목으로 안 센다** — 옮긴 뒤에도 그대로여야 한다
+        n서식.reindex()
+        assert n서식.read("제품") is None, "서식이 항목이 됐다"
+        n서식.conn.close()
+
+        # 두 이름이 다 있으면 **겹치지 않는 것만** 끌어오고 옛 폴더는 안 지운다
+        옛자리.mkdir(parents=True)
+        (옛자리 / "제품.md").write_text("# 나중 것" + chr(10), encoding="utf-8")
+        (옛자리 / "명함.md").write_text("# 명함" + chr(10), encoding="utf-8")
+        n둘 = Notes(뿌리)
+        assert (새자리 / "제품.md").read_text(encoding="utf-8") == "# 옛 서식" + chr(10), \
+            "이미 있는 서식을 덮었다"
+        assert (새자리 / "명함.md").exists(), "겹치지 않는 것을 안 끌어왔다"
+        assert 옛자리.exists(), "겹친 것이 남았는데 옛 폴더를 지웠다"
+        n둘.conn.close()
 
     print("notes self-check 통과")
 
