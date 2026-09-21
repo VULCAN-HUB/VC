@@ -47,6 +47,10 @@ class Skill:
     start_tier: str | None = None  # 정해두면 이 단계부터 시작한다(결정 5 매핑 조정)
     version: int = 1
     previous: dict[str, Any] | None = None  # 되돌리기용 직전 버전(결정 18)
+    # 어느 프로젝트에서 배운 스킬인가. 비면 어디에도 안 매인 일반 스킬이다.
+    # ★ 매어 두면 헤르메스가 그 프로젝트 맥락을 꺼낼 때 **스킬도 같이 뜬다** —
+    #   안 매면 배워 놓고 다시 못 찾는다.
+    project: str = ""
 
     def to_note(self) -> Note:
         body = [
@@ -60,6 +64,8 @@ class Skill:
             body.append(f"- {i}단계: [[{s['module']}]] {json.dumps(s.get('params', {}), ensure_ascii=False)}")
         if self.start_tier:
             body.append(f"- 시작 단계: {self.start_tier}")
+        if self.project:
+            body += ["", f"프로젝트: [[{self.project}]]"]
         return Note(
             title=self.name,
             body="\n".join(body),

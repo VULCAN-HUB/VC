@@ -418,7 +418,9 @@ class Handler(BaseHTTPRequestHandler):
                   # 헤르메스(2단계) — 바이브코딩 관제탑. AI 도구가 이 문으로 부른다.
                   "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log",
                   # 바이브코딩 — 바깥 AI 가 고칠 안을 내고, 승인하면 적용한다
-                  "/eb/v1/vibe/plan", "/eb/v1/vibe/apply")
+                  "/eb/v1/vibe/plan", "/eb/v1/vibe/apply",
+                  # 자가 스킬 생성 — 방금 한 일에서 스킬을 뽑아 제안하고, 승인하면 남긴다
+                  "/eb/v1/hermes/skill")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1406,12 +1408,28 @@ class Handler(BaseHTTPRequestHandler):
         if 무엇 == "apply":
             안 = {"고침": body.get("plan") or body.get("고침") or []}
             난것 = _바이브.적용(프로젝트, 안, body.get("only") or body.get("고를것"))
+            제안 = {}
             if 난것["쓴것"]:
                 import wikilog as _일지바
 
                 _일지바.적기(n, "적립", f"바이브코딩 — {프로젝트}: "
                                    f"{' · '.join(난것['쓴것'][:3])}")
-            return self._send(200, {"written": 난것["쓴것"], "failed": 난것["못쓴것"]})
+                # ★★ **자가 스킬 생성.** 일이 한 바퀴 돌았으니 그 과정을 스킬로 뽑아
+                #   **제안**한다(네 기둥의 둘째: 해결 과정을 스킬로 코드화해 저장).
+                #   저장은 승인한 뒤다 — 바로 넣으면 창고가 쓰다 만 스킬로 찬다.
+                import skillgen as _스킬생성
+
+                뽑은것 = _스킬생성.뽑기(n, 프로젝트,
+                                    str(body.get("text") or body.get("지시") or ""),
+                                    쓴파일=난것["쓴것"])
+                제안 = {"text": _스킬생성.사람말(뽑은것), "why": 뽑은것["왜"],
+                       "dup": 뽑은것["겹침"]}
+                if 뽑은것["스킬"] is not None:
+                    from dataclasses import asdict as _짜기
+
+                    제안["skill"] = _짜기(뽑은것["스킬"])
+            return self._send(200, {"written": 난것["쓴것"], "failed": 난것["못쓴것"],
+                                    "skill_suggestion": 제안})
 
         return self._send(404, self._길없다("/eb/v1/vibe/" + 무엇))
 
@@ -1439,6 +1457,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"project": 난것["프로젝트"], "text": 난것["글"],
                                     "buckets": {k: [t for t, _ in v] for k, v in 난것["칸"].items()},
                                     "rules": 난것["규칙"]})
+
+        if 무엇 == "skill":
+            # 자가 스킬 생성 — `지시`만 주면 **뽑아 보여 주고**, `skill` 을 주면 남긴다.
+            import skillgen as _스킬생성
+
+            받은 = body.get("skill") or body.get("스킬")
+            if 받은:
+                from skills import Skill as _스킬꼴
+
+                쓸것 = {k: v for k, v in (받은 or {}).items()
+                      if k in _스킬꼴.__dataclass_fields__}
+                이름 = _스킬생성.남기기(n, _스킬꼴(**쓸것))
+                if 이름:
+                    _일지헤.적기(n, "적립", f"스킬 남김 — {이름}", [이름])
+                return self._send(200, {"kept": 이름})
+            뽑은것 = _스킬생성.뽑기(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                쓴파일=body.get("files") or body.get("쓴파일") or ())
+            낼것 = {"text": _스킬생성.사람말(뽑은것), "why": 뽑은것["왜"],
+                  "dup": 뽑은것["겹침"]}
+            if 뽑은것["스킬"] is not None:
+                from dataclasses import asdict as _짜기2
+
+                낼것["skill"] = _짜기2(뽑은것["스킬"])
+            return self._send(200, 낼것)
 
         if 무엇 == "log":
             난것 = _헤르메스.적립하기(
@@ -3308,6 +3351,37 @@ def _self_check() -> None:
             assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
         finally:
             _헤9.기본뿌리 = _옛뿌리바9
+
+    # ★★ **자가 스킬 생성 배선을 잰다.** 일이 한 바퀴 돌면 그 과정을 스킬로 뽑아 **제안**한다.
+    assert "/eb/v1/hermes/skill" in Handler.POST_PATHS, "스킬 문이 POST 목록에 없다"
+    import skillgen as _스9
+
+    with _임헤9.TemporaryDirectory() as _뿌리스9:
+        from pathlib import Path as _P스9
+
+        _옛뿌리스9 = _헤9.기본뿌리
+        _헤9.기본뿌리 = _P스9(_뿌리스9)
+        try:
+            _헤9.차리기(note_store, "SkillWire", "스킬 배선")
+            note_store.reindex()
+            _뽑9 = _스9.뽑기(note_store, "SkillWire", "인사말을 한국어로 바꿔라",
+                          쓴파일=["greet.py"])
+            assert _뽑9["스킬"] is not None, _뽑9
+            assert _뽑9["스킬"].project == _헤9.프로젝트글제목("SkillWire")
+            # ★★ **뽑기는 저장을 안 한다**
+            note_store.reindex()
+            assert note_store.read(_뽑9["스킬"].name) is None, "뽑기가 저장까지 했다"
+            _이름9 = _스9.남기기(note_store, _뽑9["스킬"])
+            note_store.reindex()
+            assert note_store.read(_이름9).kind == "skill", _이름9
+            # ★ 같은 일을 또 뽑지 않는다
+            assert _스9.뽑기(note_store, "SkillWire", "인사말을 한국어로 바꿔라",
+                          쓴파일=["a.py"])["겹침"] == _이름9
+            # ★ 프로젝트 맥락을 꺼낼 때 스킬이 같이 뜬다 — 안 뜨면 배워 놓고 못 찾는다
+            _맥9 = _헤9.꺼내기(note_store, "SkillWire")
+            assert any(_이름9 == t for 칸 in _맥9["칸"].values() for t, _ in 칸), _맥9["칸"]
+        finally:
+            _헤9.기본뿌리 = _옛뿌리스9
 
     # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
     #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
