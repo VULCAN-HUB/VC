@@ -412,7 +412,8 @@ class Handler(BaseHTTPRequestHandler):
     GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/plugins", "/eb/v1/changes", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task",
+                  "/eb/v1/wiki/ask")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1086,6 +1087,12 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/ask":
             return self._ask(body)
 
+        # ★★ **묻기(Query)** — 창고를 뒤져 **근거를 달아** 답한다(카파시 LLM Wiki 의 셋째 일).
+        #   네 가지 일 중 여기만 비어 있었다(2026-09-21). `/eb/v1/ask` 와 다르다 —
+        #   그쪽은 **시키는** 문이고 이쪽은 **창고에게 묻는** 문이다.
+        if url.path == "/eb/v1/wiki/ask":
+            return self._wiki_ask(body)
+
         if url.path == "/v1/chat/completions":
             return self._chat(body)
 
@@ -1352,6 +1359,37 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     # --- 성장 루프 (결정 17·18) -----------------------------------------
+
+    def _wiki_ask(self, body: Any) -> None:
+        """묻기(Query). 창고를 뒤져 근거를 달아 답하고, 일지에 한 줄 남긴다.
+
+        ★ `남길까` 를 주면 답을 창고에 **한 장으로** 남긴다. 기본은 안 남긴다 —
+          물을 때마다 글이 쌓이면 창고가 물음으로 덮인다.
+        """
+        물음 = (body.get("text") or "").strip() if isinstance(body.get("text") or "", str) else ""
+        if not 물음:
+            return self._send(400, {"error": "text required"})
+
+        import query as _묻기
+        import wikilog as _일지
+
+        n = self.server.notes
+        손 = None
+        모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+        if 모델 and (self.server.cfg.get("backend") or {}).get("kind") == "local":
+            손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0, max_tokens=400)
+        난것 = _묻기.묻기(n, 손, 물음)
+
+        남긴것 = None
+        if body.get("남길까") or body.get("keep"):
+            남긴것 = _묻기.남기기(n, 물음, 난것)
+        # ★ **답을 못 냈어도 남긴다.** 무엇을 물었는데 창고가 못 답했는지가
+        #   다음에 무엇을 채울지 알려 준다 — 그게 일지를 두는 까닭이다.
+        _일지.적기(n, "묻기", (난것["답"] or 난것["왜"] or "")[:120],
+                 ([남긴것] if 남긴것 else 난것.get("근거") or []))
+        return self._send(200, {"answer": 난것["답"], "sources": 난것["근거"],
+                                "looked": 난것["본것"], "why": 난것["왜"],
+                                "kept": 남긴것})
 
     def _ask(self, body: Any) -> None:
         """지시를 받아 실제로 돌린다. 결과는 파일로도 남겨 어디서든 내려받게 한다."""
@@ -3128,6 +3166,19 @@ def _self_check() -> None:
         assert note_store.path_of(_쪽9.title).parent.parent.parent.name == "wiki"
         # 모델이 없으면 아무 일도 안 난다
         assert _합9.합치기(note_store, None, 어디=_표9)["만든것"] == []
+
+    # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
+    #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
+    assert "/eb/v1/wiki/ask" in Handler.POST_PATHS, "묻기 문이 POST 목록에 없다"
+    assert hasattr(Handler, "_wiki_ask"), "묻기 문을 받을 손이 없다"
+    note_store.write(notes.Note(title="묻기 시험 글", kind="오류",
+                                body="맥에서 한글 경로에 Qt 플러그인이 걸리면 창이 안 뜬다."))
+    note_store.reindex()
+    import query as _묻9
+
+    _난묻9 = _묻9.묻기(note_store, lambda 말들: "창이 안 뜬다 [[묻기 시험 글]]", "한글 경로")
+    assert _난묻9["근거"] == ["묻기 시험 글"], _난묻9
+    assert _묻9.묻기(note_store, None, "한글 경로")["왜"] == "모델이 없다"
 
     # ★★ **배선까지 잰다.** 위는 `합치기` 를 직접 부른 것이라, 주기 정리에서 **안 부르게**
     #   고쳐도 통과한다(막이를 되돌려 보고 알았다). 실제 길(`consolidate_now`)로 돌려 본다.

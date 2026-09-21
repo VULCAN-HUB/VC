@@ -215,6 +215,10 @@ def _쓰기막히면알림(돌려줄=None):
 class MainWindow(QWidget):
     # AI 요약·번역이 끝나면(딴 실) — (제목, 머리, 글). ★ 신호 이름은 영문(한글이면 Qt 가 터진다)
     assist_done = pyqtSignal(str, str, str)
+    # 묻기(Query) 가 끝났다 — 물음 · 답 · 근거 제목들.
+    # ★ **신호 이름은 영문이어야 한다.** 한글로 두면 PyQt 가 이름을 ascii 로 굽다
+    #   `UnicodeEncodeError` 로 창이 통째로 안 뜬다(2026-09-21 재서 확인).
+    query_done = pyqtSignal(str, str, list)
 
     def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
         """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
@@ -247,6 +251,7 @@ class MainWindow(QWidget):
 
         left = self._build_head()
         self.assist_done.connect(lambda t, h, g: self._도움보이기(t, h, g))
+        self.query_done.connect(lambda 물음, 답, 근거: self._묻기보이기(물음, 답, 근거))
         scroll, rescan = self._build_proposals()
         self._build_body(left, scroll, rescan)
 
@@ -1543,6 +1548,13 @@ class MainWindow(QWidget):
         #   주소를 찾는 말로 치는 일은 사실상 없으므로 여기서 가른다.
         if wiki.주소인가(text):
             self.원본모으기(text)
+            return
+
+        # ★★ **물음표로 끝나면 「묻기」다**(카파시 LLM Wiki 의 셋째 일). 찾기 칸이 곧
+        #   지시 칸이라, 문을 따로 만들지 않고 여기서 가른다 — 주소를 「모으기」로
+        #   가른 것과 같은 결이다. 찾는 말에 물음표를 붙이는 일은 사실상 없다.
+        if wiki.물음인가(text):
+            self.창고에묻기(text)
             return
 
         # **시키는 말이면 그대로 한다.** 검색칸이 곧 지시칸이다 — 따로 두면 어느 칸에
@@ -2889,6 +2901,70 @@ class MainWindow(QWidget):
             self.assist_done.emit(title, 머리, 글)
 
         threading.Thread(target=일, daemon=True).start()
+
+    def 창고에묻기(self, 물음: str) -> None:
+        """묻기(Query) — 서버에 **창고를 뒤져 답해 달라**고 한다. 딴 실에서 돈다.
+
+        ★ 모델 답은 실측 15초쯤이라 창에서 곧장 부르면 **그동안 창이 굳는다.**
+          요약·번역(`_도움`)이 쓰는 길을 그대로 따랐다.
+        """
+        self.report(f"창고를 뒤지는 중 — 「{물음}」", [])
+        link = self.link
+
+        def 일() -> None:
+            답, 근거 = "", []
+            요청 = urllib.request.Request(
+                f"{link.base}/eb/v1/wiki/ask", method="POST",
+                data=json.dumps({"text": 물음}, ensure_ascii=False).encode(),
+                headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(요청, timeout=180) as r:
+                    난것 = json.loads(r.read().decode())
+                답 = 난것.get("answer") or ""
+                근거 = 난것.get("sources") or 난것.get("looked") or []
+                if not 답:
+                    답 = "⚠ " + (난것.get("why") or "답을 못 냈다")
+            except urllib.error.HTTPError as e:
+                try:
+                    답 = "⚠ " + json.loads(e.read().decode()).get("error", str(e))
+                except Exception:
+                    답 = f"⚠ {e}"
+            except Exception as e:
+                답 = f"⚠ 서버에 못 물었다 — {type(e).__name__}"
+            self.query_done.emit(물음, 답, list(근거))
+
+        threading.Thread(target=일, daemon=True).start()
+
+    def _묻기보이기(self, 물음: str, 답: str, 근거: list) -> None:
+        """답을 말하고, 근거 글들을 결과 칸에 세운다 — **눌러서 확인할 수 있게.**
+
+        ★★ 답을 창고에 남길지는 **물어본다.** 물을 때마다 글이 쌓이면 창고가 물음으로
+           덮이고, 기계가 지은 글과 사람이 정한 글이 섞인다. 이 프로그램의 결
+           (제안 → 승인 → 기록)이 여기에도 그대로 간다.
+        """
+        self.report(답, list(근거))
+        if 근거:
+            self.show_results(list(근거))
+            self.show_note(근거[0])
+        if 답.startswith("⚠") or not 근거:
+            return          # 못 냈거나 근거 없는 답은 남길 것이 아니다
+        box = QMessageBox(self)
+        box.setWindowTitle("창고에 남길까")
+        box.setText(f"「{물음}」\n\n{답}")
+        남기기단추 = box.addButton("창고에 남기기", QMessageBox.AcceptRole)
+        box.addButton("그냥 두기", QMessageBox.RejectRole)
+        box.exec_()
+        if box.clickedButton() is not 남기기단추:
+            return
+        import query as _묻기
+
+        제목 = _묻기.남기기(self.notes, 물음, {"답": 답, "근거": list(근거)})
+        if not 제목:
+            return
+        wikilog.적기(self.notes, "묻기", f"남김 — {물음}", [제목])
+        self.refresh()
+        self.show_note(제목)
+        self.report(f"남겼어 — 「{제목}」 (갈래는 {wiki.기본갈래}, 보고 옮겨도 돼).", [제목])
 
     def _도움보이기(self, title: str, 머리: str, 글: str) -> None:
         """AI 답을 창으로 — 복사 · 글 끝에 붙이기."""
