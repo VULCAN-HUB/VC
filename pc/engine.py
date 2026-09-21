@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import gc
 import os
+import platform
 import subprocess
 import threading
 import time
@@ -106,6 +107,23 @@ def detect_hardware() -> dict[str, Any]:
             vram = int(float(mb))
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
+
+    # ★★ **맥은 `nvidia-smi` 가 없다.** 그래서 늘 `cpu` 등급으로 떨어져 **모델이 GPU 를
+    #   한 겹도 안 쓰고 돌았다**(`gpu_layers: 0`). 재서 잡았다 — 같은 물음이 직접 부르면
+    #   11초, 서버를 거치면 60초였다(2026-09-21 · 맥 2호기 · qwen3-8b).
+    #   애플 실리콘은 **메모리를 CPU 와 같이 쓴다**(통합 메모리) — llama.cpp 의 Metal 이
+    #   그 메모리를 그대로 쓰므로, VRAM 대신 **시스템 메모리**로 등급을 매긴다.
+    #   보수적으로 절반만 센다 — 나머지는 OS 와 앱이 쓴다.
+    if not vram and platform.system() == "Darwin" and platform.machine() == "arm64":
+        try:
+            난것 = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                capture_output=True, text=True, timeout=5)
+            바이트 = int((난것.stdout or "0").strip() or 0)
+            if 바이트 > 0:
+                vram = int(바이트 / (1024 * 1024) / 2)
+                name = "Apple Silicon (통합 메모리)"
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
 
     tier, note = next((t, n) for t, floor, n in TIERS if vram >= floor)
     return {"gpu": name, "vram_mb": vram, "tier": tier, "note": note}
@@ -457,6 +475,18 @@ def _self_check() -> None:
     assert hw["note"], "등급 설명이 비었다"
     # 등급마다 권장이 다르다 — 개발용 PC 기준으로 굳으면 안 된다.
     assert ADVICE["cpu"]["gpu_layers"] == 0 and ADVICE["high"]["gpu_layers"] == -1
+    # ★★ **맥에서 GPU 를 한 겹도 안 쓰고 돌던 것.** `nvidia-smi` 만 보느라 애플 실리콘이
+    #   늘 `cpu` 등급이었다 — 같은 물음이 직접 부르면 11초, 서버를 거치면 60초였다
+    #   (2026-09-21 재서 잡았다). 통합 메모리라 시스템 메모리로 등급을 매긴다.
+    import platform as _플랫폼
+
+    난것 = detect_hardware()
+    if _플랫폼.system() == "Darwin" and _플랫폼.machine() == "arm64":
+        assert 난것["vram_mb"] > 0, f"애플 실리콘을 못 알아본다: {난것}"
+        assert ADVICE[난것["tier"]]["gpu_layers"] == -1, \
+            f"맥에서 GPU 를 안 쓴다: {난것['tier']}"
+    # 어느 기계든 등급은 넷 중 하나이고 권장값이 있다
+    assert 난것["tier"] in ADVICE, 난것
     assert ADVICE["high"]["chat"] != ADVICE["cpu"]["chat"]
 
     # 이미지는 OpenAI 규격 그대로 나간다.
