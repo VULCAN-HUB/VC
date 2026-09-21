@@ -86,8 +86,11 @@ def 살피기(창고: Notes) -> dict[str, list]:
                 끊긴링크.append((제목, 제목맞춤(str(가리킨).split("#")[0].split("|")[0].strip())))
 
     # 외톨이는 **wiki 층만** 본다. 원본은 원래 아무와도 안 이어진 채 들어온다.
+    # ★ **일지도 안 센다.** 날짜에 매인 글이라 **날짜로 찾는다** — 링크가 없어도 제 할 일을
+    #   한다. 안 빼면 오늘 일지를 만들 때마다 매일 「외톨이」가 하나씩 는다(2026-09-21 확인).
     외톨이 = sorted(t for t in 글들
-                 if 층of[t] == wiki.WIKI and not 가리킨수.get(t) and not 나간수.get(t))
+                 if 층of[t] == wiki.WIKI and 갈래of.get(t) != "일지"
+                 and not 가리킨수.get(t) and not 나간수.get(t))
 
     # 모아만 두고 안 합친 원본 — 요약 쪽이 없는 것
     import synth
@@ -242,6 +245,14 @@ def _self_check() -> None:
         창고.delete("사람이 쓴 요약 둘")
         창고.delete("사람이 쓴 요약")
         assert 살피기(창고)["겹친요약"] == []
+
+        # ★ **일지는 외톨이로 안 센다** — 날짜로 찾는 글이라 링크가 없어도 된다.
+        #   안 빼면 오늘 일지를 만들 때마다 매일 하나씩 는다.
+        창고.write(Note(title="2026-01-01", body="# 2026-01-01", kind="일지"))
+        창고.reindex()
+        assert "2026-01-01" not in 살피기(창고)["외톨이"], 살피기(창고)["외톨이"]
+        창고.delete("2026-01-01")
+        창고.reindex()
 
         # ★ **건 것은 끊겼어도 「이으려 한 것」이다** — 링크를 걸어 놓고 외톨이로 잡히면 안 된다
         창고.write(Note(title="걸었지만 끊긴 글", body="[[없는 이름AAA]] 하나만 가리킨다", kind="메모"))
