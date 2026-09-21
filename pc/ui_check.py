@@ -2098,6 +2098,21 @@ def run() -> None:
         # 자리를 벗어난 파일은 못 연다
         _창코드.코드열기("CodePanel", "../../밖.txt")
         assert _창코드._연코드 == ("CodePanel", "src/main.py"), "자리 밖 파일을 열었다"
+        # ★★ **긴 경로가 칸을 밀면 안 된다.** 곁 칸은 폭이 정해져 있어서 긴 이름 하나가
+        #   목록 전체를 화면 밖으로 민다(오늘 결과 칸에서 본 그 병이다 · 2026-09-21).
+        (_뿌리검사 / "CodePanel" / "아주" / "깊은" / "자리").mkdir(parents=True, exist_ok=True)
+        (_뿌리검사 / "CodePanel" / "아주" / "깊은" / "자리" /
+         "아주아주아주아주아주아주긴이름의파일.py").write_text("y = 2\n", encoding="utf-8")
+        _창코드._프로젝트펼치기("CodePanel")
+        _창코드.코드그리기()
+        _창코드.코드줄임()
+        app.processEvents()
+        _칸폭 = max(_창코드.codes.width(), 200)
+        _넘침 = [(_것.text()[:20], _것.sizeHint().width()) for i in range(_창코드._코드줄.count())
+               for _것 in [_창코드._코드줄.itemAt(i).widget()]
+               if _것 is not None and _것.sizeHint().width() > _칸폭 + 4]
+        assert not _넘침, f"코드 칸이 밀린다(폭 {_칸폭}): {_넘침[:3]}"
+
         # 창고 글을 열면 코드 모드가 풀린다
         _창코드.notes.write(Note(title="딴 글", body="몸"))
         _창코드.notes.reindex()

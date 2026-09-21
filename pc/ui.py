@@ -2307,6 +2307,9 @@ class MainWindow(QWidget):
         for 이름 in 프로젝트들:
             머리 = QPushButton(("▾ " if 이름 == self._연프로젝트 else "▸ ") + 이름)
             머리.setObjectName("quiet")
+            # ★ **단추가 칸보다 넓어지면 칸이 통째로 밀린다.** 곁 칸은 폭이 정해져 있어서
+            #   긴 이름 하나가 목록 전체를 화면 밖으로 민다(오늘 결과 칸에서 본 그 병이다).
+            머리.setMinimumWidth(1)
             머리.clicked.connect(lambda _=False, n=이름: self._프로젝트펼치기(n))
             self._코드줄.addWidget(머리)
             if 이름 != self._연프로젝트:
@@ -2315,10 +2318,25 @@ class MainWindow(QWidget):
             for 상대 in 난것["파일"][:120]:
                 단추 = QPushButton("   " + 상대)
                 단추.setObjectName("quiet")
+                단추.setMinimumWidth(1)
+                # ★ 긴 경로는 **앞을 줄인다** — 뒤쪽(파일 이름)이 알아보는 데 쓸모 있다.
+                단추.vc_코드경로 = 상대
+                단추.setToolTip(상대)
                 단추.clicked.connect(lambda _=False, n=이름, r=상대: self.코드열기(n, r))
                 self._코드줄.addWidget(단추)
             if 난것["잘림"]:
                 self._코드줄.addWidget(QLabel("   … 파일이 많아 잘렸다"))
+        self._later(self.코드줄임)
+
+    def 코드줄임(self) -> None:
+        """코드 칸 단추 글을 **칸 폭에 맞춰** 줄인다. 안 줄이면 목록이 화면 밖으로 밀린다."""
+        for i in range(self._코드줄.count()):
+            것 = self._코드줄.itemAt(i).widget()
+            경로 = getattr(것, "vc_코드경로", None)
+            if 경로 is None:
+                continue
+            폭 = max(것.width() - 26, 40)
+            것.setText("   " + 것.fontMetrics().elidedText(경로, Qt.ElideLeft, 폭))
 
     def _프로젝트펼치기(self, 이름: str) -> None:
         self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
