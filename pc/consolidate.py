@@ -20,7 +20,7 @@ import wiki
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from notes import Note, Notes, parse_attachments, parse_tags, IMAGE_EXT
+from notes import Note, Notes, safe_title, parse_attachments, parse_tags, IMAGE_EXT
 
 FOLDER = wiki.정리폴더                 # 정리 글이 사는 자리(항목으로 센다 — 사람이 보는 결과물이다)
 LIST_TITLE = "제품 보유 목록"
@@ -257,7 +257,10 @@ def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
     written = []
 
     def put(title: str, body: str, sub: str, pinned: bool = False) -> None:
-        at = folder / sub / f"{title.replace('/', '∕')}.md"
+        # ★★ **파일 이름 짓는 법은 창고 것을 쓴다.** 여기서만 `/` 를 `∕`(U+2215)로
+        #   바꾸고 있었는데, 창고는 `／`(U+FF0F)로 바꾼다 — **글자가 달라 링크가 안 닿았다.**
+        #   제목에 `/` 가 든 글(「… → `models/`」)의 역링크가 통째로 끊겨 있었다(재서 잡았다).
+        at = folder / sub / f"{safe_title(title)}.md"
         갈래 = "엔티티" if sub else wiki.기본갈래
         old = store.read_at(at) if at.exists() else None
         # ★★ **몸만 보면 갈래가 영영 안 고쳐진다.** 갈래 표를 새로 세운 뒤(2026-09-21)
@@ -347,6 +350,22 @@ def _self_check() -> None:
         run(n)                                  # 몸은 그대로인데 갈래만 낡았다
         assert n.read("제품 보유 목록").kind == _위키정리.기본갈래, \
             "갈래가 낡았는데 다시 안 썼다"
+
+        # ★★ **제목에 `/` 가 든 글의 링크가 닿아야 한다.** 여기서만 `∕`(U+2215)로 바꾸고
+        #   창고는 `／`(U+FF0F)로 바꿔서, 역링크가 통째로 끊겨 있었다(2026-09-21 재서 잡았다).
+        n.write(Note(title="빗금 제품 받음",
+                     body="- 제품명 : 모델 → `models/`\n- 종류 : 파일\n- 받은날 : 2026-11-01\n#제품",
+                     created="2026-11-01T09:00:00"))
+        run(n)
+        n.reindex()
+        빗금 = [t for t in (r["title"] for r in n.conn.execute("SELECT title FROM notes"))
+              if "models" in t and t.startswith("제품 ·")]
+        assert 빗금, "빗금 든 제품 글이 안 났다"
+        목록 = n.read("제품 보유 목록")
+        assert 목록 is not None
+        닿은 = [n.resolve(dst) for dst in
+              (r["dst"] for r in n.conn.execute("SELECT dst FROM links WHERE src = ?", (목록.title,)))]
+        assert 빗금[0] in 닿은, f"빗금 든 제목의 링크가 안 닿는다: {빗금[0]!r} / {닿은}"
 
     print("consolidate self-check 통과")
 

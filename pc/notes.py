@@ -656,7 +656,20 @@ def _코드지우기(body: str) -> str:
        6개가 그랬다), 그래프에 **아무것도 아닌 점**이 생긴다. 옵시디언도 코드 안은 안 센다.
     """
     지움 = _울타리.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), body)
-    return _홑따옴.sub(lambda m: " " * len(m.group(0)), 지움)
+
+    # ★★ **링크 안의 홑따옴표는 안 지운다.** 제목에 `…` 가 든 글이 실제로 있다
+    #   (「제품 · `multilingual-e5-small` ONNX …」). 그것까지 지우면 **제목이 뭉개져**
+    #   링크가 끊기고, 「아직 없는 것」에 빈칸투성이 이름이 뜬다(재서 잡았다 · 2026-09-21).
+    #   가르는 기준은 **누가 누구를 담느냐**다:
+    #     `[[제목 `코드`]]`  링크가 코드를 담는다  → 제목이다. 그대로 둔다
+    #     `` `[[링크]]` ``   코드가 링크를 담는다  → 예시다. 지운다
+    링크자리 = [(m.start(), m.end()) for m in LINK_RE.finditer(지움)]
+
+    def _지울까(m: "re.Match") -> str:
+        담겼나 = any(s < m.start() and m.end() < e for s, e in 링크자리)
+        return m.group(0) if 담겼나 else " " * len(m.group(0))
+
+    return _홑따옴.sub(_지울까, 지움)
 
 
 def 코드밖만(패턴: "re.Pattern", 글: str, 바꿈) -> str:
@@ -993,6 +1006,18 @@ def _now() -> str:
 # 아예 막는다. 우리는 막지 않고 바꾼다 — AI 는 「질문? 답」 같은 제목을 흔히 짓는다.
 _전각 = str.maketrans({"?": "？", ":": "：", "/": "／", "\\": "＼", "|": "｜",
                       "*": "＊", '"': "＂", "<": "＜", ">": "＞"})
+
+
+# 위 바꿈을 **되돌리는** 표. 링크는 사람이 **원래 글자로** 적는다(`[[… → `models/`]]`) —
+# 제목은 `／` 로 저장되므로 그대로는 못 맞춘다. `∕`(U+2215)도 받는다: 옛 정리 코드가
+# 그 글자를 썼다(2026-09-21 에 `safe_title` 로 모았지만 쓰던 글이 남아 있다).
+_전각풀기 = str.maketrans({"？": "?", "：": ":", "／": "/", "＼": "\\", "｜": "|",
+                        "＊": "*", "＂": '"', "＜": "<", "＞": ">"})
+
+
+def 제목풀기(title: str) -> str:
+    """전각으로 바꿔 저장한 제목을 **원래 글자 꼴**로 되돌린다(찾을 때만 쓴다)."""
+    return (title or "").translate(_전각풀기)
 
 
 def _알림(말: str) -> None:
@@ -2981,11 +3006,20 @@ class Notes:
         return None
 
     def _names(self, title: str) -> list[str]:
-        """이 항목을 가리킬 수 있는 모든 이름 — 제목과 별칭들."""
+        """이 항목을 가리킬 수 있는 모든 이름 — 제목과 별칭들.
+
+        ★★ **원래 글자 꼴도 센다.** 제목에 `/`·`?` 가 들면 파일 이름에 못 써서 전각으로
+           바꿔 저장하는데, 링크는 **원래 글자로** 적힌다(정리 글이 그렇게 쓴다).
+           `resolve` 는 맞춰 주지만 역링크·이웃은 이름을 **정확히** 맞춰 찾으므로,
+           안 넣으면 **닿는 링크인데 역링크에는 안 뜬다**(2026-09-21 재서 잡았다).
+        """
         title = 제목맞춤(title)
         alias = [r["alias"] for r in self.conn.execute(
             "SELECT alias FROM aliases WHERE title = ?", (title,))]
-        return [title, *alias]
+        푼것 = 제목풀기(title)
+        옛빗금 = title.replace("／", "∕")      # 옛 정리 코드가 쓰던 글자
+        더 = [x for x in (푼것, 옛빗금) if x != title]
+        return [title, *alias, *더]
 
     def neighbors(self, title: str) -> list[str]:
         """그래프 화면이 쓸 연결. 나가는 링크와 들어오는 링크를 함께 준다.
@@ -4046,6 +4080,31 @@ def _self_check() -> None:
         assert parse_links("~~~md\n[[예시]]\n~~~") == []
         # 울타리가 안 닫혀도 끝까지 코드로 본다 — 반만 지우면 뒤가 제멋대로다
         assert parse_links("```\n[[예시]]") == []
+        # ★★ **제목에 홑따옴표가 든 글**의 링크를 갉아먹으면 안 된다 — 창고에 실제로 있다
+        긴이름 = "제품 · `multilingual-e5-small` ONNX 118MB"
+        assert parse_links(f"목록: [[{긴이름}]]") == [(긴이름, "")], parse_links(f"[[{긴이름}]]")
+        # 그래도 홑따옴표가 **링크를 담으면** 그건 예시다
+        assert parse_links(f"[[{긴이름}]] 과 `[[링크]]`") == [(긴이름, "")], \
+            parse_links(f"[[{긴이름}]] 과 `[[링크]]`")
+
+        # ★★ **제목에 `/` 가 들면 전각(`／`)으로 저장되는데 링크는 원래 글자로 적힌다.**
+        #   `resolve` 만 맞춰 주고 역링크가 안 잡히면 **닿는 링크인데 안 뜬다**(재서 잡았다).
+        with tempfile.TemporaryDirectory() as tmp빗금:
+            n빗금 = Notes(Path(tmp빗금) / "notes")
+            n빗금.write(Note(title="모델 → `models/`", body="몸"))
+            n빗금.write(Note(title="목록", body="- [[모델 → `models/`]]"))
+            n빗금.reindex()
+            제목 = [r["title"] for r in n빗금.conn.execute("SELECT title FROM notes")
+                  if r["title"].startswith("모델")][0]
+            assert "／" in 제목, repr(제목)
+            assert n빗금.resolve("모델 → `models/`") == 제목
+            assert [s for s, _ in n빗금.backlinks(제목)] == ["목록"], n빗금.backlinks(제목)
+            assert n빗금.neighbors("목록") == [제목], n빗금.neighbors("목록")
+            # 옛 정리 코드가 쓰던 `∕`(U+2215)로 적힌 링크도 받는다
+            n빗금.write(Note(title="옛 목록", body="- [[모델 → `models∕`]]"))
+            n빗금.reindex()
+            assert "옛 목록" in [s for s, _ in n빗금.backlinks(제목)], n빗금.backlinks(제목)
+            n빗금.conn.close()
         # ★★ **찾는 쪽과 고치는 쪽은 같아야 한다.** 코드 안을 링크로 안 세게 바꾼 날
         #   `rename` 을 같이 안 고쳐서, 링크로는 안 세면서 **이름은 바꿨다**(2026-09-21).
         with tempfile.TemporaryDirectory() as tmp코드:
