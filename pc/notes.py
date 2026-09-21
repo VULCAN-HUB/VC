@@ -165,6 +165,9 @@ HISTORY_DIR = wiki.이력폴더
 HISTORY_KEEP = 20          # 항목당 남길 판 수. 20년이라도 무한정 쌓으면 안 된다
 HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든다(치는 대로 저장이라)
 
+# 켤 때 쓸어 내는 `.tmp` 찌꺼기의 **나이**. 이보다 젊으면 누군가 쓰는 중으로 본다.
+찌꺼기나이 = 60.0
+
 # 서식(템플릿)을 두는 곳. 밑줄로 시작해 항목 목록에서 눈에 안 띄되, 사람이 열어
 # 고칠 수 있게 **보이는** 폴더로 둔다(`_첨부`와 같은 자리).
 TEMPLATE_DIR = wiki.서식폴더
@@ -1242,8 +1245,17 @@ class Notes:
         # 도는 정리 단계가 지워, 링크·태그가 조용히 0이 된다(실제로 그랬다).
         self.root = (Path(root) if root else paths.notes_dir()).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        # ★★ **쓰는 중인 임시 파일은 안 지운다.** 켤 때 찌꺼기를 쓸어 내는데, 같은 창고를
+        #   **딴 데서 열면**(창과 서버, 또는 스크립트) 그쪽이 막 만든 `.tmp` 를 지워
+        #   쓰기가 통째로 실패한다 — `_atomic_write` 의 `os.replace` 가
+        #   `FileNotFoundError` 로 터진다. 여럿이 같이 쓰는 시험에서 **6판에 한 번꼴로**
+        #   났고, 단독으로는 안 나서 「흔들리는 검사」로 보일 뻔했다(2026-09-21).
+        #   찌꺼기는 죽은 판이 남긴 것이라 늘 오래됐다 — **나이로 가른다.**
+        지금 = time.time()
         for junk in 훑어내림(self.root, (".tmp",)):
             try:
+                if 지금 - junk.stat().st_mtime < 찌꺼기나이:
+                    continue          # 누군가 지금 쓰고 있다
                 junk.unlink(missing_ok=True)  # 쓰다 죽으면 남는다. 항목으로 세면 안 된다
             except OSError:
                 pass
@@ -5311,6 +5323,27 @@ def _self_check() -> None:
         assert n세움.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"] == 0, \
             "빈 특별 폴더가 항목으로 셌다"
         n세움.conn.close()
+
+    # ★★ **쓰는 중인 임시 파일을 남이 지우면 안 된다.** 같은 창고를 딴 데서 여는 것만으로
+    #   상대의 쓰기가 터졌다(`os.replace` → FileNotFoundError). 여럿이 쓰는 시험에서
+    #   6판에 한 번꼴로 났다 — 단독으로는 안 나서 「흔들리는 검사」로 보일 뻔했다.
+    with tempfile.TemporaryDirectory() as tmp찌꺼기:
+        뿌리 = Path(tmp찌꺼기) / "notes"
+        첫 = Notes(뿌리)
+        첫.conn.close()
+        갓난 = 뿌리 / "wiki" / "쓰는중.md.12345.tmp"
+        갓난.parent.mkdir(parents=True, exist_ok=True)
+        갓난.write_text("쓰는 중", encoding="utf-8")
+        늙은 = 뿌리 / "wiki" / "죽다남긴.md.999.tmp"
+        늙은.write_text("찌꺼기", encoding="utf-8")
+        import os as _os찌꺼기
+
+        옛시각 = time.time() - 찌꺼기나이 - 10
+        _os찌꺼기.utime(늙은, (옛시각, 옛시각))
+        둘째 = Notes(뿌리)          # 남이 창고를 연다
+        assert 갓난.exists(), "쓰는 중인 임시 파일을 지웠다 — 남의 쓰기가 터진다"
+        assert not 늙은.exists(), "죽은 판이 남긴 찌꺼기를 안 치운다"
+        둘째.conn.close()
 
     print("notes self-check 통과")
 
