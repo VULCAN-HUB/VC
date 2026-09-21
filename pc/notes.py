@@ -1646,13 +1646,18 @@ class Notes:
                         옛자리.rename(새자리)
                         옮긴것.append(f"{옛이름} → {새이름}")
                         continue
-                    for 것 in 옛자리.iterdir():
+                    # ★★ **훑으면서 옮기면 안 된다.** `iterdir()` 은 게으른 훑기라
+                    #   옮기는 사이 훑개가 어긋나 `FileNotFoundError` 가 난다 —
+                    #   모두검사에서 한 번 터졌다(2026-09-21). 먼저 다 세어 두고 옮긴다.
+                    for 것 in list(옛자리.iterdir()):
                         목표 = 새자리 / 것.name
                         if not 목표.exists():
                             것.rename(목표)
-                    if not any(옛자리.iterdir()):
+                    if not list(옛자리.iterdir()):
                         옛자리.rmdir()
                     옮긴것.append(f"{옛이름} → {새이름} (겹치지 않는 것만)")
+                except FileNotFoundError:
+                    continue      # 훑는 사이 남이 지웠다 — 옮길 것이 없다
                 except OSError as e:
                     _알림(f"[폴더 옮기기] `{옛이름}` 을 못 옮겼다 — {type(e).__name__}")
         return 옮긴것
