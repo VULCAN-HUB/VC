@@ -2065,6 +2065,49 @@ def run() -> None:
     assert any("못 저장했어" in t for t in _승인말), f"승인이 막혔는데 까닭을 안 말한다: {_승인말}"
     assert win.store.proposal("막힐승인")["decision"] is None, "저장이 막혔는데 결정을 적었다(제안이 사라진다)"
 
+    # ★★ **코드 칸(헤르메스 IDE)** — 열고·고치고·저장까지 **알맹이를 태운다.**
+    #   오늘 「갈래만 재고 알맹이를 안 태웠다」로 묻기가 창에서 통째로 안 됐다(2026-09-21).
+    import codefiles as _코드검사
+    import hermes as _헤검사
+
+    _자리검사 = tempfile.mkdtemp()
+    _뿌리검사 = Path(_자리검사) / "projects"
+    (_뿌리검사 / "CodePanel" / "src").mkdir(parents=True)
+    (_뿌리검사 / "CodePanel" / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    _옛뿌리검사 = _헤검사.기본뿌리
+    _헤검사.기본뿌리 = _뿌리검사
+    try:
+        _창코드 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+        _창코드.show()
+        _창코드.코드그리기()
+        assert _창코드._코드줄.count() >= 1, "코드 칸이 비었다"
+        # 파일을 연다 — **창고 글이 아니어야 한다**
+        _창코드.코드열기("CodePanel", "src/main.py")
+        assert _창코드._연코드 == ("CodePanel", "src/main.py"), _창코드._연코드
+        assert _창코드.detail_body.toPlainText() == "x = 1\n"
+        assert _창코드.editing is None, "코드를 열었는데 창고 글이 열려 있다"
+        # 고치고 저장 — **그 파일에** 써져야 한다
+        _창코드.detail_body.setPlainText("x = 2\n")
+        _창코드.save_note()
+        assert (_뿌리검사 / "CodePanel" / "src" / "main.py").read_text(encoding="utf-8") == "x = 2\n", \
+            "코드 저장이 파일에 안 갔다"
+        # ★★ **창고로 새면 안 된다** — 코드가 창고 글이 되면 갈래·링크가 흐려진다
+        _센것 = _창코드.notes.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"]
+        assert _창코드.notes.read("CodePanel/src/main.py") is None, "코드가 창고 글이 됐다"
+        assert _센것 <= 2, f"코드를 저장했더니 창고 글이 늘었다: {_센것}"
+        # 자리를 벗어난 파일은 못 연다
+        _창코드.코드열기("CodePanel", "../../밖.txt")
+        assert _창코드._연코드 == ("CodePanel", "src/main.py"), "자리 밖 파일을 열었다"
+        # 창고 글을 열면 코드 모드가 풀린다
+        _창코드.notes.write(Note(title="딴 글", body="몸"))
+        _창코드.notes.reindex()
+        _창코드.show_note("딴 글")
+        assert _창코드._연코드 is None, "창고 글을 열었는데 코드 모드가 안 풀렸다"
+        _창코드.close()
+        app.processEvents()
+    finally:
+        _헤검사.기본뿌리 = _옛뿌리검사
+
     # ★★ **답이 와도 창이 멈추면 안 된다.** 「남길까」를 모달(`exec_()`)로 띄웠더니
     #   창이 답마다 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(2026-09-21 재서 잡았다).
     #   맨 뒤에서 잰다 — 이 검사가 `say` 줄을 덮어 앞 검사를 흔들었다.

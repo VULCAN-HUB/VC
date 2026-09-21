@@ -226,6 +226,9 @@ class MainWindow(QWidget):
         `left`(그래프 판)·`scroll`·`rescan`(제안 칸) 셋뿐이라 그것만 주고받는다."""
         super().__init__()
         self.notes = notes
+        # 헤르메스 IDE — 지금 펼친 프로젝트와 연 코드 파일(`(프로젝트, 상대경로)`).
+        self._연프로젝트: str | None = None
+        self._연코드: "tuple[str, str] | None" = None
         self.store = store
         self.link = link or ServerLink()
         self.skills = SkillStore(notes)
@@ -810,10 +813,19 @@ class MainWindow(QWidget):
         self._폴더줄.setSpacing(2)
         self.folders_fold = Folded("폴더", "창고의 폴더. 눌러 그 안의 글만 모아 본다", self.folders)
 
+        # ★★ **코드 칸**(헤르메스 IDE 첫 조각 · 오너 2026-09-21 「파일 나무 + 편집기」).
+        #   창고 옆에서 프로젝트 파일을 보고 고친다. 평소엔 접어 둔다.
+        self.codes = QWidget()
+        self._코드줄 = QVBoxLayout(self.codes)
+        self._코드줄.setContentsMargins(0, 0, 0, 0)
+        self._코드줄.setSpacing(2)
+        self.codes_fold = Folded("코드", "이 기계의 프로젝트 파일. 눌러서 열고 고친다", self.codes)
+
         self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
         self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
         side.addWidget(self.audit_fold)
         side.addWidget(self.folders_fold)
+        side.addWidget(self.codes_fold)
         side.addWidget(self.props_fold)
         side.addWidget(self.gaps_fold)
         side.addWidget(self.years_fold)
@@ -1054,6 +1066,9 @@ class MainWindow(QWidget):
         self._최근채우기()
         self.앞머리그리기()      # 창고가 무엇을 적어 왔는지도 같이 새로 센다
         self.폴더그리기()
+        # ★ 프로젝트를 펼치기 전에는 `~/projects` 를 한 번 훑을 뿐이라 값이 안 든다.
+        #   파일 나무는 **펼친 프로젝트 하나만** 센다.
+        self.코드그리기()
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
@@ -2270,6 +2285,93 @@ class MainWindow(QWidget):
         # 살핀 것도 일이다 — 일지에 한 줄 남긴다
         wikilog.적기(self.notes, "살피기", audit.한줄(난것))
 
+    # --- 코드(헤르메스 IDE) -------------------------------------------------
+
+    def 코드그리기(self) -> None:
+        """프로젝트와 그 파일들을 곁 칸에 늘어놓는다. **접혀 있으면 세지도 않는다.**
+
+        ★ 파일 나무는 디스크를 훑는 일이라, 안 볼 때까지 훑으면 켤 때가 느려진다.
+        """
+        import codefiles
+
+        while self._코드줄.count():
+            것 = self._코드줄.takeAt(0).widget()
+            if 것 is not None:
+                것.hide()
+                것.setParent(None)
+                것.deleteLater()
+        프로젝트들 = codefiles.프로젝트들()
+        if not 프로젝트들:
+            self._코드줄.addWidget(QLabel("차린 프로젝트가 없다. VC 에게 「새 프로젝트 ‹이름›」 이라고 하면 차린다."))
+            return
+        for 이름 in 프로젝트들:
+            머리 = QPushButton(("▾ " if 이름 == self._연프로젝트 else "▸ ") + 이름)
+            머리.setObjectName("quiet")
+            머리.clicked.connect(lambda _=False, n=이름: self._프로젝트펼치기(n))
+            self._코드줄.addWidget(머리)
+            if 이름 != self._연프로젝트:
+                continue
+            난것 = codefiles.나무(이름)
+            for 상대 in 난것["파일"][:120]:
+                단추 = QPushButton("   " + 상대)
+                단추.setObjectName("quiet")
+                단추.clicked.connect(lambda _=False, n=이름, r=상대: self.코드열기(n, r))
+                self._코드줄.addWidget(단추)
+            if 난것["잘림"]:
+                self._코드줄.addWidget(QLabel("   … 파일이 많아 잘렸다"))
+
+    def _프로젝트펼치기(self, 이름: str) -> None:
+        self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
+        self._later(self.코드그리기)
+
+    def 코드열기(self, 프로젝트: str, 상대: str) -> None:
+        """코드 파일을 본문 칸에 연다. **창고 글이 아니다** — 저장은 그 파일로 간다."""
+        import codefiles
+
+        난것 = codefiles.읽기(프로젝트, 상대)
+        if 난것["왜"]:
+            self.report(f"못 열었어 — {난것['왜']}", [])
+            return
+        self._연코드 = (프로젝트, 상대)
+        self.editing = None                    # 창고 글은 안 열려 있다
+        self.editing_at = None
+        self.detail_title.setText(f"{프로젝트}/{상대}")
+        self.detail_title.setReadOnly(True)
+        self.detail_kind.hide()
+        self.detail_body.setPlainText(난것["글"])
+        self._opened_body = 난것["글"]
+        self.detail_stack.setCurrentIndex(1)   # 코드는 처음부터 고치는 모습
+        self.detail_card.show()
+        self.report(f"{프로젝트}/{상대} 열었어. 고치면 그 파일에 바로 저장돼.", [])
+
+    def 코드저장(self) -> bool:
+        """연 코드 파일을 저장한다. 연 것이 없으면 거짓.
+
+        ★★ **창고로 새면 안 된다.** 코드가 창고 글로 저장되면 창고가 코드 창고가 되고,
+           갈래·링크·그래프가 통째로 흐려진다. 그래서 `save_note` 보다 **먼저** 가른다.
+        """
+        if not self._연코드:
+            return False
+        import codefiles
+
+        프로젝트, 상대 = self._연코드
+        글 = self.detail_body.toPlainText()
+        if 글 == self._opened_body:
+            return True                        # 바뀐 게 없으면 파일을 안 건드린다
+        난것 = codefiles.쓰기(프로젝트, 상대, 글)
+        if not 난것["됐나"]:
+            self.report(f"못 저장했어 — {난것['왜']}", [])
+            return True
+        self._opened_body = 글
+        return True
+
+    def 코드닫기(self) -> None:
+        """코드 모드를 푼다. 창고 글을 열 때마다 부른다."""
+        if not self._연코드:
+            return
+        self._연코드 = None
+        self.detail_title.setReadOnly(False)
+
     def 폴더그리기(self) -> None:
         """폴더 나무를 다시 짓는다. 누르면 그 안의 글만 모은다."""
         while self._폴더줄.count():
@@ -2385,6 +2487,7 @@ class MainWindow(QWidget):
         self.side_btn.show()
         self._show_trail_buttons()
         self._show_twin(note.title, where)
+        self.코드닫기()                            # 코드 모드였으면 푼다 — 창고 글이 우선이다
         self.detail_stack.setCurrentIndex(0)      # 열 때는 읽는 모습
         self.edit_btn.setText("고치기")
         self.edit_btn.show()
@@ -2585,6 +2688,9 @@ class MainWindow(QWidget):
 
     def save_note(self) -> None:
         """치는 대로 저장한다. 열린 항목이 없으면 아무 일도 안 한다."""
+        # ★★ **코드 파일이 열려 있으면 그쪽으로 간다.** 창고로 새면 창고가 코드 창고가 된다.
+        if self.코드저장():
+            return
         if self.editing is None:
             return
         # 읽고-견주고-쓰기를 잠금 안에서 — 그 사이 AI 가 덧붙인 줄을 「밖에서 온 것」으로 못 보고 덮지 않게.
