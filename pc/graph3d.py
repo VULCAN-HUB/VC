@@ -1540,8 +1540,14 @@ class GraphView(QGraphicsView):
             node.set_speaking(False)
 
         def light(i: int) -> None:
+            # ★★ **그 사이 항목이 사라질 수 있다.** 말하는 동안 글이 지워지거나 그래프가
+            #   다시 그려지면 이름이 없어진다 — 그대로 집으면 `KeyError` 로 **창이 죽는다**
+            #   (2026-09-21 검사에서 늦게 도는 타이머가 실제로 그랬다).
+            #   말하는 표시가 하나 안 켜지는 것은 흠이 아니지만, 죽는 것은 흠이다.
             if i > 0:
-                self.nodes[order[i - 1]].set_speaking(True, 0.3)  # 여운
+                앞 = self.nodes.get(order[i - 1])
+                if 앞 is not None:
+                    앞.set_speaking(True, 0.3)  # 여운
             if i >= len(order):
                 QTimer.singleShot(
                     per_node_ms * 2,
@@ -1549,7 +1555,11 @@ class GraphView(QGraphicsView):
                 )
                 self.viewport().update()
                 return
-            self.nodes[order[i]].set_speaking(True, 1.0)
+            이번 = self.nodes.get(order[i])
+            if 이번 is None:
+                QTimer.singleShot(per_node_ms, lambda: light(i + 1))
+                return
+            이번.set_speaking(True, 1.0)
             self._name_front()
             self._resolve_labels()  # 밝아진 항목이 이름표를 되살리므로 다시 정리한다
             self.viewport().update()

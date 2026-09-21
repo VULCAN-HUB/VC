@@ -867,6 +867,9 @@ class Results(QWidget):
                   width: int = 46) -> None:
         for w in self.items:
             self.rows.removeWidget(w)
+            # ★★ **먼저 감춘다.** 보이는 위젯의 부모를 떼면 그 순간 **독립 창**이 된다 —
+            #   `deleteLater` 가 돌기 전까지 화면에 조각 창으로 떠 있다(검사가 잡았다).
+            w.hide()
             w.setParent(None)
             w.deleteLater()
         self.items = []

@@ -1309,6 +1309,34 @@ class Notes:
         self.write_rules()
         if index_now:
             self.reindex()
+        elif self._색인이비었나():
+            # ★★ **색인이 텅 빈 채로 남지 않게 한다.** 화면은 빨리 뜨라고 훑기를 미루는데
+            #   (`index_now=False`), 미룬 훑기는 **색인 실이 한 번 돌고 끝난다** — 그 한 번이
+            #   실패하거나 색인이 어긋나 있으면 **아무도 다시 안 훑어** 창이 빈 채로 남는다.
+            #   실제로 그랬다(2026-09-21: 기록 152장인데 색인 1줄인 채로 멈춰 있었다).
+            #   줄이 거의 없을 때만 본다 — 성한 창고에서는 SELECT 한 번이라 값이 안 든다.
+            _알림("[색인] 비어 있어 켤 때 한 번 채운다")
+            self.reindex()
+
+    # 이보다 줄이 적으면 「비었다」로 본다. 진짜로 작은 창고면 훑어도 값이 안 든다.
+    빈색인줄 = 8
+
+    def _색인이비었나(self) -> bool:
+        """색인이 **거의 비었는데 기록은 있다**면 참. 값싼 검사(SELECT 한 번 + 셈)."""
+        try:
+            줄 = self.conn.execute(
+                f"SELECT COUNT(*) c FROM (SELECT 1 FROM notes LIMIT {self.빈색인줄})"
+            ).fetchone()["c"]
+        except sqlite3.Error:
+            return False
+        if 줄 >= self.빈색인줄:
+            return False          # 넉넉히 있다 — 더 안 본다
+        몇 = 0
+        for _ in 훑어내림(self.root, (".md",)):
+            몇 += 1
+            if 몇 > 줄 + self.빈색인줄:
+                return True       # 기록이 색인보다 훨씬 많다
+        return False
 
     def _is_history(self, path: Path) -> bool:
         """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다. VC 가 적는 기계 기록 요약도.
@@ -5403,6 +5431,30 @@ def _self_check() -> None:
         assert 갓난.exists(), "쓰는 중인 임시 파일을 지웠다 — 남의 쓰기가 터진다"
         assert not 늙은.exists(), "죽은 판이 남긴 찌꺼기를 안 치운다"
         둘째.conn.close()
+
+    # ★★ **색인이 텅 빈 채로 남지 않는다.** 화면을 빨리 띄우려고 훑기를 미루는데,
+    #   미룬 훑기는 한 번 돌고 끝난다 — 그 한 번이 어긋나면 **아무도 다시 안 훑어**
+    #   창이 빈 채로 남았다(2026-09-21: 기록 152장인데 색인 1줄로 멈춰 있었다).
+    with tempfile.TemporaryDirectory() as tmp빈색인:
+        뿌리 = Path(tmp빈색인) / "notes"
+        색인 = str(Path(tmp빈색인) / "idx.db")
+        n빈 = Notes(뿌리, 색인)
+        for i in range(30):
+            n빈.write(Note(title=f"글{i}", body=f"몸 {i}"))
+        n빈.reindex()
+        assert n빈.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"] == 30
+        n빈.conn.execute("DELETE FROM notes WHERE title != '글0'")
+        n빈.conn.commit()
+        n빈.conn.close()
+        # **훑기를 미룬 채** 열어도 비어 있으면 채운다
+        다시 = Notes(뿌리, 색인, index_now=False)
+        몇 = 다시.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"]
+        assert 몇 == 30, f"빈 색인을 안 채웠다: {몇}"
+        다시.conn.close()
+        # 성한 색인은 **안 훑는다** — 켤 때마다 다 읽으면 느려진다
+        성한 = Notes(뿌리, 색인, index_now=False)
+        assert not 성한._색인이비었나(), "성한 색인을 비었다고 한다"
+        성한.conn.close()
 
     print("notes self-check 통과")
 

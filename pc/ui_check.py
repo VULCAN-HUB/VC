@@ -277,6 +277,54 @@ def run() -> None:
         finally:
             win.원본모으기, win.창고에묻기 = 옛모으기, 옛묻기
 
+        # ★★ **갈래만 재면 알맹이가 안 태워진다.** 위에서 `창고에묻기` 를 바꿔치기해
+        #   갈래는 쟀지만, 정작 그 함수 안에서 `urllib` 을 import 안 해 **딴 실에서
+        #   터지고 있었다** — 창에서 묻기가 아예 안 됐다(2026-09-21 창을 몰아 보고 알았다).
+        #   가짜 서버를 세워 **끝까지** 태운다.
+        import json as _json묻기
+        import threading as _실묻기
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class _가짜문(BaseHTTPRequestHandler):
+            def do_POST(self):
+                몸 = _json묻기.dumps({"answer": "짧은 답 [[회의록]]",
+                                    "sources": ["회의록"], "looked": ["회의록"],
+                                    "why": ""}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(몸)))
+                self.end_headers()
+                self.wfile.write(몸)
+
+            def log_message(self, *a):
+                pass
+
+        가짜 = HTTPServer(("127.0.0.1", 0), _가짜문)
+        _실묻기.Thread(target=가짜.serve_forever, daemon=True).start()
+        옛base, 옛token = win.link.base, win.link.token
+        win.link.base = f"http://127.0.0.1:{가짜.server_address[1]}"
+        win.link.token = "test-token"
+        난것묻기 = {}
+        본것 = []
+        옛보이기 = win._묻기보이기
+        win._묻기보이기 = lambda 물, 답, 근: 본것.append((물, 답, list(근)))
+        win.query_done.connect(lambda 물, 답, 근: 난것묻기.update(물음=물, 답=답, 근거=list(근)))
+        try:
+            win.창고에묻기("아무거나 물어본다?")
+            끝 = time.monotonic() + 15
+            while not 난것묻기 and time.monotonic() < 끝:
+                app.processEvents()
+                time.sleep(0.02)
+            assert 난것묻기, "묻기가 딴 실에서 죽었다 — 답이 안 왔다"
+            assert 난것묻기["답"].startswith("짧은 답"), 난것묻기
+            assert 난것묻기["근거"] == ["회의록"], 난것묻기
+            assert 본것 and 본것[0][1].startswith("짧은 답"), 본것
+        finally:
+            win._묻기보이기 = 옛보이기
+            win.link.base, win.link.token = 옛base, 옛token
+            가짜.shutdown()
+
+
         import report as report_module
         os.environ["VC_DATA"] = tmp
         try:
@@ -2016,6 +2064,24 @@ def run() -> None:
         win.report, win.skills.save = _옛말3, _옛저장
     assert any("못 저장했어" in t for t in _승인말), f"승인이 막혔는데 까닭을 안 말한다: {_승인말}"
     assert win.store.proposal("막힐승인")["decision"] is None, "저장이 막혔는데 결정을 적었다(제안이 사라진다)"
+
+    # ★★ **답이 와도 창이 멈추면 안 된다.** 「남길까」를 모달(`exec_()`)로 띄웠더니
+    #   창이 답마다 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(2026-09-21 재서 잡았다).
+    #   맨 뒤에서 잰다 — 이 검사가 `say` 줄을 덮어 앞 검사를 흔들었다.
+    _창묻기 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+    _창묻기.show()
+    # 여기서 재는 것은 **상자가 창을 막느냐** 하나다 — 말하기·결과 칸·글 열기는 딴 데서 잰다
+    _창묻기.report = lambda *a, **k: None
+    _창묻기.show_results = lambda *a, **k: None
+    _창묻기.show_note = lambda *a, **k: None
+    _창묻기._묻기보이기("물음?", "짧은 답 [[회의록]]", ["회의록"])
+    _상자 = getattr(_창묻기, "_묻기상자", None)
+    assert _상자 is not None and not _상자.isModal(), "남길까 상자가 창을 막는다"
+    _창묻기._묻기상자 = None
+    _상자.close()
+    app.processEvents()
+    _창묻기.close()
+    app.processEvents()
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

@@ -2912,6 +2912,9 @@ class MainWindow(QWidget):
         link = self.link
 
         def 일() -> None:
+            import urllib.error
+            import urllib.request
+
             답, 근거 = "", []
             요청 = urllib.request.Request(
                 f"{link.base}/eb/v1/wiki/ask", method="POST",
@@ -2944,17 +2947,34 @@ class MainWindow(QWidget):
         """
         self.report(답, list(근거))
         if 근거:
-            self.show_results(list(근거))
+            # `show_results` 는 **(제목, 요약) 짝**을 받는다 — 제목 글자만 주면
+            # 글자 하나하나로 찢어져 엉뚱한 줄이 선다(재서 잡았다).
+            self.show_results([(t, "") for t in 근거])
             self.show_note(근거[0])
         if 답.startswith("⚠") or not 근거:
             return          # 못 냈거나 근거 없는 답은 남길 것이 아니다
+        # ★★ **창을 막지 않는다.** 처음에 `exec_()` 로 모달을 띄웠더니 답이 올 때마다
+        #   창이 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(재서 잡았다 · 2026-09-21).
+        #   물어보되 막지는 않는다 — 답은 이미 화면에 있고, 남길지는 천천히 정해도 된다.
         box = QMessageBox(self)
         box.setWindowTitle("창고에 남길까")
         box.setText(f"「{물음}」\n\n{답}")
         남기기단추 = box.addButton("창고에 남기기", QMessageBox.AcceptRole)
         box.addButton("그냥 두기", QMessageBox.RejectRole)
-        box.exec_()
-        if box.clickedButton() is not 남기기단추:
+        box.setModal(False)
+        box.setAttribute(Qt.WA_DeleteOnClose)      # 닫히면 스스로 지워진다
+        box.buttonClicked.connect(
+            lambda 눌린, b=box, 물=물음, 근=list(근거), 예=남기기단추:
+            self._묻기남기기(물, 근, 눌린 is 예, b))
+        self._묻기상자 = box          # 참조를 들고 있어야 안 사라진다
+        box.show()
+
+    def _묻기남기기(self, 물음: str, 근거: list, 남길까: bool, 상자) -> None:
+        """「창고에 남기기」를 눌렀을 때. 안 누르면 아무것도 안 한다."""
+        self._묻기상자 = None
+        답 = 상자.text().split("\n\n", 1)[-1]
+        상자.close()
+        if not 남길까:
             return
         import query as _묻기
 
