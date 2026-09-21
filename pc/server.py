@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import paths
+import report
 
 import backends
 import brain
@@ -1694,7 +1695,7 @@ class EBServer(ThreadingHTTPServer):
                 except Exception as e:  # 청소가 실패해도 서버는 계속 떠 있어야 한다
                     _알림(f"[청소 실패] {e}")
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("청소·집안일", loop)
 
     def start_embedding(self, every_sec: int = 30) -> None:
         """뜻 벡터를 뒤에서 채운다. **창이 없어도 자라야 한다.**
@@ -1775,7 +1776,7 @@ class EBServer(ThreadingHTTPServer):
                     알린다(f"[뜻 벡터 실패] {e}")
                 time.sleep(every_sec)
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("뜻 벡터", loop)
 
     class NoModel(RuntimeError):
         """쓸 대화 모델이 없다."""
@@ -1928,7 +1929,7 @@ class EBServer(ThreadingHTTPServer):
                     _알림(f"[사본 실패] {type(e).__name__}: {e}")
                 time.sleep(every_sec)
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("사본 뜨기", loop)
 
     def start_consolidate(self, every_sec: int = 120) -> None:
         """메모가 바뀌면 **2분쯤 모았다가** 정리 글을 새로 쓴다(결정 19). 하루 한 번은 바뀐 게 없어도 돈다.
@@ -1951,7 +1952,7 @@ class EBServer(ThreadingHTTPServer):
                     _알림(f"[정리 실패] {type(e).__name__}: {e}")
                 time.sleep(every_sec)
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("정리", loop)
 
     def start_analyzer(self, every_sec: int = 900) -> None:
         """주기적으로 스스로 돌아본다. 사용자가 시키지 않아도 성장은 계속된다.
@@ -1981,7 +1982,7 @@ class EBServer(ThreadingHTTPServer):
                 except Exception as e:
                     _알림(f"[스스로 짐작 실패] {type(e).__name__}")
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("스스로 짐작", loop)
 
 
 def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
