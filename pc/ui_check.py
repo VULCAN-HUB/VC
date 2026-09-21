@@ -2113,6 +2113,55 @@ def run() -> None:
                if _것 is not None and _것.sizeHint().width() > _칸폭 + 4]
         assert not _넘침, f"코드 칸이 밀린다(폭 {_칸폭}): {_넘침[:3]}"
 
+        # ★★ **맡기기(에이전트 CLI) — 시작·진행·끝·적립·스킬 제안을 끝까지 태운다.**
+        #   CLI 가 안 깔린 기계에서도 **가짜 손**으로 전 경로를 잰다(2026-09-21).
+        import subprocess as _깃맡검
+        import time as _때맡검
+
+        import agentcli as _시엘검
+
+        _맡자리 = _뿌리검사 / "CodePanel"
+        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
+                    "commit", "-qm", "첫"], capture_output=True)
+        _창코드.notes.write(Note(title="프로젝트 · CodePanel", kind="엔티티", body="시험"))
+        _창코드.notes.reindex()
+
+        # 지시가 비면 안 돈다 — 무엇을 시킬지 모르고 돌리면 안 된다
+        _창코드.맡기기시작("CodePanel", "   ", 손물건=_시엘검.가짜())
+        assert _창코드._맡김중 == "", "빈 지시로 돌았다"
+
+        _난맡검 = {}
+        _창코드.handoff_done.connect(lambda p, r: _난맡검.update(프로젝트=p, 결과=r))
+        _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 9로",
+                       손물건=_시엘검.가짜(str(_맡자리 / "src" / "main.py"), "x = 9\n"))
+        assert _창코드._맡김중 == "CodePanel", "돌고 있다고 표시가 안 된다"
+        # ★ 하나 도는 동안 또 시키면 막는다 — 둘이 같은 폴더를 고치면 엉킨다
+        _창코드.맡기기시작("CodePanel", "또 시켜본다", 손물건=_시엘검.가짜())
+        _끝맡검 = _때맡검.monotonic() + 20
+        while not _난맡검 and _때맡검.monotonic() < _끝맡검:
+            app.processEvents()
+            _때맡검.sleep(0.02)
+        assert _난맡검, "맡기기가 딴 실에서 죽었다 — 끝났다는 신호가 안 왔다"
+        app.processEvents()
+        assert _창코드._맡김중 == "", "끝났는데 돌고 있다고 남아 있다"
+        _돌맡검 = _난맡검["결과"]
+        assert _돌맡검["됐나"] and _돌맡검["바뀐파일"] == ["src/main.py"], _돌맡검
+        assert (_맡자리 / "src" / "main.py").read_text(encoding="utf-8") == "x = 9\n"
+        # ★★ **창고 쓰기는 창에서** 한다 — 한 일이 창고에 남는다
+        _창코드.notes.reindex()
+        _남긴맡검 = [r["title"] for r in _창코드.notes.conn.execute(
+            "SELECT title FROM notes WHERE kind = '작업'")]
+        assert _남긴맡검, "맡긴 일이 창고에 안 남았다"
+        # ★★ 스킬 제안 상자는 **창을 막지 않는다**
+        _상자맡검 = getattr(_창코드, "_스킬상자", None)
+        if _상자맡검 is not None:
+            assert not _상자맡검.isModal(), "스킬 상자가 창을 막는다"
+            _창코드._스킬상자 = None
+            _상자맡검.close()
+            app.processEvents()
+
         # 창고 글을 열면 코드 모드가 풀린다
         _창코드.notes.write(Note(title="딴 글", body="몸"))
         _창코드.notes.reindex()

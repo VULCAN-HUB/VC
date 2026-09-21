@@ -70,6 +70,7 @@ import notes as notes_module
 import facets
 import orders
 import wiki
+import hermes
 import wikilog
 import piles
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
@@ -219,6 +220,9 @@ class MainWindow(QWidget):
     # ★ **신호 이름은 영문이어야 한다.** 한글로 두면 PyQt 가 이름을 ascii 로 굽다
     #   `UnicodeEncodeError` 로 창이 통째로 안 뜬다(2026-09-21 재서 확인).
     query_done = pyqtSignal(str, str, list)
+    # 맡기기(에이전트 CLI)가 끝났다 — 프로젝트 · 돌린 결과(dict).
+    # ★ 신호 이름은 영문이어야 한다(한글이면 PyQt 가 ascii 로 굽다 터진다).
+    handoff_done = pyqtSignal(str, object)
 
     def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
         """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
@@ -229,6 +233,10 @@ class MainWindow(QWidget):
         # 헤르메스 IDE — 지금 펼친 프로젝트와 연 코드 파일(`(프로젝트, 상대경로)`).
         self._연프로젝트: str | None = None
         self._연코드: "tuple[str, str] | None" = None
+        # 맡기기 — 지금 돌고 있는 일. 한 번에 하나만 돌린다(둘이 같은 폴더를 고치면 엉킨다).
+        self._맡김중: str = ""
+        self._맡김멈춤 = False
+        self._맡김시작 = 0.0
         self.store = store
         self.link = link or ServerLink()
         self.skills = SkillStore(notes)
@@ -255,6 +263,13 @@ class MainWindow(QWidget):
         left = self._build_head()
         self.assist_done.connect(lambda t, h, g: self._도움보이기(t, h, g))
         self.query_done.connect(lambda 물음, 답, 근거: self._묻기보이기(물음, 답, 근거))
+        self.handoff_done.connect(lambda 프로젝트, 난것: self._맡김끝(프로젝트, 난것))
+        # 돌아가는 동안 몇 초째인지 보여 준다 — 아무 말이 없으면 멈춘 줄 안다
+        self._맡김타이머 = QTimer(self)
+        self._맡김타이머.setInterval(1000)
+        # ★ **한글 이름 메서드를 신호에 바로 연결하면 안 된다** — PyQt 가 이름을 ascii 로
+        #   굽다 `UnicodeEncodeError` 로 창이 통째로 안 뜬다(오늘 두 번 밟았다).
+        self._맡김타이머.timeout.connect(lambda: self._맡김째깍())
         scroll, rescan = self._build_proposals()
         self._build_body(left, scroll, rescan)
 
@@ -2314,6 +2329,17 @@ class MainWindow(QWidget):
             self._코드줄.addWidget(머리)
             if 이름 != self._연프로젝트:
                 continue
+            # ★★ **맡기기 단추.** 찾기 칸에 친 말을 지시로 쓴다 — 창을 막는 물음 상자를
+            #   띄우지 않으려는 것이다(오늘 모달이 창을 멈춰 세운 적이 있다).
+            돌고있나 = self._맡김중 == 이름
+            맡단추 = QPushButton("   " + ("■ 멈추기" if 돌고있나 else "▶ 찾기 칸의 말을 맡기기"))
+            맡단추.setObjectName("quiet")
+            맡단추.setMinimumWidth(1)
+            맡단추.setToolTip("찾기 칸에 시킬 말을 치고 누른다. 클로드 코드·Codex 가 돈다")
+            맡단추.clicked.connect(
+                lambda _=False, n=이름: (self.맡기기멈추기() if self._맡김중 == n
+                                       else self.맡기기시작(n, self.ask_box.text())))
+            self._코드줄.addWidget(맡단추)
             난것 = codefiles.나무(이름)
             for 상대 in 난것["파일"][:120]:
                 단추 = QPushButton("   " + 상대)
@@ -2341,6 +2367,99 @@ class MainWindow(QWidget):
     def _프로젝트펼치기(self, 이름: str) -> None:
         self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
         self._later(self.코드그리기)
+
+    def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None) -> None:
+        """에이전트 CLI 에게 맡긴다. **느린 부름은 딴 실에서** — 창이 굳으면 안 된다."""
+        지시 = (지시 or "").strip()
+        if self._맡김중:
+            self.report(f"이미 「{self._맡김중}」 에 하나 돌고 있어. 멈추고 다시 해.", [])
+            return
+        if not 지시:
+            self.report("찾기 칸에 시킬 말을 먼저 치고 눌러.", [])
+            return
+        import agentcli
+
+        손 = 손 or "claude"
+        그손 = 손물건 or agentcli.손고르기(손)
+        if 손물건 is None and (그손 is None or not 그손.있나()):
+            # ★ **까닭을 말한다.** 조용히 실패하면 왜 안 되는지 아무도 모른다.
+            self.report(f"「{손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
+            return
+        self._맡김중, self._맡김멈춤 = 프로젝트, False
+        self._맡김시작 = time.monotonic()
+        self._맡김타이머.start()
+        self._later(self.코드그리기)          # 단추가 「멈추기」로 바뀐다
+        self.report(f"{프로젝트} 에 맡겼어 ({손}) — {지시[:60]}", [])
+
+        def 일() -> None:
+            난것 = agentcli.돌리기(프로젝트, 지시, 손, 멈춤=lambda: self._맡김멈춤,
+                              손물건=손물건)
+            난것["지시"] = 지시
+            self.handoff_done.emit(프로젝트, 난것)
+
+        report.딴실로("맡기기", 일)
+
+    def 맡기기멈추기(self) -> None:
+        if not self._맡김중:
+            return
+        self._맡김멈춤 = True
+        self.report("멈추라고 했어. 돌던 것이 끊기면 바뀐 것만 보여 줄게.", [])
+
+    def _맡김째깍(self) -> None:
+        if not self._맡김중:
+            self._맡김타이머.stop()
+            return
+        초 = int(time.monotonic() - self._맡김시작)
+        self.footer.setText(f"  /  ▶ {self._맡김중} 에 맡긴 지 {초}초 — 코드 칸에서 멈출 수 있어")
+
+    def _맡김끝(self, 프로젝트: str, 돌림: dict) -> None:
+        """딴 실이 끝났다. **창고 쓰기는 여기서** 한다 — 같은 색인을 두 실이 만지면 안 된다."""
+        import agentcli
+
+        self._맡김중, self._맡김멈춤 = "", False
+        self._맡김타이머.stop()
+        self.footer.setText("")
+        난것 = hermes.돌린뒤(self.notes, 프로젝트, 돌림.get("지시") or "", 돌림)
+        바뀐 = 돌림.get("바뀐파일") or []
+        self.refresh()
+        self._later(self.코드그리기)
+        self.report(난것.get("사람말") or agentcli.사람말(돌림),
+                    (난것.get("적립") or {}).get("만든것") or [])
+        if 바뀐:
+            self.show_results([(f"{프로젝트}/{f}", "") for f in 바뀐])
+        제안 = 난것.get("스킬제안") or {}
+        if 제안.get("스킬") is not None:
+            self._스킬물어보기(제안)
+
+    def _스킬물어보기(self, 제안: dict) -> None:
+        """「스킬로 남길까」 — **창을 막지 않는** 상자로 묻는다."""
+        box = QMessageBox(self)
+        box.setWindowTitle("스킬로 남길까")
+        box.setText(제안.get("사람말") or "스킬로 남길까?")
+        남기기단추 = box.addButton("스킬로 남기기", QMessageBox.AcceptRole)
+        box.addButton("그냥 두기", QMessageBox.RejectRole)
+        box.setModal(False)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.buttonClicked.connect(
+            lambda 눌린, b=box, 스=제안.get("스킬"), 예=남기기단추:
+            self._스킬남기기(스, 눌린 is 예, b))
+        self._스킬상자 = box
+        box.show()
+
+    def _스킬남기기(self, 스킬, 남길까: bool, 상자) -> None:
+        self._스킬상자 = None
+        상자.close()
+        if not 남길까 or 스킬 is None:
+            return
+        import skillgen
+
+        이름 = skillgen.남기기(self.notes, 스킬)
+        if not 이름:
+            return
+        wikilog.적기(self.notes, "적립", f"스킬 남김 — {이름}", [이름])
+        self.refresh()
+        self.show_note(이름)
+        self.report(f"스킬로 남겼어 — 「{이름}」.", [이름])
 
     def 코드열기(self, 프로젝트: str, 상대: str) -> None:
         """코드 파일을 본문 칸에 연다. **창고 글이 아니다** — 저장은 그 파일로 간다."""
