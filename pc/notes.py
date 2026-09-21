@@ -1584,8 +1584,30 @@ class Notes:
             # ★ 옛 이름(`이 폴더를 만지는 규칙.md`)이 있으면 **새로 만들지 않는다.**
             #   사람이 고쳐 뒀을 수 있는 글을 같은 자리에 둘씩 늘리지 않는다.
             옛것 = any((self.template_root() / 옛).exists() for 옛 in self.옛RULE_FILES)
+            # ★★ **갈래 표가 바뀌면 이 글도 따라가야 한다.** 한 번만 쓰게 두었더니
+            #   2026-09-21 에 「솜씨」를 표에 더했는데 **사람이 읽는 규칙 글에는 없었다** —
+            #   기준이 둘이 되는 것이다. 그렇다고 덮어쓰면 사람이 고쳐 둔 글이 날아간다.
+            #   그래서 **VC 가 쓴 그대로일 때만** 다시 쓴다. 우리가 쓴 것의 자국을
+            #   `_서식/.규칙판` 에 남겨, 지금 글과 같으면 아무도 안 고친 것이다.
+            새규칙 = wiki.스키마글()
+            자국 = self.template_root() / ".규칙판"
+
+            def _자국찍기(글: str) -> None:
+                try:
+                    _atomic_write(자국, hashlib.sha256(글.encode("utf-8")).hexdigest())
+                except (OSError, WriteBlocked):
+                    pass          # 자국을 못 남겨도 규칙 글은 섰다
+
             if not where.exists() and not 옛것:
-                _atomic_write(where, wiki.스키마글())
+                _atomic_write(where, 새규칙)
+                _자국찍기(새규칙)
+            elif where.exists():
+                있던 = read_text(where)
+                적힌 = read_text(자국).strip() if 자국.exists() else ""
+                내가쓴것 = 적힌 == hashlib.sha256(있던.encode("utf-8")).hexdigest()
+                if 적힌 and 내가쓴것 and 있던 != 새규칙:
+                    _atomic_write(where, 새규칙)      # 표가 바뀌었다 — 따라 쓴다
+                    _자국찍기(새규칙)
             표 = self.template_root() / ".기본서식넣음"
             넣은것 = set(read_text(표).split()) if 표.exists() else set()
             새로 = [이름 for 이름 in self.DEFAULT_TEMPLATES if 이름 not in 넣은것]
@@ -5147,6 +5169,31 @@ def _self_check() -> None:
                 "SELECT count(*) FROM links WHERE 흐림 = 1").fetchone()[0] >= 0
         finally:
             n.conn.close()
+
+    # ★★ **갈래 표가 바뀌면 규칙 글도 따라가야 한다.** 한 번만 쓰게 두었더니 2026-09-21
+    #   「솜씨」를 표에 더했는데 사람이 읽는 글에는 없었다 — 기준이 둘이 된다.
+    #   그렇다고 덮어쓰면 사람이 고쳐 둔 글이 날아간다. **VC 가 쓴 그대로일 때만** 다시 쓴다.
+    with tempfile.TemporaryDirectory() as tmp규칙:
+        뿌리 = Path(tmp규칙) / "notes"
+        첫 = Notes(뿌리)
+        규칙자리 = 첫.template_root() / Notes.RULE_FILE
+        assert 규칙자리.exists(), "규칙 글이 안 섰다"
+        assert (첫.template_root() / ".규칙판").exists(), "자국을 안 남겼다"
+        첫.conn.close()
+        원래스키마 = wiki.스키마글
+        try:
+            wiki.스키마글 = lambda: 원래스키마() + chr(10) + "새로 더한 갈래 줄" + chr(10)
+            Notes(뿌리).conn.close()
+            assert "새로 더한 갈래 줄" in 규칙자리.read_text(encoding="utf-8"), \
+                "표가 바뀌었는데 규칙 글이 안 따라간다"
+            # 사람이 고친 뒤에는 **안 건드린다**
+            규칙자리.write_text("# 내가 고친 규칙" + chr(10), encoding="utf-8")
+            wiki.스키마글 = lambda: 원래스키마() + chr(10) + "또 다른 줄" + chr(10)
+            Notes(뿌리).conn.close()
+            assert 규칙자리.read_text(encoding="utf-8") == "# 내가 고친 규칙" + chr(10), \
+                "사람이 고친 규칙 글을 덮었다"
+        finally:
+            wiki.스키마글 = 원래스키마
 
     print("notes self-check 통과")
 
