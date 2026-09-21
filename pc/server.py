@@ -414,7 +414,9 @@ class Handler(BaseHTTPRequestHandler):
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task",
-                  "/eb/v1/wiki/ask")
+                  "/eb/v1/wiki/ask",
+                  # 헤르메스(2단계) — 바이브코딩 관제탑. AI 도구가 이 문으로 부른다.
+                  "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1094,6 +1096,12 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/wiki/ask":
             return self._wiki_ask(body)
 
+        # ★★ **헤르메스(2단계) — 바이브코딩 관제탑.** 차리기·꺼내기·적립하기.
+        #   사람이 창을 옮겨 다니면 맥락이 끊기므로 **AI 도구가 이 문으로** 부른다
+        #   (오너 2026-09-21). 창은 나중에 이 위에 붙는다.
+        if url.path.startswith("/eb/v1/hermes/"):
+            return self._hermes(url.path.rsplit("/", 1)[-1], body)
+
         if url.path == "/v1/chat/completions":
             return self._chat(body)
 
@@ -1360,6 +1368,43 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     # --- 성장 루프 (결정 17·18) -----------------------------------------
+
+    def _hermes(self, 무엇: str, body: Any) -> None:
+        """헤르메스 문. `start`(차리기) · `context`(꺼내기) · `log`(적립하기)."""
+        import hermes as _헤르메스
+        import wikilog as _일지헤
+
+        n = self.server.notes
+        이름 = (body.get("name") or body.get("이름") or "").strip() \
+            if isinstance(body.get("name") or body.get("이름") or "", str) else ""
+        if not 이름:
+            return self._send(400, {"error": "name required"})
+
+        if 무엇 == "start":
+            난것 = _헤르메스.차리기(n, 이름, str(body.get("one_line") or body.get("한줄") or ""))
+            if 난것["만든것"]:
+                _일지헤.적기(n, "차리기", f"{이름} — {' · '.join(난것['만든것'])}",
+                          [_헤르메스.프로젝트글제목(이름)])
+            return self._send(200, {"path": 난것["자리"], "made": 난것["만든것"],
+                                    "why": 난것["왜"]})
+
+        if 무엇 == "context":
+            난것 = _헤르메스.꺼내기(n, 이름)
+            return self._send(200, {"project": 난것["프로젝트"], "text": 난것["글"],
+                                    "buckets": {k: [t for t, _ in v] for k, v in 난것["칸"].items()},
+                                    "rules": 난것["규칙"]})
+
+        if 무엇 == "log":
+            난것 = _헤르메스.적립하기(
+                n, 이름,
+                결정=body.get("decisions") or body.get("결정") or (),
+                오류=body.get("errors") or body.get("오류") or (),
+                작업=body.get("tasks") or body.get("작업") or ())
+            if 난것["만든것"]:
+                _일지헤.적기(n, "적립", f"{이름} — {len(난것['만든것'])}장", 난것["만든것"][:3])
+            return self._send(200, {"made": 난것["만든것"], "why": 난것["왜"]})
+
+        return self._send(404, self._길없다("/eb/v1/hermes/" + 무엇))
 
     def _wiki_ask(self, body: Any) -> None:
         """묻기(Query). 창고를 뒤져 근거를 달아 답하고, 일지에 한 줄 남긴다.
@@ -3167,6 +3212,29 @@ def _self_check() -> None:
         assert note_store.path_of(_쪽9.title).parent.parent.parent.name == "wiki"
         # 모델이 없으면 아무 일도 안 난다
         assert _합9.합치기(note_store, None, 어디=_표9)["만든것"] == []
+
+    # ★★ **헤르메스(2단계) 배선을 잰다.** 문을 내고 `POST_PATHS` 에 안 적으면 404 다 —
+    #   오늘 「갈래만 재고 알맹이를 안 태웠다」로 두 번 헛통과했다(2026-09-21).
+    import hermes as _헤9
+    import tempfile as _임헤9
+
+    for _길헤9 in ("/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log"):
+        assert _길헤9 in Handler.POST_PATHS, f"헤르메스 문이 POST 목록에 없다: {_길헤9}"
+    assert hasattr(Handler, "_hermes"), "헤르메스 문을 받을 손이 없다"
+
+    with _임헤9.TemporaryDirectory() as _뿌리헤9:
+        from pathlib import Path as _P헤9
+
+        _난헤9 = _헤9.차리기(note_store, "HermesWire", "배선 시험", 뿌리=_P헤9(_뿌리헤9))
+        assert "폴더" in _난헤9["만든것"] and (_P헤9(_난헤9["자리"]) / "CLAUDE.md").exists(), _난헤9
+        note_store.reindex()
+        _헤9.적립하기(note_store, "HermesWire",
+                   오류=[{"제목": "HermesWire — 배선이 끊겼다", "몸": "문을 목록에 안 적었다."}])
+        note_store.reindex()
+        _맥헤9 = _헤9.꺼내기(note_store, "HermesWire")
+        assert [t for t, _ in _맥헤9["칸"]["오류"]] == ["HermesWire — 배선이 끊겼다"], _맥헤9["칸"]
+        # 한글 이름은 막는다 — 맥에서 한글 경로가 도구를 죽인다
+        assert _헤9.차리기(note_store, "한글프로젝트", 뿌리=_P헤9(_뿌리헤9))["만든것"] == []
 
     # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
     #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
