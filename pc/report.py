@@ -71,6 +71,28 @@ def trail(what: str) -> None:
         pass          # 남기다 실패해도 프로그램이 멈추면 안 된다
 
 
+def 딴실로(이름: str, 함수, *것들) -> "threading.Thread":
+    """일을 딴 실에서 돌린다. **터지면 자국을 남긴다.**
+
+    ★★ 딴 실에서 난 예외는 `stderr` 로만 나간다 — **구운 판에서는 갈 데가 없어**
+       아무도 모른 채 그 기능만 조용히 죽는다. 실제로 그랬다(2026-09-21: 창에서
+       묻기가 `NameError` 로 죽었는데 화면에는 아무 말도 없었다. 창을 몰아 보고서야
+       알았다). 위험한 부름만 `try` 로 감싸는 것으로는 모자라다 — **몸 전체**를 감싼다.
+    """
+    import threading
+
+    def 감싼() -> None:
+        try:
+            함수(*것들)
+        except Exception as e:
+            trail(f"[{이름}] 딴 실이 죽었다 — {type(e).__name__}: {e}")
+            _note(f"[{이름}] 딴 실이 죽었다 — {type(e).__name__}: {e}")
+
+    실 = threading.Thread(target=감싼, daemon=True, name=이름)
+    실.start()
+    return 실
+
+
 def watch_deaths() -> None:
     """파이썬이 못 잡는 죽음까지 파일로 받아 둔다. 켤 때 한 번 부른다.
 
@@ -595,6 +617,42 @@ def _self_check() -> None:
                   "Windows fatal exception: access violation\n"
                   "Traceback (most recent call last):\n")
     assert 갈라 == "비치명 COM 예외 1줄 · 그 밖의 네이티브 예외 1줄 · 파이썬 traceback 1개", 갈라
+    # ★★ **딴 실이 죽으면 자국이 남아야 한다.** 딴 실 예외는 `stderr` 로만 나가고
+    #   구운 판에서는 갈 데가 없다 — 창에서 묻기가 `NameError` 로 죽었는데 화면에도
+    #   기록에도 아무 말이 없었다(2026-09-21 창을 몰아 보고서야 알았다).
+    import tempfile as _임시실
+    import time as _시간실
+
+    with _임시실.TemporaryDirectory() as _자리실:
+        import os as _os실
+
+        _옛실 = _os실.environ.get("VC_DATA")
+        _os실.environ["VC_DATA"] = _자리실
+        try:
+            난것 = {}
+            딴실로("시험 실", lambda: 난것.setdefault("돌았다", True)).join(2)
+            assert 난것.get("돌았다"), "딴 실이 일을 안 했다"
+
+            def 터지기():
+                raise RuntimeError("일부러 터뜨린다")
+
+            딴실로("터지는 실", 터지기).join(2)
+            _시간실.sleep(0.2)
+            글 = ""
+            for 자리 in Path(_자리실).rglob("*"):
+                if 자리.is_file():
+                    try:
+                        글 += 자리.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        pass
+            assert "터지는 실" in 글 and "일부러 터뜨린다" in 글, \
+                f"딴 실이 죽었는데 자국이 없다:\n{글[-400:]}"
+        finally:
+            if _옛실 is None:
+                _os실.environ.pop("VC_DATA", None)
+            else:
+                _os실.environ["VC_DATA"] = _옛실
+
     print("report self-check 통과")
 
 

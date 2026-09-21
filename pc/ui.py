@@ -1448,7 +1448,7 @@ class MainWindow(QWidget):
             # 「기계 기록 보기 — 둘 다」면 요약 한 장을 기록 폴더 `_VC기록/` 에도(결정 17). 안 바뀌었으면 안 쓴다.
             if settings.기록보기() == "둘다":
                 report.요약쓰기(self.notes.root)
-        threading.Thread(target=일, daemon=True).start()
+        report.딴실로("테일스케일 살피기", 일)
 
     def _그리띠(self) -> None:
         """늘 보이는 한 줄(결정 17) — 오류 · 준비 중 · 폰 길. **아무 일 없으면 비운다.**"""
@@ -2900,7 +2900,7 @@ class MainWindow(QWidget):
                 글 = f"⚠ 컴퓨터 VC 서버에 못 물었다 — {type(e).__name__}"
             self.assist_done.emit(title, 머리, 글)
 
-        threading.Thread(target=일, daemon=True).start()
+        report.딴실로("AI 도움(요약·번역)", 일)
 
     def 창고에묻기(self, 물음: str) -> None:
         """묻기(Query) — 서버에 **창고를 뒤져 답해 달라**고 한다. 딴 실에서 돈다.
@@ -2936,7 +2936,7 @@ class MainWindow(QWidget):
                 답 = f"⚠ 서버에 못 물었다 — {type(e).__name__}"
             self.query_done.emit(물음, 답, list(근거))
 
-        threading.Thread(target=일, daemon=True).start()
+        report.딴실로("묻기", 일)
 
     def _묻기보이기(self, 물음: str, 답: str, 근거: list) -> None:
         """답을 말하고, 근거 글들을 결과 칸에 세운다 — **눌러서 확인할 수 있게.**
