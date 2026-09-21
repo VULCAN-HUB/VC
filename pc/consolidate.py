@@ -258,13 +258,16 @@ def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
 
     def put(title: str, body: str, sub: str, pinned: bool = False) -> None:
         at = folder / sub / f"{title.replace('/', '∕')}.md"
+        갈래 = "엔티티" if sub else wiki.기본갈래
         old = store.read_at(at) if at.exists() else None
-        if old is not None and old.body.strip() == body.strip():
+        # ★★ **몸만 보면 갈래가 영영 안 고쳐진다.** 갈래 표를 새로 세운 뒤(2026-09-21)
+        #   이 글들이 옛 갈래(`note`·`thing`)를 단 채로 남아 있었다 — 몸이 같아서
+        #   다시 쓰는 길이 매번 그냥 돌아갔다. 갈래도 같이 본다.
+        if old is not None and old.body.strip() == body.strip() and old.kind == 갈래:
             return
         at.parent.mkdir(parents=True, exist_ok=True)
         # ★ 옛 갈래(`thing`·`note`)로 쓰면 **새 글이 창고 기준 밖에 선다**(2026-09-21).
-        store.write(Note(title=title, body=body,
-                         kind="엔티티" if sub else wiki.기본갈래, pinned=pinned,
+        store.write(Note(title=title, body=body, kind=갈래, pinned=pinned,
                          extra={"정리": "VC"}), at=at)
         written.append(title)
 
@@ -329,6 +332,22 @@ def _self_check() -> None:
         assert "- 지금 상태 : 보냄" in n.read("제품 · vcis-689").body
         assert "지금 가진 것 **0**" in n.read(LIST_TITLE).body
         assert ymd("2026년 13월 1일") == "" and ymd("받음") == ""
+        # ★★ **갈래가 낡으면 몸이 같아도 다시 쓴다.** 갈래 표를 새로 세운 뒤
+        #   (2026-09-21) 이 글들이 옛 갈래(`note`·`thing`)를 단 채 남아 있었다 —
+        #   몸이 같아서 다시 쓰는 길이 매번 그냥 돌아갔다.
+        import wiki as _위키정리
+
+        낡음 = [t for t in (r["title"] for r in n.conn.execute("SELECT title FROM notes"))
+              if (n.read(t) or Note(title=t)).kind in _위키정리.옛갈래]
+        assert not 낡음, f"정리 글이 옛 갈래로 났다: {낡음}"
+        목록 = n.read("제품 보유 목록")
+        assert 목록 is not None and 목록.kind == _위키정리.기본갈래, 목록.kind if 목록 else None
+        목록.kind = "note"                      # 옛 판이 남긴 꼴을 흉내 낸다
+        n.write(목록, at=Path(n.path_of(목록.title)))
+        run(n)                                  # 몸은 그대로인데 갈래만 낡았다
+        assert n.read("제품 보유 목록").kind == _위키정리.기본갈래, \
+            "갈래가 낡았는데 다시 안 썼다"
+
     print("consolidate self-check 통과")
 
 
