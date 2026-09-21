@@ -420,7 +420,9 @@ class Handler(BaseHTTPRequestHandler):
                   # 바이브코딩 — 바깥 AI 가 고칠 안을 내고, 승인하면 적용한다
                   "/eb/v1/vibe/plan", "/eb/v1/vibe/apply",
                   # 자가 스킬 생성 — 방금 한 일에서 스킬을 뽑아 제안하고, 승인하면 남긴다
-                  "/eb/v1/hermes/skill")
+                  "/eb/v1/hermes/skill",
+                  # 남의 에이전트 CLI 에게 맡긴다 — 클로드 코드 · Codex
+                  "/eb/v1/hermes/handoff", "/eb/v1/hermes/hands")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1457,6 +1459,40 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"project": 난것["프로젝트"], "text": 난것["글"],
                                     "buckets": {k: [t for t, _ in v] for k, v in 난것["칸"].items()},
                                     "rules": 난것["규칙"]})
+
+        if 무엇 == "hands":
+            # 이 기계에 어떤 손이 깔려 있나. **없으면 없다고 말한다** — 조용히 실패하지 않는다.
+            import agentcli as _시엘
+
+            낼것 = {}
+            for 이름 in _시엘.손들:
+                손 = _시엘.손고르기(이름)
+                낼것[이름] = {"installed": bool(손 and 손.있나()),
+                            "exe": 손.실행파일 if 손 else ""}
+            return self._send(200, {"hands": 낼것})
+
+        if 무엇 == "handoff":
+            import agentcli as _시엘2
+
+            난것 = _헤르메스.맡기기(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                str(body.get("hand") or body.get("손") or "claude"),
+                int(body.get("timeout") or body.get("제한초") or 0))
+            돌 = 난것["돌린것"]
+            낼것 = {"ok": bool(돌.get("됐나")), "hand": 돌.get("손"),
+                  "exit_code": 돌.get("끝난코드"), "changed": 돌.get("바뀐파일") or [],
+                  "already_dirty": 돌.get("원래더럽던것") or [],
+                  "diff": 돌.get("차이") or "", "elapsed": 돌.get("든시간"),
+                  "why": 돌.get("왜") or "", "said": 돌.get("끝말") or "",
+                  "kept": (난것["적립"] or {}).get("만든것") or [],
+                  "text": 난것.get("사람말") or ""}
+            제안 = 난것.get("스킬제안") or {}
+            if 제안.get("스킬") is not None:
+                from dataclasses import asdict as _짜기3
+
+                낼것["skill_suggestion"] = {"text": 제안.get("사람말"),
+                                          "skill": _짜기3(제안["스킬"])}
+            return self._send(200, 낼것)
 
         if 무엇 == "skill":
             # 자가 스킬 생성 — `지시`만 주면 **뽑아 보여 주고**, `skill` 을 주면 남긴다.
@@ -3351,6 +3387,15 @@ def _self_check() -> None:
             assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
         finally:
             _헤9.기본뿌리 = _옛뿌리바9
+
+    # ★★ **맡기기 배선을 잰다.** 남의 CLI 에게 맡기고 결과를 창고에 남기는 길이다.
+    for _길맡9 in ("/eb/v1/hermes/handoff", "/eb/v1/hermes/hands"):
+        assert _길맡9 in Handler.POST_PATHS, f"맡기기 문이 POST 목록에 없다: {_길맡9}"
+    import agentcli as _시9
+
+    assert set(_시9.손들) >= {"claude", "codex", "fake"}, _시9.손들
+    # ★ 안 깔린 CLI 는 **까닭을 말한다** — 조용히 실패하면 사람이 왜 안 되는지 모른다
+    assert _시9.손고르기("claude") is not None and _시9.손고르기("없는손") is None
 
     # ★★ **자가 스킬 생성 배선을 잰다.** 일이 한 바퀴 돌면 그 과정을 스킬로 뽑아 **제안**한다.
     assert "/eb/v1/hermes/skill" in Handler.POST_PATHS, "스킬 문이 POST 목록에 없다"
