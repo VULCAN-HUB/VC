@@ -18,7 +18,7 @@ from typing import Callable
 
 from PyQt5.QtCore import (QBuffer, QEvent, QIODevice, QPointF, QStringListModel, Qt, QThread, QTimer, QUrl,
                           pyqtSignal)
-from PyQt5.QtGui import (QBrush, QFont, QImage, QPainter, QPalette, QPen,
+from PyQt5.QtGui import (QBrush, QFont, QFontMetrics, QImage, QPainter, QPalette, QPen,
                          QTextCharFormat, QTextCursor, QTextDocument)
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -79,7 +79,21 @@ class Legend(QWidget):
         super().__init__()
         self.setFixedHeight(14)
         # 기본 sizeHint는 0에 가까워 옆에 stretch를 두면 폭이 안 잡히고 아무것도 안 그려진다.
-        self.setMinimumWidth(430)
+        # ★★ **폭을 숫자로 박으면 갈래가 늘 때 잘린다.** 430px 은 갈래가 여섯이던 때
+        #   값이라, 열둘이 된 뒤 화면에서 **`일지`·`메모` 가 통째로 안 보였다**
+        #   (창을 찍어 보고 알았다 · 2026-09-21). 이제 **재서** 정한다.
+        self.setMinimumWidth(self._잰폭())
+
+    def _잰폭(self) -> int:
+        """지금 갈래를 다 그리는 데 드는 폭. 글꼴이 바뀌어도 따라간다."""
+        font = QFont()
+        font.setPointSize(7)
+        재개 = QFontMetrics(font)
+        return int(sum(14 + 재개.width(theme.KIND_LABEL[k]) + 10 for k in self.ORDER)) + 4
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(self._잰폭(), 14)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -1528,6 +1542,14 @@ def _self_check() -> None:
     assert legend.height() > 0
     # 표시줄과 콤보의 차례가 같아야 한다 — 같은 것을 두 군데 적어 두면 갈린다.
     assert Legend.ORDER == tuple(theme.KIND_LABEL), Legend.ORDER
+    # ★★ **갈래가 늘어도 다 보여야 한다.** 폭을 430px 로 박아 뒀더니 갈래가 열둘이 된 뒤
+    #   `일지`·`메모` 가 화면에서 통째로 안 보였다(찍어 보고 알았다 · 2026-09-21).
+    import wiki as _위키범례
+
+    assert set(Legend.ORDER) == set(_위키범례.갈래들), "범례가 갈래 표와 다르다"
+    필요 = legend._잰폭()
+    assert legend.minimumWidth() >= 필요, f"범례가 잘린다: {legend.minimumWidth()} < {필요}"
+    assert legend.sizeHint().width() >= 필요
 
     import tempfile
     from pathlib import Path as _Path

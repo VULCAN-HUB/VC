@@ -397,10 +397,24 @@ def run() -> None:
         first.settle()
         assert fresh.read("남의 종류").kind == "장소", fresh.read("남의 종류").kind
         # 다음 항목으로 넘어가면 그 자리는 치운다
-        fresh.write(Note(title="우리 종류", body="본문", kind="note"))
+        import wiki as _위키검사
+
+        fresh.write(Note(title="우리 종류", body="본문", kind=_위키검사.기본갈래))
         first.show_note("우리 종류")
         first.settle()
         assert first.detail_kind.count() == len(theme.KIND_LABEL), first.detail_kind.count()
+        # ★★ **옛 갈래를 단 글을 열면 그 갈래를 칸에 살려 둔다.** 안 그러면 여는 것만으로
+        #   갈래가 조용히 바뀐다 — 쓰던 글이 151장 있다(2026-09-21 갈래 표를 새로 세웠다).
+        fresh.write(Note(title="옛 종류 글", body="본문", kind="note"))
+        first.show_note("옛 종류 글")
+        first.settle()
+        assert first.detail_kind.count() == len(theme.KIND_LABEL) + 1, first.detail_kind.count()
+        assert first.detail_kind.currentData() == "note", first.detail_kind.currentData()
+        # 다시 아는 갈래로 넘어가면 덧붙은 자리는 치운다
+        first.show_note("우리 종류")
+        first.settle()
+        assert first.detail_kind.count() == len(theme.KIND_LABEL), first.detail_kind.count()
+        fresh.delete("옛 종류 글")
         fresh.delete("남의 종류")
         fresh.delete("우리 종류")
         first.refresh()
