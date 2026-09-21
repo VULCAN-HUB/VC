@@ -987,6 +987,24 @@ def _self_check() -> None:
     #     (돌리면 76초라 여기서는 안 돌리고, **부를 수 있는지**와 스위치만 본다.)
     assert callable(globals().get("_모두검사")),         "모든 자체점검을 한 번에 도는 길이 없다 — 사람이 외우게 된다"
 
+    # ★★ **구운 판에서만 죽는 자리.** `VC.spec` 의 `hiddenimports` 에 안 적힌 우리 모듈은
+    #   빌드는 되고 **실행할 때** 없다고 죽는다(그 파일 주석이 그렇게 경고한다).
+    #   모듈을 하나 더할 때마다 사람이 그 목록을 기억해야 하는데, 오늘 여섯을 빠뜨렸다.
+    #   그래서 **세지 않고 검사가 잡는다**(2026-09-21).
+    _자리스펙 = pathlib.Path(__file__).resolve().parent
+    _스펙 = _자리스펙 / "VC.spec"
+    if _스펙.exists():
+        _스펙글 = _스펙.read_text(encoding="utf-8", errors="replace")
+        _안적힌 = []
+        for _파일 in sorted(_자리스펙.glob("*.py")):
+            _이름 = _파일.stem
+            if _이름 in ("eb.py", "eb") or _이름.endswith("_check") or _이름.startswith("_"):
+                continue
+            if f'"{_이름}"' not in _스펙글:
+                _안적힌.append(_이름)
+        assert not _안적힌, ("VC.spec 의 hiddenimports 에 없다 — 구운 판에서 죽는다: "
+                          + ", ".join(_안적힌))
+
     print("eb self-check 통과")
 
 

@@ -121,6 +121,12 @@ a = Analysis(
         "skills", "engine", "backends", "remote", "phone_relay",
         "product_search", "models_config", "model_store", "eb_protocol",
         "ingest", "gate", "settings", "keystore", "connectors", "selflearn", "google_auth",
+        # 창고의 네 가지 일과 2단계(헤르메스). 늦게 불러 쓰므로 여기 없으면 구운 판에서 죽는다.
+        "wiki", "wikilog", "synth", "audit", "query", "consolidate",
+        "hermes", "codefiles", "vibe", "skillgen", "agentcli",
+        # 아래 열하나는 **전부터 빠져 있던 것들**이다(검사를 넣고서야 드러났다).
+        "ai_fill", "demo", "facets", "mic_tune", "mirror", "orders", "piles",
+        "plugins", "tailnet", "transcribe", "vault",
     ] + ort_hidden + llama_hidden,
     hookspath=[],
     runtime_hooks=[],
