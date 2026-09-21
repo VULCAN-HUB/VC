@@ -22,7 +22,7 @@ from pathlib import Path
 
 from notes import Note, Notes, parse_attachments, parse_tags, IMAGE_EXT
 
-FOLDER = "_정리"                 # 정리 글이 사는 자리(항목으로 센다 — 사람이 보는 결과물이다)
+FOLDER = wiki.정리폴더                 # 정리 글이 사는 자리(항목으로 센다 — 사람이 보는 결과물이다)
 LIST_TITLE = "제품 보유 목록"
 TAG = "제품정리"                 # 정리 글에 붙는 태그 — 입력으로 다시 안 읽는다
 

@@ -157,11 +157,11 @@ UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 PHONE_MEDIA_EXT = {".heic", ".heif", ".mov", ".mp4", ".m4v", ".m4a", ".aac", ".mp3", ".wav"}
 ATTACH_EXT = IMAGE_EXT | {".pdf"} | PHONE_MEDIA_EXT
-ATTACH_DIR = "_첨부"
+ATTACH_DIR = wiki.첨부폴더
 
 # 지난 판을 두는 곳. 점으로 시작해 **옵시디언에서 안 보인다** — 기계가 챙기는 것이지
 # 사람이 뒤적일 폴더가 아니다. 색인에서도 통째로 뺀다.
-HISTORY_DIR = ".이력"
+HISTORY_DIR = wiki.이력폴더
 HISTORY_KEEP = 20          # 항목당 남길 판 수. 20년이라도 무한정 쌓으면 안 된다
 HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든다(치는 대로 저장이라)
 
@@ -169,7 +169,7 @@ HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든�
 # 고칠 수 있게 **보이는** 폴더로 둔다(`_첨부`와 같은 자리).
 TEMPLATE_DIR = wiki.서식폴더
 # 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 요약을 적는 자리(결정 17). 기계가 쓴 글이라 항목으로 안 센다.
-VC_LOG_DIR = "_VC기록"
+VC_LOG_DIR = wiki.기록폴더
 
 # 서식 안에서 갈아 끼우는 자리. 옵시디언 표기도 같이 받는다.
 SLOT_RE = re.compile(r"\{\{\s*(날짜|시각|제목|date|time|title)\s*\}\}", re.I)          # 노트 폴더 안. `_`로 시작해 항목 폴더와 눈으로 갈린다
@@ -296,7 +296,7 @@ def 라이크(값: str) -> str:
     ★★ SQL `LIKE` 에서 `_` 는 「아무 글자 하나」, `%` 는 「아무 글자들」이다. 그대로 넣으면
       **찾는 글자가 아닌 것이 걸린다** — 실제로 `path:_정리` 가 「_정리 폴더의 1장」 대신
       「제목에 '정리'가 든 3장」까지 **4장**을 내놓았다(폴더 칸을 만들다 잡았다).
-      창고에는 `_서식`·`_정리` 처럼 밑줄로 시작하는 폴더가 있고, 제목·태그에도 들어갈 수 있다.
+      창고에는 `_templates`·`_digest` 처럼 밑줄로 시작하는 폴더가 있고, 제목·태그에도 들어갈 수 있다.
       쓰는 쪽은 반드시 `ESCAPE '\\'` 를 같이 적는다.
     """
     return (str(값).replace("\\", "\\\\")
@@ -1267,7 +1267,7 @@ class Notes:
         self.conn.commit()
         self._heal_search()
         self._heal_vectors()
-        self._서식폴더옮기기()      # 옛 이름 폴더를 먼저 끌어온다 — 안 그러면 규칙 글이 둘이 된다
+        self._특별폴더옮기기()      # 옛 이름 폴더를 먼저 끌어온다 — 안 그러면 규칙 글이 둘이 된다
         self.write_rules()
         if index_now:
             self.reindex()
@@ -1625,36 +1625,37 @@ class Notes:
     def template_root(self) -> Path:
         return self.root / TEMPLATE_DIR
 
-    def _서식폴더옮기기(self) -> bool:
-        """옛 이름(`_서식`)으로 된 폴더가 있으면 **새 이름으로 옮긴다.**
+    def _특별폴더옮기기(self) -> list[str]:
+        """옛 한글 이름으로 된 **특별 폴더들**을 새 영문 이름으로 옮긴다.
 
-        ★★ 이걸 안 하면 쓰던 사람에게는 **서식이 통째로 사라진 것처럼 보인다** —
-           제품 서식도, 규칙 글도, 폰 서식 목록도 빈다. 옮기는 길은 한 번만 돈다.
+        ★★ 이걸 안 하면 쓰던 사람에게는 **통째로 사라진 것처럼 보인다** — 서식도,
+           규칙 글도, 정리 글도, 지난 판(되돌리기)도. 옮기는 길은 한 번만 돈다.
         ★ 새 이름 폴더가 이미 있으면 **겹치지 않는 것만** 옮기고 옛 폴더는 남긴다 —
           둘 다 손으로 만든 자리일 수 있어 우리가 지울 것이 아니다.
+        ★ 한 폴더가 막혀도 **나머지는 옮긴다.** 하나 때문에 다 멈추면 더 나쁘다.
         """
-        새자리 = self.template_root()
-        옮김 = False
-        for 옛이름 in wiki.옛서식폴더들:
-            옛자리 = self.root / 옛이름
-            if not 옛자리.is_dir() or 옛자리 == 새자리:
-                continue
-            try:
-                if not 새자리.exists():
-                    옛자리.rename(새자리)
-                    옮김 = True
+        옮긴것 = []
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            새자리 = self.root / 새이름
+            for 옛이름 in 옛이름들:
+                옛자리 = self.root / 옛이름
+                if not 옛자리.is_dir() or 옛자리 == 새자리:
                     continue
-                for 것 in 옛자리.iterdir():
-                    목표 = 새자리 / 것.name
-                    if not 목표.exists():
-                        것.rename(목표)
-                        옮김 = True
-                if not any(옛자리.iterdir()):
-                    옛자리.rmdir()
-            except OSError as e:
-                _알림(f"[서식 옮기기] 못 옮겼다 — {type(e).__name__}")
-                break
-        return 옮김
+                try:
+                    if not 새자리.exists():
+                        옛자리.rename(새자리)
+                        옮긴것.append(f"{옛이름} → {새이름}")
+                        continue
+                    for 것 in 옛자리.iterdir():
+                        목표 = 새자리 / 것.name
+                        if not 목표.exists():
+                            것.rename(목표)
+                    if not any(옛자리.iterdir()):
+                        옛자리.rmdir()
+                    옮긴것.append(f"{옛이름} → {새이름} (겹치지 않는 것만)")
+                except OSError as e:
+                    _알림(f"[폴더 옮기기] `{옛이름}` 을 못 옮겼다 — {type(e).__name__}")
+        return 옮긴것
 
     def templates(self) -> list[str]:
         """쓸 수 있는 서식 이름들."""
@@ -4110,8 +4111,8 @@ def _self_check() -> None:
         # ★★ **`_` 와 `%` 가 와일드카드로 새면 안 된다**(2026-09-20 · 폴더 칸을 만들다 잡았다).
         #   SQL `LIKE` 에서 `_` 는 「아무 글자 하나」다. 그대로 넣었더니 `path:_정리` 가
         #   「`_정리` 폴더의 1장」 대신 **「제목에 '정리'가 든 3장」까지 4장**을 내놓았다.
-        #   창고에는 `_서식`·`_정리` 처럼 밑줄로 시작하는 폴더가 있다.
-        밑줄방 = n.root / "_정리"
+        #   창고에는 `_templates`·`_digest` 처럼 밑줄로 시작하는 폴더가 있다.
+        밑줄방 = n.root / wiki.정리폴더
         밑줄방.mkdir(exist_ok=True)
         n.write(Note(title="정리함 글", body="여기 있다"), at=밑줄방 / "정리함 글.md")
         n.write(Note(title="딴 곳의 정리 글", body="제목에 정리가 들었을 뿐"))
@@ -4119,7 +4120,8 @@ def _self_check() -> None:
         # ★ `%` 를 안 막으면 「100 + 아무거나 + 끝」 이 되어 **이것까지 걸린다**
         n.write(Note(title="퍼센트 아닌 글", body="몸", extra={"status": "100아무거나끝"}))
         n.reindex()
-        assert got("path:_정리") == {"정리함 글"}, got("path:_정리")
+        찾을말 = f"path:{wiki.정리폴더}"        # 밑줄로 시작하는 폴더 — `_` 가 와일드카드다
+        assert got(찾을말) == {"정리함 글"}, got(찾을말)
         assert got("status:100%끝") == {"퍼센트 글"}, got("status:100%끝")
         assert 라이크("a_b%c") == r"a\_b\%c", 라이크("a_b%c")
 
@@ -4132,7 +4134,7 @@ def _self_check() -> None:
                any(t == "wiki" and d == 0 for t, d, c in 나무), 나무
         assert ("2019", 1, 1) in 나무, 나무
         assert ("04", 2, 1) in 나무, 나무
-        assert [x for x in 나무 if x[0] == "_정리"], 나무
+        assert [x for x in 나무 if x[0] == wiki.정리폴더], 나무
 
         # ★★ **앞머리 값으로도 찾는다**(오너 2026-09-20). 옵시디언 볼트를 들이니
         #   `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이 없었다** —
@@ -5231,13 +5233,13 @@ def _self_check() -> None:
     #   규칙 글도 폰 서식 목록도 **통째로 사라진 것처럼 보인다**(2026-09-21 영문 이름으로 옮김).
     with tempfile.TemporaryDirectory() as tmp서식:
         뿌리 = Path(tmp서식) / "notes"
-        옛자리 = 뿌리 / wiki.옛서식폴더들[0]
+        옛자리 = 뿌리 / wiki.특별폴더[wiki.서식폴더][0]
         옛자리.mkdir(parents=True)
         (옛자리 / "제품.md").write_text("# 옛 서식" + chr(10), encoding="utf-8")
         (옛자리 / Notes.RULE_FILE).write_text("# 옛 규칙" + chr(10), encoding="utf-8")
         n서식 = Notes(뿌리)
         새자리 = n서식.template_root()
-        assert 새자리.name == "_templates", 새자리.name
+        assert 새자리.name == wiki.서식폴더 == "_templates", 새자리.name
         assert not 옛자리.exists(), "옛 이름 폴더가 남았다"
         assert (새자리 / "제품.md").read_text(encoding="utf-8") == "# 옛 서식" + chr(10), \
             "서식을 안 따라 옮겼다"
@@ -5259,6 +5261,25 @@ def _self_check() -> None:
         assert (새자리 / "명함.md").exists(), "겹치지 않는 것을 안 끌어왔다"
         assert 옛자리.exists(), "겹친 것이 남았는데 옛 폴더를 지웠다"
         n둘.conn.close()
+
+    # ★★ **표에 적힌 폴더를 다 옮긴다.** 서식만 옮기고 말면 **정리 글과 지난 판이
+    #   사라진 것처럼 보인다** — 되돌리기가 통째로 없어지는 것이다.
+    with tempfile.TemporaryDirectory() as tmp표:
+        뿌리 = Path(tmp표) / "notes"
+        뿌리.mkdir(parents=True)
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            옛 = 뿌리 / 옛이름들[0]
+            옛.mkdir()
+            (옛 / "표시.md").write_text(f"# {옛이름들[0]}" + chr(10), encoding="utf-8")
+        n표 = Notes(뿌리)
+        남은옛것 = [옛이름들[0] for 옛이름들 in wiki.특별폴더.values()
+                 if (뿌리 / 옛이름들[0]).exists()]
+        assert not 남은옛것, f"옛 이름 폴더가 남았다: {남은옛것}"
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            표시 = 뿌리 / 새이름 / "표시.md"
+            assert 표시.exists(), f"`{옛이름들[0]}` 의 속을 안 옮겼다 → {새이름}"
+            assert 표시.read_text(encoding="utf-8").strip() == f"# {옛이름들[0]}"
+        n표.conn.close()
 
     print("notes self-check 통과")
 

@@ -160,12 +160,15 @@ def _사람이손댄것(뿌리) -> list[str]:
 
     남 = []
     import notes as _notes
+    import wiki as _위키2
+
+    # 창고의 **특별 폴더**(새 이름·옛 이름 다)는 사람 글이 아니다 — 표에서 받아 온다.
+    특별폴더이름들 = {이름 for 새, 옛들 in _위키2.특별폴더.items()
+                 for 이름 in (새, *옛들)}
 
     for f in _notes.훑어내림(_P(뿌리), (".md",)):   # 연결 폴더는 안 따라간다
         조각 = f.relative_to(뿌리).parts
-        import wiki as _위키2
-        서식이름들 = (_위키2.서식폴더, *_위키2.옛서식폴더들)
-        if ".이력" in 조각 or any(이름 in 조각 for 이름 in 서식이름들):
+        if any(이름 in 조각 for 이름 in 특별폴더이름들):
             continue
         try:
             글 = f.read_text(encoding="utf-8", errors="replace")
