@@ -290,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
         더할앞머리 = {}
         if isinstance(출처, str) and 출처 in wiki.앞머리규약["출처"]:
             더할앞머리["출처"] = 출처
-        갈래 = body.get("kind", old.kind if old else "note")
+        갈래 = body.get("kind", old.kind if old else wiki.기본갈래)
         if mode == "append":
             path = self.server.notes.append(title, text, 갈래,
                                             pinned=body.get("pinned") is True)
@@ -688,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
                 #     AI 가 한 번 꺼낼 때 나가는 글자가 곧 값이다.
                 if 간추려:
                     작은장 = {"title": r["title"], "chars": len(몸)}
-                    if r["kind"] and r["kind"] != "note":
+                    if r["kind"] and r["kind"] != wiki.기본갈래:
                         작은장["kind"] = r["kind"]
                     out.append(작은장)
                     continue
@@ -699,8 +699,8 @@ class Handler(BaseHTTPRequestHandler):
                     "summary": notes.요약(몸, 물음=q),
                     "chars": len(몸),
                 }
-                if r["kind"] and r["kind"] != "note":
-                    한장["kind"] = r["kind"]           # 보통은 note 다
+                if r["kind"] and r["kind"] != wiki.기본갈래:
+                    한장["kind"] = r["kind"]           # 보통은 기본갈래다
                 if r["pinned"]:
                     한장["pinned"] = True              # 거짓은 안 보낸다
                 if r["created"]:

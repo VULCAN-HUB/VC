@@ -3095,7 +3095,7 @@ class MainWindow(QWidget):
             with self.notes._글잠금(title):
                 if self.notes.read(title) is None:
                     try:
-                        self.notes.write(Note(title=title, body="", kind="note"))
+                        self.notes.write(Note(title=title, body="", kind=wiki.기본갈래))
                     except WriteBlocked:
                         self.report("못 썼어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
                         return
@@ -3122,7 +3122,7 @@ class MainWindow(QWidget):
             있음 = self.notes.read(title) is not None
             if not 있음:
                 self._wrote_at = time.monotonic()
-                self.notes.write(Note(title=title, body="", kind="note"))
+                self.notes.write(Note(title=title, body="", kind=wiki.기본갈래))
         if 있음:
             self.show_note(title)
             return

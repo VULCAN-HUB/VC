@@ -1066,7 +1066,7 @@ def safe_title(title: str) -> str:
 class Note:
     title: str
     body: str
-    kind: str = "note"
+    kind: str = wiki.기본갈래
     pinned: bool = False
     id: str = ""
     created: str = ""
@@ -1204,7 +1204,7 @@ class Note:
             edited_by=str(front.get("edited_by", "")),
             title=title,
             body=m.group(2),
-            kind=str(front.get("kind", "note")),
+            kind=str(front.get("kind", wiki.기본갈래)),
             pinned=bool(front.get("pinned", False)),
             id=str(front.get("id", "")),
             created=str(front.get("created", _now())),
@@ -1528,7 +1528,9 @@ class Notes:
             if got is not None:
                 return got
             body = self.fill_slots(self.template("일지"), day) or f"# {day}" + chr(10)
-            note = Note(title=day, body=body, kind="note")
+            # 오늘 일지는 **제 갈래가 있다**(`wiki.갈래들` 의 「일지」). 기본갈래로 두면
+            # 지도에서 메모 수십 장 사이에 섞여 날짜 글을 못 찾는다.
+            note = Note(title=day, body=body, kind="일지")
             self.write(note)
             return note
 
@@ -2023,7 +2025,8 @@ class Notes:
                   else Path(str(self.index_path)).parent) / "vc-잠금"
         return _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title))
 
-    def append(self, title: str, text: str, kind: str = "note", pinned: bool = False) -> Path:
+    def append(self, title: str, text: str, kind: str = wiki.기본갈래,
+               pinned: bool = False) -> Path:
         """있으면 뒤에 붙이고, 없으면 새로 만든다.
 
         AI가 관찰을 쌓는 기본 방식이다. 덮어쓰기를 기본으로 하면 어제 적은 것이
@@ -2681,12 +2684,12 @@ class Notes:
             got = self.conn.execute(sql, (title, *args)).fetchone()
             if got is None:
                 continue
-            갈 = got["kind"] or "note"
+            갈 = got["kind"] or wiki.기본갈래
             if 갈 not in 묶음:
                 묶음[갈], _ = [], 차례.append(갈)
             묶음[갈].append(got)
         # 낱말로 이미 든 갈래는 **한 바퀴 뒤로 민다** — 그쪽은 이미 자리를 얻었다.
-        먼저든갈래 = {r["kind"] or "note" for r in rows}
+        먼저든갈래 = {r["kind"] or wiki.기본갈래 for r in rows}
         차례.sort(key=lambda 갈: 갈 in 먼저든갈래)
         층 = 0
         while len(out) < k:
@@ -3258,7 +3261,26 @@ def _self_check() -> None:
         # 사용자가 옵시디언에서 손으로 만든 파일도 받아들인다.
         (root / "손으로 쓴 것.md").write_text("프론트매터 없음 [[VC]]", encoding="utf-8")  # 평면에 손으로
         assert n.reindex() == 1
-        assert n.read("손으로 쓴 것").kind == "note"
+        # 앞머리 없이 손으로 만든 파일은 **기본갈래**가 된다. 옛 이름(`note`)을 쓰면
+        # 새 글이 창고 기준 밖에 서서, 지도에 「note」 칸이 따로 생긴다.
+        assert n.read("손으로 쓴 것").kind == wiki.기본갈래, n.read("손으로 쓴 것").kind
+
+        # ★★ **새 글이 나는 자리가 넷이다.** 하나라도 옛 갈래(`note`)로 새면 창고 기준
+        #   밖에 서고, 지도에 「note」 칸이 따로 생긴다 — 실제로 넷 중 넷이 샜다(2026-09-21).
+        #   여기서 한 번에 막는다: 갈래를 안 준 글 · `append` · 오늘 일지 · 손으로 만든 파일.
+        n.write(Note(title="갈래 안 준 글", body=""))
+        n.append("쌓는 글", "관찰 하나")
+        일지 = n.daily("2026-01-02")
+        났다 = {"갈래 안 준 글": n.read("갈래 안 준 글").kind,
+              "append": n.read("쌓는 글").kind,
+              "오늘 일지": 일지.kind,
+              "손으로": n.read("손으로 쓴 것").kind}
+        assert not [v for v in 났다.values() if v in wiki.옛갈래], f"옛 갈래로 샌다: {났다}"
+        assert all(wiki.아는갈래(v) for v in 났다.values()), f"규칙에 없는 갈래: {났다}"
+        # 일지는 **제 갈래**를 갖는다 — 메모 수십 장 사이에 섞이면 날짜 글을 못 찾는다
+        assert 일지.kind == "일지", 일지.kind
+        for t in ("갈래 안 준 글", "쌓는 글", "2026-01-02"):
+            n.delete(t)
         assert "손으로 쓴 것" in n.neighbors("VC")
 
         # 인덱스는 언제든 파일에서 다시 만들 수 있다 — 복구 수단이 항상 있다.

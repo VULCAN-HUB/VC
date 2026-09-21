@@ -644,19 +644,34 @@ def _self_check() -> None:
                 return
             assert wav.stat().st_size > 1000, "소리가 안 담겼다"
 
-            t = time.time()
-            heard = ears.transcribe(wav)
-            took = time.time() - t
-            woke, order = heard_wake(heard)
-            like = difflib.SequenceMatcher(
-                None, "오늘 일정 알려줘", order.strip(" .!?~")).ratio()
-            print(f"  {said!r} → {heard!r}  ({took:.1f}s)")
-            print(f"    깨움={woke}  지시={order!r}  닮음={like:.2f}")
+            # ★★ **브이씨도 흘린다.** `--모두검사` 로 기계가 바쁠 때 「빛이 오늘 일정
+            #   알려줘」로 받아써서 한 번 빨개졌다(2026-09-21). 단독으로는 세 번 다 통과했다.
+            #   **흔들리는 검사는 깨진 검사보다 나쁘다** — 사람이 빨간 것을 무시하게 된다.
+            #   그래서 세 번까지 다시 불러 본다. 호출어 판정이 **진짜** 망가졌으면 세 번 다
+            #   흘리므로 검사의 힘은 그대로다. 흘린 사실은 아래에 찍어 둔다.
+            시도 = []
+            for 번 in range(3 if must else 1):
+                if 번:
+                    mouth.to_wav(said, wav)      # 같은 말을 다시 낸다
+                t = time.time()
+                heard = ears.transcribe(wav)
+                took = time.time() - t
+                woke, order = heard_wake(heard)
+                like = difflib.SequenceMatcher(
+                    None, "오늘 일정 알려줘", order.strip(" .!?~")).ratio()
+                print(f"  {said!r} → {heard!r}  ({took:.1f}s)")
+                print(f"    깨움={woke}  지시={order!r}  닮음={like:.2f}")
+                시도.append(woke)
+                if woke:
+                    break
 
             assert heard, "받아쓰기가 빈 문자열이다"
             if must:
-                assert woke, f"'{name}'을 불렀는데 못 알아들었다: {heard}"
+                assert any(시도), \
+                    f"'{name}'을 {len(시도)}번 불렀는데 다 못 알아들었다: {heard}"
                 assert order, f"호출어만 떼고 나니 지시가 없다: {heard}"
+                if len(시도) > 1:
+                    print(f"    (참고: {len(시도)}번째에 알아들었다 — 이번 판은 흔들렸다)")
             elif not woke:
                 print(f"    (참고: '{name}'이 이번엔 흘렀다 — 측정치 3/4)")
 
