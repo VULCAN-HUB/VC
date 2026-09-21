@@ -1268,6 +1268,7 @@ class Notes:
         self._heal_search()
         self._heal_vectors()
         self._특별폴더옮기기()      # 옛 이름 폴더를 먼저 끌어온다 — 안 그러면 규칙 글이 둘이 된다
+        self._특별폴더세우기()      # 아직 안 쓴 자리도 미리 보이게 둔다
         self.write_rules()
         if index_now:
             self.reindex()
@@ -1624,6 +1625,21 @@ class Notes:
 
     def template_root(self) -> Path:
         return self.root / TEMPLATE_DIR
+
+    def _특별폴더세우기(self) -> None:
+        """표에 적힌 특별 폴더를 **미리 만들어 둔다.**
+
+        ★ 쓸 때 만들게 두었더니 `_attachments`·`_vclog` 가 **아예 안 보였다**(오너가
+          「아직 안 생김 폴더도 만들라」 2026-09-21). 자리가 보여야 사람이 거기 넣는다 —
+          붙임 파일을 어디에 둘지 몰라 창고 아무 데나 두게 되는 것을 막는다.
+        ★ 빈 폴더는 **git·일부 동기화가 안 나른다.** 여기서 만드는 까닭은 이 기계에서
+          눈에 보이게 하려는 것이지, 어디로 옮겨도 따라간다는 뜻이 아니다.
+        """
+        for 이름 in wiki.특별폴더:
+            try:
+                (self.root / 이름).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass          # 못 만들어도 창고가 멈출 이유가 없다
 
     def _특별폴더옮기기(self) -> list[str]:
         """옛 한글 이름으로 된 **특별 폴더들**을 새 영문 이름으로 옮긴다.
@@ -5285,6 +5301,16 @@ def _self_check() -> None:
             assert 표시.exists(), f"`{옛이름들[0]}` 의 속을 안 옮겼다 → {새이름}"
             assert 표시.read_text(encoding="utf-8").strip() == f"# {옛이름들[0]}"
         n표.conn.close()
+
+    # ★ 표에 적힌 특별 폴더는 **쓰기 전에도 보여야 한다**(오너 2026-09-21).
+    with tempfile.TemporaryDirectory() as tmp세움:
+        n세움 = Notes(Path(tmp세움) / "notes")
+        안선것 = [이름 for 이름 in wiki.특별폴더 if not (n세움.root / 이름).is_dir()]
+        assert not 안선것, f"특별 폴더가 안 섰다: {안선것}"
+        n세움.reindex()
+        assert n세움.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"] == 0, \
+            "빈 특별 폴더가 항목으로 셌다"
+        n세움.conn.close()
 
     print("notes self-check 통과")
 
