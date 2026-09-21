@@ -1006,7 +1006,9 @@ class MainWindow(QWidget):
             self.notes.write(Note(
                 title=ROOT,
                 body="여기서 시작한다. 쓸수록 항목이 늘고 서로 이어진다.",
-                kind="agent",
+                # 씨앗 가림은 `지은이: "씨앗"` 로 한다 — 옛 `kind: "agent"` 는 **옛 창고를
+                # 알아보는 뒷길**로만 남는다(`eb.py`). 갈래는 창고 기준을 따른다.
+                kind="엔티티",
                 pinned=True,
                 extra={"지은이": "씨앗"},
             ))

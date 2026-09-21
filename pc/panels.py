@@ -304,8 +304,10 @@ class NoteView(QTextBrowser):
             겨냥 = "note:" + name + ("#" + head if head else "")
             return f"[{shown}]({self._주소(겨냥)})"
 
-        out = notes.EMBED_RE.sub(embed, body)
-        out = notes.LINK_RE.sub(link, out)
+        # ★ 코드 울타리·홑따옴표 안은 **예시**다. 안 가리면 규칙 글의 `[[링크]]` 가
+        #   화면에서 `[링크](<note:링크>)` 로 깨져 보인다(2026-09-21 재서 봤다).
+        out = notes.코드밖만(notes.EMBED_RE, body, embed)
+        out = notes.코드밖만(notes.LINK_RE, out, link)
         # 블록 이름(`^a1b2`)은 **가리키는 표지**지 읽을 글이 아니다. 옵시디언도 안 보여 준다.
         # 지우지 말고 화면에서만 감춘다 — 원본 파일에는 그대로 있어야 링크가 닿는다.
         out = chr(10).join(notes.BLOCK_RE.sub("", 줄) for 줄 in out.splitlines())
@@ -1670,6 +1672,12 @@ def _self_check() -> None:
         md4 = v3.to_markdown("- 제품명 : vcis-689\n- 보낸날 : \n- [[회의]] 보기")
         assert "**제품명** · vcis-689" in md4 and "**보낸날** · —" in md4, md4
         assert "송장" not in v3.to_markdown("받음\n%%\n사진 글자: 송장 7788\n%%"), "숨은 글자가 보인다"
+        # ★★ **코드 안의 `[[…]]` 는 예시다.** 안 가리면 「이 창고를 쓰는 법」 같은 규칙 글이
+        #   화면에서 `[링크](<note:링크>)` 로 깨져 보인다(2026-09-21 재서 봤다).
+        깨짐 = v3.to_markdown("```\n[[링크]] 처럼 적는다\n```\n\n홑따옴 `[[링크]]` 도.\n\n진짜 [[VC]].")
+        assert "```\n[[링크]] 처럼" in 깨짐, f"코드 울타리 안의 예시를 고쳤다:\n{깨짐}"
+        assert "`[[링크]]`" in 깨짐, f"홑따옴 안의 예시를 고쳤다:\n{깨짐}"
+        assert "[VC](<note:VC>)" in 깨짐, f"진짜 링크를 안 고쳤다:\n{깨짐}"
 
         # 큰 사진은 칸 폭에 맞춰 줄인다. 원래 크기로 두면 칸을 뚫고 나간다.
         v2.resize(320, 240)

@@ -656,6 +656,19 @@ def _코드지우기(body: str) -> str:
     return _홑따옴.sub(lambda m: " " * len(m.group(0)), 지움)
 
 
+def 코드밖만(패턴: "re.Pattern", 글: str, 바꿈) -> str:
+    """코드 울타리·홑따옴표 **밖에서만** 바꾼다. 안쪽에 적힌 것은 예시다.
+
+    ★★ **찾는 쪽과 고치는 쪽은 같아야 한다.** `parse_links` 가 코드를 안 세게 바꾼 날
+       (2026-09-21) 고치는 쪽을 안 옮겨서 갈라졌다 — 링크로는 안 세면서 **이름은 바꿨고**,
+       화면에서는 예시가 `[링크](<note:링크>)` 로 깨져 보였다. 그래서 여기 한 자리에 둔다.
+       `_코드지우기` 가 길이를 지키므로 **같은 자리**로 맞춰 볼 수 있다.
+    """
+    가림 = _코드지우기(글)
+    return 패턴.sub(
+        lambda m: 바꿈(m) if 가림[m.start():m.end()].strip() else m.group(0), 글)
+
+
 def parse_links(body: str) -> list[tuple[str, str]]:
     """본문에서 (대상, 소제목)을 뽑는다. 보이는 글자는 연결과 무관해서 버린다.
 
@@ -2795,6 +2808,11 @@ class Notes:
         #   `[[옛것]]` · `[[옛것#소제목]]` · `[[옛것|보일 글]]` · `![[옛것]]`(끼워넣기).
         #   글자로만 바꿀 때는 첫 꼴만 걸려 **나머지가 허공을 가리켰다**(재 보고 찾았다).
         #   같은 정규식(`LINK_RE`)으로 바꾼다 — 찾는 쪽과 고치는 쪽이 갈리면 또 새 나간다.
+        # ★★ **코드 안의 `[[…]]` 는 링크가 아니니 이름도 안 바꾼다.** 규칙·서식 글은 그
+        #   꼴을 예시로 적는다 — 「링크」라는 글을 하나 만들었다가 이름을 바꾸면
+        #   「이 창고를 쓰는 법」의 예시가 통째로 따라 바뀐다.
+        #   `parse_links` 가 코드를 안 세게 바꾼 날(2026-09-21) 여기를 같이 안 고쳐서
+        #   **찾는 쪽과 고치는 쪽이 갈렸다** — 바로 위 주석이 경고하던 그 함정이다.
         def 바꿔(m: "re.Match") -> str:
             이름, 소제목, 보일 = m.group(1), m.group(2), m.group(3)
             if 제목맞춤(이름.strip()) != 제목맞춤(old):
@@ -2818,7 +2836,7 @@ class Notes:
                     text = read_text(path)
                 except (Vanished, OSError):
                     continue
-                새글 = 고치개.sub(바꿔, text)
+                새글 = 코드밖만(고치개, text, 바꿔)
                 if 새글 != text:
                     try:
                         _atomic_write(path, 새글)
@@ -2921,8 +2939,11 @@ class Notes:
             if r["src"] == title:
                 continue
             line = ""
-            for raw in (r["body"] or "").splitlines():
-                if any(m.group(1).strip() in names for m in LINK_RE.finditer(raw)):
+            # ★ 보여 줄 줄도 **코드 밖**에서 고른다. 규칙 글은 `[[…]]` 를 예시로 적는데,
+            #   그 줄을 집으면 역링크 옆에 엉뚱한 예시 문장이 붙는다.
+            몸 = r["body"] or ""
+            for raw, 가림 in zip(몸.splitlines(), _코드지우기(몸).splitlines()):
+                if any(m.group(1).strip() in names for m in LINK_RE.finditer(가림)):
                     line = raw.strip()
                     break
             out.append((r["src"], line))
@@ -3937,6 +3958,21 @@ def _self_check() -> None:
         assert parse_links("~~~md\n[[예시]]\n~~~") == []
         # 울타리가 안 닫혀도 끝까지 코드로 본다 — 반만 지우면 뒤가 제멋대로다
         assert parse_links("```\n[[예시]]") == []
+        # ★★ **찾는 쪽과 고치는 쪽은 같아야 한다.** 코드 안을 링크로 안 세게 바꾼 날
+        #   `rename` 을 같이 안 고쳐서, 링크로는 안 세면서 **이름은 바꿨다**(2026-09-21).
+        with tempfile.TemporaryDirectory() as tmp코드:
+            n코드 = Notes(Path(tmp코드) / "notes")
+            n코드.write(Note(title="링크", body="본체"))
+            n코드.write(Note(title="쓰는 법", body=(
+                "예시:\n\n```\n[[링크]] 처럼 적는다\n```\n\n홑따옴 `[[링크]]` 도.\n\n"
+                "진짜로 [[링크]] 를 가리킨다.")))
+            n코드.reindex()
+            n코드.rename("링크", "이음")
+            몸 = n코드.read("쓰는 법").body
+            assert "```\n[[링크]] 처럼" in 몸, f"코드 울타리 안의 예시를 바꿨다:\n{몸}"
+            assert "`[[링크]]`" in 몸, f"홑따옴 안의 예시를 바꿨다:\n{몸}"
+            assert "진짜로 [[이음]] 를" in 몸, f"진짜 링크를 안 바꿨다:\n{몸}"
+            n코드.conn.close()
         # 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번)
         n.write(Note(title="표시 시험", body="몸"))
         g = n.mark("표시 시험", pinned=True, archived=True, color="노랑")

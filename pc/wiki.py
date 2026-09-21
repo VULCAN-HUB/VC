@@ -158,6 +158,7 @@ def 스키마글() -> str:
 
 
 def _self_check() -> None:
+    from pathlib import Path
     # 갈래는 층을 하나씩 정한다
     assert 층(원본갈래) == RAW
     assert all(층(k) == WIKI for k in 갈래들 if k != 원본갈래), "raw 갈래가 둘 이상이다"
@@ -194,6 +195,41 @@ def _self_check() -> None:
     assert RAW + "/" in 글 and WIKI + "/" in 글
     # 규칙 글은 **사람이 읽는 것이기도 하다** — 표만 있고 설명이 없으면 안 된다
     assert 글.count(chr(10) + "## ") >= 6, "칸이 모자라다"
+
+    # ★★ **옛 갈래로 새 글을 쓰는 자리가 남았나.** 자리를 하나씩 세다가 두 번 놓쳤다
+    #   (2026-09-21: 처음에 넷을 고치고 「이제 안 샌다」고 했는데 씨앗·제품 정리가 더
+    #   있었다). 이제 **소스를 통째로 훑어** 잡는다 — 새 자리가 생겨도 걸린다.
+    #   검사 코드는 옛 창고를 흉내 내야 하므로 뺀다.
+    import re as _re
+
+    # ★ **아직 못 옮긴 둘.** 지울 때마다 이유를 다시 읽게 여기 적어 둔다.
+    #   새 자리가 생기면 이 표에 없으니 검사가 잡는다 — 가드의 힘은 그대로다.
+    아직 = {
+        # 오너가 「나에 대해는 아직 신경쓰지 마라」 했다(2026-09-21). 갈래를 옮기면
+        # 설정을 저장할 때 그 글이 바뀐다 — 오너 글이라 묻고 한다.
+        ("settings.py", "preference"),
+        # 솜씨는 **갈래 표에 자리가 없다.** 표는 오너가 고정한 기준이라(2026-09-21)
+        # 갈래를 하나 더 만드는 것은 물어야 한다. 그래프에서 솜씨는 중간 크기 점이라
+        # (`RADIUS["skill"]`) 엔티티로 옮기면 그 생김새도 같이 사라진다.
+        ("skills.py", "skill"),
+    }
+    옛것들 = []
+    여기 = Path(__file__).resolve().parent
+    for 파일 in sorted(여기.glob("*.py")):
+        try:
+            줄들 = 파일.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        검사안 = False
+        for 번, 줄 in enumerate(줄들, 1):
+            if _re.match(r"def _self_check|def _check|if __name__", 줄):
+                검사안 = True
+            if 검사안 or 파일.name.endswith("_check.py"):
+                continue
+            m = _re.search(r'kind\s*=\s*"([^"]+)"', 줄)
+            if m and m.group(1) in 옛갈래 and (파일.name, m.group(1)) not in 아직:
+                옛것들.append(f"{파일.name}:{번}  {줄.strip()[:60]}")
+    assert not 옛것들, "옛 갈래로 새 글을 쓰는 자리가 남았다:" + chr(10) + chr(10).join(옛것들)
 
     print("wiki self-check 통과")
 

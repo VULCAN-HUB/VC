@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 import sys
+
+import wiki
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -260,7 +262,9 @@ def run(store: Notes, guesses: dict[str, dict] | None = None) -> dict:
         if old is not None and old.body.strip() == body.strip():
             return
         at.parent.mkdir(parents=True, exist_ok=True)
-        store.write(Note(title=title, body=body, kind="thing" if sub else "note", pinned=pinned,
+        # ★ 옛 갈래(`thing`·`note`)로 쓰면 **새 글이 창고 기준 밖에 선다**(2026-09-21).
+        store.write(Note(title=title, body=body,
+                         kind="엔티티" if sub else wiki.기본갈래, pinned=pinned,
                          extra={"정리": "VC"}), at=at)
         written.append(title)
 
