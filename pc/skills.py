@@ -24,6 +24,14 @@ from notes import Note, Notes
 MIN_EVIDENCE = 3  # 이만큼 반복돼야 제안한다. 한두 번은 우연이다.
 
 
+# ★★ **쓰는 이름은 하나, 읽는 이름은 둘.** 2026-09-21 에 `skill` → 「솜씨」로 옮겼는데
+#   쓰는 쪽만 바꾸고 **읽는 질의를 안 바꿔서** 솜씨가 통째로 안 실렸다(검사가 잡았다).
+#   그래서 한 자리에 둔다 — 첫째가 쓰는 이름, 나머지는 옛 글을 받는 이름이다.
+import wiki
+
+갈래들 = ("솜씨", "skill")
+
+
 @dataclass
 class Skill:
     """선언문. 실행기는 이 데이터만 보고 모듈을 부른다."""
@@ -53,7 +61,7 @@ class Skill:
         return Note(
             title=self.name,
             body="\n".join(body),
-            kind="skill",
+            kind=갈래들[0],
             declaration=asdict(self),
         )
 
@@ -114,7 +122,9 @@ class SkillStore:
 
     def all(self) -> list[Skill]:
         out = []
-        for row in self.notes.conn.execute("SELECT title FROM notes WHERE kind = 'skill'"):
+        구멍 = ",".join("?" * len(갈래들))
+        for row in self.notes.conn.execute(
+                f"SELECT title FROM notes WHERE kind IN ({구멍})", 갈래들):
             s = self.load(row["title"])
             if s:
                 out.append(s)
@@ -261,6 +271,21 @@ def _self_check() -> None:
         s = skills.save(Skill(name="출근 준비", triggers=["출근 준비"],
                               steps=[{"module": "navigate", "params": {"to": "회사"}}]))
         assert s.version == 1 and s.previous is None
+
+        # ★★ **쓰는 이름을 옮겼으면 읽는 쪽도 같이 옮겨야 한다.** 2026-09-21 에
+        #   `skill` → 「솜씨」로 옮기면서 쓰는 쪽만 바꿨더니 **솜씨가 통째로 안 실렸다.**
+        #   쓸 때는 새 이름, 읽을 때는 **옛 이름까지** — 옛 글이 남아 있다.
+        assert s.to_note().kind == 갈래들[0] == "솜씨", s.to_note().kind
+        assert wiki.아는갈래("솜씨"), "새 갈래가 규칙 표에 없다"
+        옛것 = Skill(name="옛 솜씨", triggers=["옛"],
+                   steps=[{"module": "navigate", "params": {"to": "집"}}]).to_note()
+        옛것.kind = "skill"                      # 옮기기 전에 쓰인 글
+        notes.write(옛것)
+        notes.reindex()
+        assert sorted(x.name for x in skills.all()) == ["옛 솜씨", "출근 준비"], \
+            f"옛 이름으로 적힌 솜씨를 놓친다: {[x.name for x in skills.all()]}"
+        notes.delete("옛 솜씨")
+        notes.reindex()
 
         # ★★ **스킬은 코드가 아니라 데이터다 — 나쁜 선언문이 와도 안 깨져야 한다.**
         #   밖에서 손으로 고칠 수 있는 자리라(옵시디언에서 연다) 뭐든 들어온다.
