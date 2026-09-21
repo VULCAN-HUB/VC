@@ -93,8 +93,13 @@ def _git이아는것(바닥: Path) -> list[str] | None:
     import subprocess
 
     try:
-        난것 = subprocess.run(["git", "-C", str(바닥), "ls-files", "-z"],
-                            capture_output=True, text=True, timeout=30)
+        # ★★ **아직 `add` 안 한 파일도 센다**(`--others`). `ls-files` 만 쓰면 방금 만든
+        #   파일이 VC 에 **안 보인다** — 차리고 첫 파일을 쓰는 순간 목록이 비었다
+        #   (2026-09-21 배선 검사가 잡았다). `--exclude-standard` 라 `.gitignore` 는 그대로 듣는다.
+        난것 = subprocess.run(
+            ["git", "-C", str(바닥), "ls-files", "-z",
+             "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if 난것.returncode != 0:
@@ -317,6 +322,10 @@ def _self_check() -> None:
             assert not any(f.startswith("무시할것") for f in 난것깃["파일"]), \
                 f"git 이 무시하는 것을 센다: {난것깃['파일']}"
             assert "그림.png" not in 난것깃["파일"], "이진 파일을 센다"
+            # ★★ **아직 `add` 안 한 파일도 보인다** — 안 보이면 방금 만든 파일을 못 고친다
+            (바닥 / "갓만든것.py").write_text("y = 2\n", encoding="utf-8")
+            assert "갓만든것.py" in 나무("DemoApp", 뿌리)["파일"], \
+                나무("DemoApp", 뿌리)["파일"][:8]
 
     print("codefiles self-check 통과")
 

@@ -416,7 +416,9 @@ class Handler(BaseHTTPRequestHandler):
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task",
                   "/eb/v1/wiki/ask",
                   # 헤르메스(2단계) — 바이브코딩 관제탑. AI 도구가 이 문으로 부른다.
-                  "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log")
+                  "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log",
+                  # 바이브코딩 — 바깥 AI 가 고칠 안을 내고, 승인하면 적용한다
+                  "/eb/v1/vibe/plan", "/eb/v1/vibe/apply")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1102,6 +1104,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path.startswith("/eb/v1/hermes/"):
             return self._hermes(url.path.rsplit("/", 1)[-1], body)
 
+        # ★★ **바이브코딩** — 제안 → 승인 → 적용. `plan` 은 아무것도 안 쓴다.
+        if url.path.startswith("/eb/v1/vibe/"):
+            return self._vibe(url.path.rsplit("/", 1)[-1], body)
+
         if url.path == "/v1/chat/completions":
             return self._chat(body)
 
@@ -1368,6 +1374,46 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     # --- 성장 루프 (결정 17·18) -----------------------------------------
+
+    def _vibe(self, 무엇: str, body: Any) -> None:
+        """바이브코딩 문. `plan`(고칠 안 + 차이) · `apply`(승인한 것만 적용).
+
+        ★★ **`plan` 은 파일을 안 건드린다.** 쓰는 것은 `apply` 뿐이다 —
+           제안과 적용을 한 문에 두면 사람이 차이를 보기 전에 써 버린다.
+        """
+        import vibe as _바이브
+
+        프로젝트 = (body.get("project") or body.get("프로젝트") or "").strip() \
+            if isinstance(body.get("project") or body.get("프로젝트") or "", str) else ""
+        if not 프로젝트:
+            return self._send(400, {"error": "project required"})
+        n = self.server.notes
+
+        if 무엇 == "plan":
+            손 = None
+            모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+            if 모델:
+                손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0,
+                                                         max_tokens=4000)
+            안 = _바이브.고칠안(n, 손, 프로젝트,
+                            str(body.get("text") or body.get("지시") or ""),
+                            body.get("files") or body.get("파일들"))
+            return self._send(200, {
+                "why": 안["왜"], "changes": [것["파일"] for 것 in 안["고침"]],
+                "plan": 안["고침"], "looked": 안["본파일"], "error": 안["탈"],
+                "diff": _바이브.차이(프로젝트, 안), "size": _바이브.잰것(프로젝트, 안)})
+
+        if 무엇 == "apply":
+            안 = {"고침": body.get("plan") or body.get("고침") or []}
+            난것 = _바이브.적용(프로젝트, 안, body.get("only") or body.get("고를것"))
+            if 난것["쓴것"]:
+                import wikilog as _일지바
+
+                _일지바.적기(n, "적립", f"바이브코딩 — {프로젝트}: "
+                                   f"{' · '.join(난것['쓴것'][:3])}")
+            return self._send(200, {"written": 난것["쓴것"], "failed": 난것["못쓴것"]})
+
+        return self._send(404, self._길없다("/eb/v1/vibe/" + 무엇))
 
     def _hermes(self, 무엇: str, body: Any) -> None:
         """헤르메스 문. `start`(차리기) · `context`(꺼내기) · `log`(적립하기)."""
@@ -3235,6 +3281,33 @@ def _self_check() -> None:
         assert [t for t, _ in _맥헤9["칸"]["오류"]] == ["HermesWire — 배선이 끊겼다"], _맥헤9["칸"]
         # 한글 이름은 막는다 — 맥에서 한글 경로가 도구를 죽인다
         assert _헤9.차리기(note_store, "한글프로젝트", 뿌리=_P헤9(_뿌리헤9))["만든것"] == []
+
+    # ★★ **바이브코딩 배선을 잰다.** `plan` 이 파일을 건드리면 안 된다.
+    import vibe as _바9
+
+    for _길바9 in ("/eb/v1/vibe/plan", "/eb/v1/vibe/apply"):
+        assert _길바9 in Handler.POST_PATHS, f"바이브 문이 POST 목록에 없다: {_길바9}"
+    assert hasattr(Handler, "_vibe"), "바이브 문을 받을 손이 없다"
+
+    with _임헤9.TemporaryDirectory() as _뿌리바9:
+        from pathlib import Path as _P바9
+
+        _옛뿌리바9 = _헤9.기본뿌리
+        _헤9.기본뿌리 = _P바9(_뿌리바9)
+        try:
+            _헤9.차리기(note_store, "VibeWire", "배선 시험")
+            (_P바9(_뿌리바9) / "VibeWire" / "a.py").write_text("x = 1\n", encoding="utf-8")
+            note_store.reindex()
+            _손바9 = lambda m: '{"왜":"바꾼다","고침":[{"파일":"a.py","새글":"x = 2\\n"}]}'
+            _안바9 = _바9.고칠안(note_store, _손바9, "VibeWire", "a.py 고쳐")
+            assert [것["파일"] for 것 in _안바9["고침"]] == ["a.py"], _안바9
+            # ★★ **안 만들기는 파일을 안 건드린다**
+            assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+            assert "-x = 1" in _바9.차이("VibeWire", _안바9)
+            _바9.적용("VibeWire", _안바9)
+            assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
+        finally:
+            _헤9.기본뿌리 = _옛뿌리바9
 
     # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
     #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
