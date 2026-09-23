@@ -219,7 +219,7 @@ class MainWindow(QWidget):
     # 묻기(Query) 가 끝났다 — 물음 · 답 · 근거 제목들.
     # ★ **신호 이름은 영문이어야 한다.** 한글로 두면 PyQt 가 이름을 ascii 로 굽다
     #   `UnicodeEncodeError` 로 창이 통째로 안 뜬다(2026-09-21 재서 확인).
-    query_done = pyqtSignal(str, str, list)
+    query_done = pyqtSignal(str, str, list, bool)
     # 맡기기(에이전트 CLI)가 끝났다 — 프로젝트 · 돌린 결과(dict).
     # ★ 신호 이름은 영문이어야 한다(한글이면 PyQt 가 ascii 로 굽다 터진다).
     handoff_done = pyqtSignal(str, object)
@@ -262,7 +262,8 @@ class MainWindow(QWidget):
 
         left = self._build_head()
         self.assist_done.connect(lambda t, h, g: self._도움보이기(t, h, g))
-        self.query_done.connect(lambda 물음, 답, 근거: self._묻기보이기(물음, 답, 근거))
+        self.query_done.connect(
+            lambda 물음, 답, 근거, 대화: self._묻기보이기(물음, 답, 근거, 대화))
         self.handoff_done.connect(lambda 프로젝트, 난것: self._맡김끝(프로젝트, 난것))
         # 돌아가는 동안 몇 초째인지 보여 준다 — 아무 말이 없으면 멈춘 줄 안다
         self._맡김타이머 = QTimer(self)
@@ -569,6 +570,8 @@ class MainWindow(QWidget):
             box.setStyleSheet("line-height:160%;")
             doc = box.document()
             doc.setDocumentMargin(14)
+            # ★ 아래쪽에 숨 쉴 틈. 마지막 줄이 칸 끝에 딱 붙으면 아랫단과 붙어 보인다.
+            box.setViewportMargins(0, 0, 0, 6)
 
         self.side_btn = QPushButton("옆에")
         self.side_btn.setObjectName("quiet")
@@ -748,13 +751,35 @@ class MainWindow(QWidget):
         dbox.addWidget(self.detail_title)
         dbox.addWidget(self.twin_note)
         dbox.addWidget(self.detail_stack, 1)
-        dbox.addWidget(self.detail_links)
-        dbox.addWidget(self.embeds_head)
-        dbox.addWidget(self.embeds)
-        dbox.addWidget(self.backs_head)
-        dbox.addWidget(self.backs)
-        dbox.addWidget(self.mentions_head)
-        dbox.addWidget(self.mentions)
+        # ★★ **아랫단을 가둔다.** 링크·가리킨 곳·이름만 적힌 곳은 글마다 길이가 제멋대로인데
+        #   카드 높이는 고정이라, 아랫단이 길면 **본문이 최소 높이(150)까지 눌린다** —
+        #   재 보니 620짜리 카드에서 본문 150 · 아랫단 602 였다. 한 줄만 더 늘면 카드를
+        #   넘어 **본문과 겹친다**(오너가 그 꼴을 짚었다 · 2026-09-24).
+        #   그래서 아랫단은 **제 칸 안에서 굴러가게** 두고, 본문 몫을 지킨다.
+        # ★★ **금을 긋는다.** 본문은 굴러가는 칸이라 마지막 줄이 반쯤 잘리는데, 바로
+        #   아래에 링크 줄이 붙어 있으면 **글자끼리 겹친 것으로 읽힌다**(오너가 그 꼴을
+        #   짚었다 · 2026-09-24). 선 하나면 「여기서 끝났다」가 분명해진다.
+        self.detail_rule = theme.Divider()
+        dbox.addWidget(self.detail_rule)
+        아랫단 = QWidget()
+        아래상자 = QVBoxLayout(아랫단)
+        아래상자.setContentsMargins(0, 0, 0, 0)
+        아래상자.setSpacing(4)
+        for 것 in (self.detail_links, self.embeds_head, self.embeds,
+                 self.backs_head, self.backs, self.mentions_head, self.mentions):
+            아래상자.addWidget(것)
+        아래상자.addStretch(0)
+        self.detail_foot = QScrollArea()
+        self.detail_foot.setWidget(아랫단)
+        self.detail_foot.setWidgetResizable(True)
+        self.detail_foot.setFrameShape(QFrame.NoFrame)
+        self.detail_foot.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.detail_foot.viewport().setAutoFillBackground(False)
+        아랫단.setAutoFillBackground(False)
+        # ★ 폭으로는 창을 밀지 않는다 — 긴 이름표 하나가 창 최소 폭을 늘리던 그 병이다
+        self.detail_foot.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.detail_foot.setMinimumWidth(0)
+        dbox.addWidget(self.detail_foot)
 
         self.footer = QLabel()
         self.footer.setStyleSheet(
@@ -2774,6 +2799,8 @@ class MainWindow(QWidget):
         self.mentions.show_hits(언급)
         self.mentions_head.setVisible(bool(언급))
         self.mentions.setVisible(bool(언급))
+        # ★ 아랫단 길이가 글마다 다르다 — 채운 뒤에 다시 맞춘다
+        self._아랫단가두기(self.detail_card.height())
 
     def _indexed(self, changed: int) -> None:
         """훑기가 끝났다. 바뀐 게 있을 때만 다시 그린다 — 없으면 화면을 건드릴 이유가 없다."""
@@ -3219,13 +3246,14 @@ class MainWindow(QWidget):
 
         report.딴실로("AI 도움(요약·번역)", 일)
 
-    def 창고에묻기(self, 물음: str, 앞말: list | None = None) -> None:
+    def 창고에묻기(self, 물음: str, 앞말: list | None = None, 대화: bool = False) -> None:
         """묻기(Query) — 서버에 **창고를 뒤져 답해 달라**고 한다. 딴 실에서 돈다.
 
         ★ 모델 답은 실측 15초쯤이라 창에서 곧장 부르면 **그동안 창이 굳는다.**
           요약·번역(`_도움`)이 쓰는 길을 그대로 따랐다.
         """
-        self.report(f"창고를 뒤지는 중 — 「{물음}」", [])
+        # ★ 대화일 때는 「창고를 뒤진다」고 안 한다 — 인사에도 그 말이 뜨면 이상하다
+        self.report("…" if 대화 else f"창고를 뒤지는 중 — 「{물음}」", [], aloud=not 대화)
         link = self.link
 
         def 일() -> None:
@@ -3234,7 +3262,7 @@ class MainWindow(QWidget):
 
             답, 근거 = "", []
             요청 = urllib.request.Request(
-                f"{link.base}/eb/v1/wiki/ask", method="POST",
+                f"{link.base}/eb/v1/wiki/" + ("chat" if 대화 else "ask"), method="POST",
                 data=json.dumps({"text": 물음, "history": list(앞말 or [])},
                                 ensure_ascii=False).encode(),
                 headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
@@ -3252,25 +3280,29 @@ class MainWindow(QWidget):
                     답 = f"⚠ {e}"
             except Exception as e:
                 답 = f"⚠ 서버에 못 물었다 — {type(e).__name__}"
-            self.query_done.emit(물음, 답, list(근거))
+            self.query_done.emit(물음, 답, list(근거), bool(대화))
 
         report.딴실로("묻기", 일)
 
-    def _묻기보이기(self, 물음: str, 답: str, 근거: list) -> None:
+    def _묻기보이기(self, 물음: str, 답: str, 근거: list, 대화: bool = False) -> None:
         """답을 말하고, 근거 글들을 결과 칸에 세운다 — **눌러서 확인할 수 있게.**
 
         ★★ 답을 창고에 남길지는 **물어본다.** 물을 때마다 글이 쌓이면 창고가 물음으로
            덮이고, 기계가 지은 글과 사람이 정한 글이 섞인다. 이 프로그램의 결
            (제안 → 승인 → 기록)이 여기에도 그대로 간다.
+        ★★ **대화일 때는 안 묻는다.** 말 한 마디마다 상자가 뜨면 대화가 안 된다 —
+           남기고 싶으면 찾기 칸으로 묻는다(그쪽이 「재는」 길이다).
         """
         self.report(답, list(근거))
         if 근거:
             # `show_results` 는 **(제목, 요약) 짝**을 받는다 — 제목 글자만 주면
             # 글자 하나하나로 찢어져 엉뚱한 줄이 선다(재서 잡았다).
             self.show_results([(t, "") for t in 근거])
-            self.show_note(근거[0])
-        if 답.startswith("⚠") or not 근거:
-            return          # 못 냈거나 근거 없는 답은 남길 것이 아니다
+            if not 대화:
+                # ★ 대화 중에 글이 저절로 열리면 하던 말이 가려진다
+                self.show_note(근거[0])
+        if 대화 or 답.startswith("⚠") or not 근거:
+            return          # 대화·못 낸 답·근거 없는 답은 남길 것이 아니다
         # ★★ **창을 막지 않는다.** 처음에 `exec_()` 로 모달을 띄웠더니 답이 올 때마다
         #   창이 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(재서 잡았다 · 2026-09-21).
         #   물어보되 막지는 않는다 — 답은 이미 화면에 있고, 남길지는 천천히 정해도 된다.
@@ -3598,6 +3630,46 @@ class MainWindow(QWidget):
             # 좌표는 부모(left) 기준이다 — graph.geometry()가 그 기준이라 그대로 쓴다.
             self.detail_card.setGeometry(g.x() + (g.width() - w) // 2, top, w, h)
             self._trim_tools(w)
+        self._아랫단가두기(h)
+
+    # ★ 아랫단이 카드에서 차지해도 되는 몫. 나머지는 본문 것이다.
+    아랫단몫 = 0.34
+    # ★★ **몫만으로는 모자란다.** 카드가 작으면 비율로 잡은 천장도 안 들어가서
+    #   아랫단이 카드 **밖으로 밀려 나간다**(검사가 422짜리 카드에서 재현했다:
+    #   아랫단 바닥 523 > 카드 422). 그래서 **남은 자리**로도 한 번 더 깎는다.
+    본문최소 = 180      # 이만큼은 읽을 자리로 남긴다
+    위쪽자리 = 120      # 위 줄·제목·여백이 먹는 몫(넉넉히 잡는다)
+
+    def _아랫단가두기(self, 높이: int) -> None:
+        """아랫단에 **제 몫만큼** 준다 — 넘치면 굴리고, 모자라면 본문에 돌려준다.
+
+        ★★ 카드 높이는 고정인데 아랫단은 글마다 제멋대로 길다.
+           - 안 가두면 본문이 최소 높이까지 눌리고(재 보니 620 중 150), 더 길면
+             **카드를 넘어 본문과 겹친다**(오너가 짚은 그 꼴이다 · 2026-09-24).
+           - 그렇다고 천장만 씌우면 이번엔 **본문이 다 가져가** 아랫단이 두 줄로
+             찌그러진다(늘어나는 몫이 본문에만 있다). 그래서 **필요한 만큼 딱** 준다.
+        """
+        칸 = getattr(self, "detail_foot", None)
+        속 = 칸.widget() if 칸 is not None else None
+        if 칸 is None or 속 is None:
+            return
+        # 비율로 한 번, **남은 자리**로 한 번 더 깎는다 — 둘 중 작은 쪽이 천장이다
+        천장 = min(max(80, int(높이 * self.아랫단몫)),
+                max(0, 높이 - self.본문최소 - self.위쪽자리))
+        보일것 = [것 for 것 in (self.detail_links, self.embeds, self.backs, self.mentions)
+               if 것.isVisibleTo(속)]
+        if not 보일것 and not (self.detail_links.text() or "").strip():
+            칸.setFixedHeight(0)
+            return
+        속.adjustSize()
+        칸.setFixedHeight(min(속.sizeHint().height(), 천장))
+        # ★★ **바꿨으면 그 자리에서 다시 재게 한다.** `setFixedHeight` 는 「다시 재
+        #   달라」고 표를 낼 뿐이라 바로 안 먹는다 — 그 사이에 자리를 읽으면 옛 값이
+        #   나오고, 아랫단이 카드 밖에 걸린 채로 그려진다(검사가 그 꼴을 잡았다:
+        #   카드 422 인데 아랫단 바닥 526 · 2026-09-24).
+        판 = self.detail_card.layout()
+        if 판 is not None:
+            판.activate()
 
     def _trim_tools(self, width: int) -> None:
         """카드가 좁으면 위 줄에서 덜 급한 것부터 접는다.
@@ -3895,7 +3967,9 @@ class MainWindow(QWidget):
         self._채팅적기("나", 말)
         if self._채팅엔진 == "로컬":
             # ★ 로컬은 세션이 없다 — **오간 말을 들고 가서** 이어 답하게 한다.
-            self.창고에묻기(말, 앞말=list(self._채팅앞말))
+            # ★★ **대화 문으로 간다.** 묻기 문으로 보냈더니 「안녕」에도 창고를 뒤지고
+            #   「창고에 없다」고 답했다(오너가 짚었다 · 2026-09-24).
+            self.창고에묻기(말, 앞말=list(self._채팅앞말), 대화=True)
             return
         # ★ 고칠 자리를 모르면 안 시킨다. 조용히 아무 데나 고치면 되돌리기가 어렵다.
         프로젝트 = getattr(self, "_연프로젝트", "")

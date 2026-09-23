@@ -415,6 +415,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/eb/v1/me/learn",
                   "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task",
                   "/eb/v1/wiki/ask",
+                  "/eb/v1/wiki/chat",
                   # 헤르메스(2단계) — 바이브코딩 관제탑. AI 도구가 이 문으로 부른다.
                   "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log",
                   # 바이브코딩 — 바깥 AI 가 고칠 안을 내고, 승인하면 적용한다
@@ -1104,6 +1105,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/wiki/ask":
             return self._wiki_ask(body)
 
+        # ★★ **대화** — 묻기와 **다른 일**이다. 묻기는 「창고에 뭐라 적혀 있나」를 재는
+        #   엄한 길이라 근거가 없으면 「창고에 없다」로 끝나는데, 그 길로 채팅을 했더니
+        #   「안녕」에도 창고를 뒤지고 없다고 답했다(오너가 짚었다 · 2026-09-24).
+        #   여기는 **그냥 말을 주고받고**, 창고는 도울 때만 곁든다.
+        if url.path == "/eb/v1/wiki/chat":
+            return self._wiki_chat(body)
+
         # ★★ **헤르메스(2단계) — 바이브코딩 관제탑.** 차리기·꺼내기·적립하기.
         #   사람이 창을 옮겨 다니면 맥락이 끊기므로 **AI 도구가 이 문으로** 부른다
         #   (오너 2026-09-21). 창은 나중에 이 위에 붙는다.
@@ -1551,6 +1559,32 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"made": 난것["만든것"], "why": 난것["왜"]})
 
         return self._send(404, self._길없다("/eb/v1/hermes/" + 무엇))
+
+    def _wiki_chat(self, body: Any) -> None:
+        """대화. **창고를 곁에 두고 그냥 말한다.**
+
+        ★ 일지에는 **창고를 실제로 쓴 말만** 남긴다 — 잡담까지 남기면 일지가 인사로 덮인다.
+        """
+        말 = (body.get("text") or "").strip() if isinstance(body.get("text") or "", str) else ""
+        if not 말:
+            return self._send(400, {"error": "text required"})
+
+        import query as _대화
+        import wikilog as _일지대화
+
+        n = self.server.notes
+        손 = None
+        모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+        if 모델 and (self.server.cfg.get("backend") or {}).get("kind") == "local":
+            손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0.3,
+                                                    max_tokens=_대화.낼토큰)
+        앞말 = body.get("history") or body.get("앞말") or []
+        칸 = int(getattr(self.server.backend, "n_ctx", 0) or 0)
+        난것 = _대화.대화(n, 손, 말, 앞말=앞말 if isinstance(앞말, list) else [], 칸=칸)
+        if 난것.get("근거"):
+            _일지대화.적기(n, "묻기", (난것["답"] or "")[:120], 난것["근거"][:3])
+        return self._send(200, {"answer": 난것["답"], "sources": 난것["근거"],
+                                "looked": 난것["본것"], "why": 난것["왜"]})
 
     def _wiki_ask(self, body: Any) -> None:
         """묻기(Query). 창고를 뒤져 근거를 달아 답하고, 일지에 한 줄 남긴다.
@@ -3462,6 +3496,14 @@ def _self_check() -> None:
     # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
     #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
     assert "/eb/v1/wiki/ask" in Handler.POST_PATHS, "묻기 문이 POST 목록에 없다"
+    # ★★ **대화 문은 묻기와 따로 있다** — 한 길로 묶으면 「안녕」에도 창고를 뒤진다
+    assert "/eb/v1/wiki/chat" in Handler.POST_PATHS, "대화 문이 POST 목록에 없다"
+    assert hasattr(Handler, "_wiki_chat"), "대화 문 손잡이가 없다"
+    import inspect as _본다대화9
+
+    _소스대화9 = _본다대화9.getsource(Handler._wiki_chat)
+    assert "대화(" in _소스대화9, "대화 문이 묻기를 부른다 — 그러면 잡담에도 창고를 뒤진다"
+    assert "n_ctx" in _소스대화9 and "앞말=" in _소스대화9, _소스대화9[:200]
     assert hasattr(Handler, "_wiki_ask"), "묻기 문을 받을 손이 없다"
     note_store.write(notes.Note(title="묻기 시험 글", kind="오류",
                                 body="맥에서 한글 경로에 Qt 플러그인이 걸리면 창이 안 뜬다."))

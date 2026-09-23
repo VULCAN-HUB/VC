@@ -307,7 +307,7 @@ def run() -> None:
         난것묻기 = {}
         본것 = []
         옛보이기 = win._묻기보이기
-        win._묻기보이기 = lambda 물, 답, 근: 본것.append((물, 답, list(근)))
+        win._묻기보이기 = lambda 물, 답, 근, 대화=False: 본것.append((물, 답, list(근)))
         win.query_done.connect(lambda 물, 답, 근: 난것묻기.update(물음=물, 답=답, 근거=list(근)))
         try:
             win.창고에묻기("아무거나 물어본다?")
@@ -1902,6 +1902,53 @@ def run() -> None:
         assert "37" not in win.footer.text()
         notes.use_embedder(None)
 
+        # ★★ **아랫단이 본문을 밀어내면 안 된다.** 카드 높이는 고정인데 링크·가리킨
+        #   곳은 글마다 제멋대로 길다. 안 가두던 때는 620짜리 카드에서 본문이 최소
+        #   높이(150)까지 눌렸고, 더 길면 카드를 넘어 **글자끼리 겹쳐 보였다**
+        #   (오너가 그 꼴을 짚었다 · 2026-09-24).
+        긴몸검 = "\n".join(f"- 줄 {i} 여기에 제법 긴 설명을 적는다. [[딴 것 {i}]]"
+                        for i in range(1, 26))
+        notes.write(Note(title="아랫단 시험", kind="메모", body=긴몸검))
+        for i in range(1, 13):
+            notes.write(Note(title=f"제법 이름이 긴 딴 것 {i}", kind="메모",
+                            body="[[아랫단 시험]] 을 가리킨다. 꽤 긴 줄을 적어 둔다."))
+        for i in range(1, 5):
+            notes.write(Note(title=f"이름만 적은 것 {i}", kind="메모",
+                            body="아랫단 시험 이라고 이름만 적었다."))
+        notes.reindex()
+        win.show_note("아랫단 시험")
+        app.processEvents()
+        카드검 = win.detail_card
+        아랫검 = win.detail_foot
+        assert not win.backs.isHidden(), "가리킨 곳이 있는데 안 보인다"
+        # ★ 읽을 자리를 지킨다 — 아랫단에 눌려 본문이 쪼그라들면 안 된다
+        assert win.detail_stack.height() >= win.본문최소 - 8, (
+            f"아랫단이 본문을 밀어냈다: 본문 {win.detail_stack.height()} · "
+            f"아랫단 {아랫검.height()} · 카드 {카드검.height()}")
+        # ★ **읽는 자리가 링크 자리보다 좁으면 안 된다** — 무엇이 주인지 뒤집힌다
+        assert win.detail_stack.height() >= 아랫검.height(), (
+            win.detail_stack.height(), 아랫검.height())
+        # ★ 아랫단은 제 몫을 넘지 않는다 — 넘치면 굴린다
+        assert 아랫검.height() <= int(카드검.height() * win.아랫단몫) + 2, (
+            아랫검.height(), 카드검.height())
+        # ★★ **카드 밖으로 나가지 않는다** — 나가면 그것이 겹쳐 보이던 그 꼴이다
+        assert 아랫검.geometry().bottom() <= 카드검.height(), (
+            아랫검.geometry(), 카드검.height())
+        assert win.detail_stack.geometry().bottom() <= 아랫검.geometry().top(), (
+            "본문과 아랫단이 겹친다", win.detail_stack.geometry(), 아랫검.geometry())
+        # ★ 본문과 아랫단 사이에 **금이 있다** — 잘린 마지막 줄이 링크와 붙어 보이지 않게
+        assert win.detail_rule.isVisibleTo(카드검), "본문과 아랫단 사이에 금이 없다"
+        # ★ 아랫단이 짧은 글에서는 **자리를 안 차지한다** — 늘 같은 높이로 잡아 두면
+        #   가리킨 곳이 없는 글까지 읽을 자리를 빼앗긴다
+        notes.write(Note(title="외톨이 글", kind="메모", body="아무도 안 가리키고 아무도 안 가리킨다."))
+        notes.reindex()
+        win.show_note("외톨이 글")
+        app.processEvents()
+        assert 아랫검.height() <= 60, 아랫검.height()
+        assert win.detail_stack.height() > 아랫검.height() * 3, (
+            win.detail_stack.height(), 아랫검.height())
+
+
 
     app.quit()
 
@@ -2279,7 +2326,7 @@ def run() -> None:
         # ★★ **로컬은 창고에 묻는다.** 엔진이 바뀌어도 창구는 하나다.
         _물은것 = []
         _옛묻기 = _창코드.창고에묻기
-        _창코드.창고에묻기 = lambda 말, 앞말=None: _물은것.append((말, list(앞말 or [])))
+        _창코드.창고에묻기 = lambda 말, 앞말=None, 대화=False: _물은것.append((말, list(앞말 or []), 대화))
         try:
             _창코드.채팅엔진고르기("로컬")
             _창코드.chat_box.setText("VC 가 뭐야")
@@ -2287,6 +2334,8 @@ def run() -> None:
             assert _물은것 and _물은것[0][0] == "VC 가 뭐야", _물은것
             # ★★ **앞말을 들고 간다** — 로컬은 세션이 없어 이것 없이는 이어 말 못 한다
             assert any("뭐든 고쳐라" == m["content"] for m in _물은것[0][1]), _물은것[0][1]
+            # ★★ **채팅은 대화 문으로 간다** — 묻기 문은 「안녕」에도 창고를 뒤진다
+            assert _물은것[0][2] is True, "채팅이 묻기 문으로 간다"
         finally:
             _창코드.창고에묻기 = _옛묻기
 
@@ -2386,6 +2435,11 @@ def run() -> None:
     _창묻기.show_results = lambda *a, **k: None
     _창묻기.show_note = lambda *a, **k: None
     _창묻기._묻기보이기("물음?", "짧은 답 [[회의록]]", ["회의록"])
+    # ★★ **대화일 때는 「남길까」 상자가 안 뜬다** — 말 한 마디마다 뜨면 대화가 안 된다
+    _창묻기._스킬상자 = None
+    _열린것 = getattr(_창묻기, "_남길까상자", None)
+    _창묻기._묻기보이기("안녕", "안녕 [[회의록]]", ["회의록"], True)
+    app.processEvents()
     _상자 = getattr(_창묻기, "_묻기상자", None)
     assert _상자 is not None and not _상자.isModal(), "남길까 상자가 창을 막는다"
     _창묻기._묻기상자 = None
