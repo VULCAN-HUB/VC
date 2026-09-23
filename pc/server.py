@@ -422,7 +422,9 @@ class Handler(BaseHTTPRequestHandler):
                   # 자가 스킬 생성 — 방금 한 일에서 스킬을 뽑아 제안하고, 승인하면 남긴다
                   "/eb/v1/hermes/skill",
                   # 남의 에이전트 CLI 에게 맡긴다 — 클로드 코드 · Codex
-                  "/eb/v1/hermes/handoff", "/eb/v1/hermes/hands")
+                  "/eb/v1/hermes/handoff", "/eb/v1/hermes/hands",
+                  # 둘이 함께 — 하나가 고치고 하나가 본다
+                  "/eb/v1/hermes/duet")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -1470,6 +1472,24 @@ class Handler(BaseHTTPRequestHandler):
                 낼것[이름] = {"installed": bool(손 and 손.있나()),
                             "exe": 손.실행파일 if 손 else ""}
             return self._send(200, {"hands": 낼것})
+
+        if 무엇 == "duet":
+            난것 = _헤르메스.협업(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                str(body.get("maker") or body.get("짓는손") or "claude"),
+                str(body.get("reviewer") or body.get("보는손") or "codex"),
+                int(body.get("timeout") or body.get("제한초") or 0))
+            지 = 난것["지음"]
+            봄 = 난것["봄"] or {}
+            return self._send(200, {
+                "maker": {"hand": 지.get("손"), "ok": bool(지.get("됐나")),
+                          "changed": 지.get("바뀐파일") or [], "diff": 지.get("차이") or "",
+                          "why": 지.get("왜") or ""},
+                "reviewer": ({"hand": 봄.get("손"), "ok": bool(봄.get("됐나")),
+                              "said": (봄.get("나온말") or "").strip()[:4000],
+                              "why": 봄.get("왜") or ""} if 봄 else {}),
+                "kept": (난것["적립"] or {}).get("만든것") or [],
+                "text": 난것.get("사람말") or ""})
 
         if 무엇 == "handoff":
             import agentcli as _시엘2
@@ -3396,6 +3416,10 @@ def _self_check() -> None:
     assert set(_시9.손들) >= {"claude", "codex", "fake"}, _시9.손들
     # ★ 안 깔린 CLI 는 **까닭을 말한다** — 조용히 실패하면 사람이 왜 안 되는지 모른다
     assert _시9.손고르기("claude") is not None and _시9.손고르기("없는손") is None
+
+    # ★★ **협업 배선을 잰다.** 보는 손은 읽기만 해야 한다.
+    assert "/eb/v1/hermes/duet" in Handler.POST_PATHS, "협업 문이 POST 목록에 없다"
+    assert hasattr(_헤9, "협업"), "협업이 없다"
 
     # ★★ **자가 스킬 생성 배선을 잰다.** 일이 한 바퀴 돌면 그 과정을 스킬로 뽑아 **제안**한다.
     assert "/eb/v1/hermes/skill" in Handler.POST_PATHS, "스킬 문이 POST 목록에 없다"

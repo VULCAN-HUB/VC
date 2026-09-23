@@ -43,7 +43,12 @@ class 손:
 
         return bool(self.실행파일) and shutil.which(self.실행파일) is not None
 
-    def 명령(self, 지시: str) -> list[str]:
+    def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
+        """이 CLI 를 부르는 명령.
+
+        ★★ `읽기전용` 은 **보는 손**(리뷰)을 위한 것이다. 리뷰가 파일을 고치면
+           짓는 손의 일과 섞여 무엇이 누구 탓인지 알 수 없게 된다.
+        """
         raise NotImplementedError
 
     def 끝말(self, 나온것: str) -> str:
@@ -62,7 +67,11 @@ class 클로드(손):
     이름 = "claude"
     실행파일 = "claude"
 
-    def 명령(self, 지시: str) -> list[str]:
+    def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
+        # ★★ **읽기전용을 깃발로 못 박지 않는다.** 확인 안 된 깃발을 넣으면 안 도는
+        #   명령이 된다 — 이 맥엔 아직 안 깔려 실기로 못 쟀다. 대신 **말로 시키고,
+        #   돌린 뒤 git 으로 잰다**(`돌리기` 가 고쳤으면 탈로 잡는다).
+        #   깔고 확인되면 여기 한 줄만 고친다.
         return [self.실행파일, "-p", 지시, "--output-format", "json"]
 
 
@@ -75,7 +84,10 @@ class 코덱스(손):
     이름 = "codex"
     실행파일 = "codex"
 
-    def 명령(self, 지시: str) -> list[str]:
+    def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
+        # ★ 기본이 읽기 전용이라 **보는 손일 때는 아무 깃발도 안 준다** — 문서가 그렇다.
+        if 읽기전용:
+            return [self.실행파일, "exec", 지시]
         return [self.실행파일, "exec", "--sandbox", "workspace-write", 지시]
 
 
@@ -95,10 +107,12 @@ class 가짜(손):
     def 있나(self) -> bool:
         return True
 
-    def 명령(self, 지시: str) -> list[str]:
-        조각 = ["import sys",
-              f"print('가짜 손이 돌았다: {지시[:60]}')"]
-        if self.고칠파일:
+    def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
+        # ★ 지시를 **따옴표 안에 그대로 박으면 안 된다.** 여러 줄·따옴표가 든 지시가
+        #   오면 스크립트가 깨진다(협업 리뷰 지시가 실제로 그랬다). `repr` 로 감싼다.
+        한줄 = " ".join((지시 or "").split())[:60]
+        조각 = ["import sys", f"print('가짜 손이 돌았다: ' + {한줄!r})"]
+        if self.고칠파일 and not 읽기전용:
             조각.append(
                 f"open({self.고칠파일!r}, 'w', encoding='utf-8').write({self.새글!r})")
         조각.append(f"sys.exit({self._코드})")
@@ -146,7 +160,8 @@ def 지금상태(자리: Path) -> dict:
 
 
 def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한초: int = 기본제한초,
-        뿌리: Path | None = None, 멈춤=None, 손물건: 손 | None = None) -> dict:
+        뿌리: Path | None = None, 멈춤=None, 손물건: 손 | None = None,
+        읽기전용: bool = False) -> dict:
     """에이전트 CLI 를 프로젝트 폴더에서 돌린다.
 
     돌려주는 것:
@@ -175,7 +190,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     끝난코드 = -1
     끊겼나 = False
     try:
-        판 = subprocess.Popen(그손.명령(지시), cwd=str(자리),
+        판 = subprocess.Popen(그손.명령(지시, 읽기전용), cwd=str(자리),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except (OSError, ValueError) as e:
         return {"손": 그손.이름, "됐나": False, "왜": f"못 띄웠다: {type(e).__name__}"}
@@ -213,10 +228,17 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
         왜 = "제한 시간이 지났거나 멈추라고 했다"
     elif 끝난코드 != 0:
         왜 = f"끝난 코드가 {끝난코드} 다"
-    return {"손": 그손.이름, "됐나": (끝난코드 == 0 and not 끊겼나), "끝난코드": 끝난코드,
+    # ★★ **읽기전용이라 해 놓고 고쳤으면 탈이다.** 말로만 시킨 손도 있으니
+    #   **git 으로 잰다** — 보는 손이 고치면 누구 탓인지 못 가린다.
+    if 읽기전용 and 바뀐:
+        왜 = f"읽기만 하라 했는데 {len(바뀐)}개를 고쳤다: {' · '.join(바뀐[:3])}"
+    return {"손": 그손.이름,
+            "됐나": (끝난코드 == 0 and not 끊겼나 and not (읽기전용 and 바뀐)),
+            "끝난코드": 끝난코드,
             "나온말": 나온말 or "", "탈말": 탈말 or "", "끝말": 그손.끝말(나온말),
             "바뀐파일": 바뀐, "원래더럽던것": 원래, "차이": 차,
-            "든시간": round(든시간, 1), "끊겼나": 끊겼나, "머리": 전["머리"], "왜": 왜}
+            "든시간": round(든시간, 1), "끊겼나": 끊겼나, "머리": 전["머리"],
+            "읽기전용": 읽기전용, "왜": 왜}
 
 
 def 사람말(난것: dict) -> str:
@@ -294,7 +316,7 @@ def _self_check() -> None:
             def 있나(self):
                 return True
 
-            def 명령(self, 지시):
+            def 명령(self, 지시, 읽기전용=False):
                 return [_sys.executable, "-c", "import time; time.sleep(30)"]
 
         t0 = time.perf_counter()
@@ -305,6 +327,32 @@ def _self_check() -> None:
         # 멈추라고 하면 멈춘다
         난것 = 돌리기("CliApp", "멈춰라", 뿌리=뿌리, 멈춤=lambda: True, 손물건=_느린손())
         assert 난것["끊겼나"], 난것
+
+        # ★★ **보는 손은 파일을 고치면 안 된다.** 읽기전용이라 해 놓고 고쳤으면 탈로 잡는다 —
+        #   리뷰가 고치면 짓는 손의 일과 섞여 누구 탓인지 못 가린다.
+        난것 = 돌리기("CliApp", "보기만 해라", 뿌리=뿌리, 읽기전용=True,
+                   손물건=가짜(str(자리 / "a.py"), "몰래 고침\n"))
+        assert 난것["됐나"], 난것            # 가짜 손은 읽기전용이면 안 고친다
+        assert 난것["바뀐파일"] == [], 난것["바뀐파일"]
+        # 말을 안 듣는 손이면 **git 이 잡는다**
+        class _말안듣는손(손):
+            이름, 실행파일 = "말안듣", "python3"
+
+            def 있나(self):
+                return True
+
+            def 명령(self, 지시, 읽기전용=False):
+                import sys as _s
+                글 = "open(%r, 'w').write('몰래')" % str(자리 / "c.py")
+                return [_s.executable, "-c", 글]
+
+        난것 = 돌리기("CliApp", "보기만 해라", 뿌리=뿌리, 읽기전용=True, 손물건=_말안듣는손())
+        assert not 난것["됐나"] and "읽기만 하라 했는데" in 난것["왜"], 난것
+        (자리 / "c.py").unlink(missing_ok=True)
+
+        # 코덱스는 **보는 손일 때 샌드박스 깃발을 안 준다**(기본이 읽기 전용이다)
+        assert "--sandbox" not in 코덱스().명령("보기만", 읽기전용=True)
+        assert "--sandbox" in 코덱스().명령("고쳐라", 읽기전용=False)
 
         # 없는 손·없는 프로젝트
         assert not 돌리기("CliApp", "일해라", "없는손", 뿌리=뿌리)["됐나"]
