@@ -22,6 +22,7 @@ git 으로 재서, 창고에 적립**하면 된다. 키가 없어도 된다(사�
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -32,6 +33,50 @@ import hermes
 기본제한초 = 900          # 15분. 넘으면 끊는다 — 영영 기다리면 창이 굳는다
 차이최대 = 200_000        # 사람에게 보일 차이의 최대 길이
 
+# ★★ **굽힌 앱은 셸 PATH 를 못 받는다.** Finder 로 띄운 `.app` 은 launchd 기본
+#    (`/usr/bin:/bin:/usr/sbin:/sbin`) 만 받아서 `/opt/homebrew/bin/claude` 가 안 보인다.
+#    실기로 쟀다(2026-09-24): 그 PATH 로 돌리니 claude·codex 둘 다 「이 기계에 없다」였다.
+#    터미널에서 돌릴 때만 되고 **앱으로 띄우면 죽는** 자리라, 검사로는 안 잡히던 병이다.
+더볼자리 = (
+    "/opt/homebrew/bin",        # Homebrew (애플 실리콘)
+    "/usr/local/bin",           # Homebrew (인텔) · 손수 깐 것
+    "/opt/local/bin",           # MacPorts
+    "~/.local/bin",
+    "~/.npm-global/bin", "~/.yarn/bin", "~/.bun/bin", "~/.deno/bin", "~/.volta/bin",
+)
+# nvm 은 버전마다 폴더가 갈린다 — 있는 것을 다 본다
+녹스자리 = "~/.nvm/versions/node/*/bin"
+
+
+def 길() -> str:
+    """CLI 를 찾고 띄울 PATH. **한 군데만 둔다** — 찾는 쪽과 띄우는 쪽이 갈리면 샌다.
+
+    ★★ 찾기만 고치면 안 된다. claude 는 node 로 도는 스크립트라 **띄울 때도** 같은
+       PATH 를 줘야 한다 — 안 주면 `env: node: No such file or directory` 로 죽는다.
+    ★ 지금 PATH 를 **앞에** 둔다. 터미널에서 돌릴 때는 오너가 고른 것이 이겨야 한다.
+    """
+    import glob
+
+    자리 = [x for x in (os.environ.get("PATH") or "").split(os.pathsep) if x]
+    본것 = set(자리)
+    for 곳 in (*더볼자리, *sorted(glob.glob(os.path.expanduser(녹스자리)), reverse=True)):
+        곳 = os.path.expanduser(곳)
+        if 곳 not in 본것 and os.path.isdir(곳):
+            자리.append(곳)
+            본것.add(곳)
+    return os.pathsep.join(자리)
+
+
+def 찾기(실행파일: str) -> str:
+    """그 CLI 의 온전한 자리. 없으면 빈 글.
+
+    ★★ **온전한 자리를 써야 한다.** `Popen` 에 `env` 를 줘도 실행파일은 **부모의**
+       PATH 로 찾는다(파이썬이 그렇게 돈다) — 그래서 여기서 미리 풀어 준다.
+    """
+    import shutil
+
+    return shutil.which(실행파일, path=길()) or "" if 실행파일 else ""
+
 
 class 손:
     """CLI 하나를 어떻게 부르는가. **여기만 고치면 CLI 판올림을 흡수한다.**"""
@@ -40,9 +85,7 @@ class 손:
     실행파일 = ""
 
     def 있나(self) -> bool:
-        import shutil
-
-        return bool(self.실행파일) and shutil.which(self.실행파일) is not None
+        return bool(찾기(self.실행파일))
 
     def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
         """이 CLI 를 부르는 명령.
@@ -223,8 +266,15 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     나온말 = 탈말 = ""
     끝난코드 = -1
     끊겼나 = False
+    # ★★ **띄울 때도 같은 길을 준다.** 찾기만 고치면 claude 는 뜨고 그 속의 node 를
+    #   못 찾아 죽는다. 그리고 실행파일은 **미리 온전한 자리로 풀어 둔다** — `env` 를
+    #   줘도 파이썬은 부모의 PATH 로 찾기 때문이다.
+    명령줄 = list(그손.명령(지시, 읽기전용))
+    if 명령줄:
+        명령줄[0] = 찾기(명령줄[0]) or 명령줄[0]
+    판환경 = {**os.environ, "PATH": 길()}
     try:
-        판 = subprocess.Popen(그손.명령(지시, 읽기전용), cwd=str(자리),
+        판 = subprocess.Popen(명령줄, cwd=str(자리), env=판환경,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except (OSError, ValueError) as e:
         return {"손": 그손.이름, "됐나": False, "왜": f"못 띄웠다: {type(e).__name__}"}
@@ -324,6 +374,46 @@ def _self_check() -> None:
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")
     assert "workspace-write" in 코덱스().명령("일해라")
+
+    # ★★ **굽힌 앱의 PATH 로도 찾아야 한다.** Finder 로 띄운 `.app` 은 셸 PATH 를
+    #   못 받는다 — 터미널에서만 되고 앱으로 띄우면 죽던 자리다(실기 · 2026-09-24).
+    with tempfile.TemporaryDirectory() as _길tmp:
+        가짜빈 = Path(_길tmp) / "bin"
+        가짜빈.mkdir()
+        놈 = 가짜빈 / "vc-시험-클리"
+        놈.write_text("#!/bin/sh\necho '{\"result\":\"길 시험\"}'\n", encoding="utf-8")
+        놈.chmod(0o755)
+
+        class _길손(손):
+            이름, 실행파일 = "길시험", "vc-시험-클리"
+
+            def 명령(self, 지시, 읽기전용=False):
+                return [self.실행파일]
+
+            def 읽을말(self, 나온것):
+                return 클로드().읽을말(나온것)
+
+        옛길, 옛자리 = os.environ.get("PATH", ""), 더볼자리
+        globals()["더볼자리"] = (*옛자리, str(가짜빈))
+        try:
+            # launchd 가 주는 그 PATH — 여기엔 브루도 ~/.local/bin 도 없다
+            os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            assert _길손().있나(), "굽힌 앱의 PATH 에서 CLI 를 못 찾는다"
+            assert str(가짜빈) in 길(), 길()
+            assert 찾기("vc-시험-클리") == str(놈), 찾기("vc-시험-클리")
+            assert 찾기("vc-없는것-zzz") == "" and 찾기("") == ""
+
+            뿌리길 = Path(_길tmp) / "projects"
+            (뿌리길 / "PathApp").mkdir(parents=True)
+            난것 = 돌리기("PathApp", "돌아라", 뿌리=뿌리길, 손물건=_길손())
+            # ★ 찾기만 고치면 안 된다 — **띄우기까지** 같은 길로 돼야 한다
+            assert 난것["됐나"], 난것
+            assert 난것["읽을말"] == "길 시험", 난것["읽을말"]
+        finally:
+            os.environ["PATH"] = 옛길
+            globals()["더볼자리"] = 옛자리
+        # 되돌린 뒤엔 다시 안 보인다 — 검사가 딴 검사에 새지 않는다
+        assert not _길손().있나()
 
     with tempfile.TemporaryDirectory() as tmp:
         뿌리 = Path(tmp) / "projects"
