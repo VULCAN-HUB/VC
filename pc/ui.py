@@ -3756,6 +3756,7 @@ class MainWindow(QWidget):
             단추.setToolTip(도움)
             단추.setMinimumWidth(1)
             단추.clicked.connect(lambda _=False, n=이름: self.채팅엔진고르기(n))
+            self._엔진칠하기(단추, 이름 == self._채팅엔진)
             self._엔진단추[이름] = 단추
             고름.addWidget(단추)
         고름.addStretch(1)
@@ -3794,7 +3795,25 @@ class MainWindow(QWidget):
         self._채팅엔진 = 이름
         for n, 단추 in getattr(self, "_엔진단추", {}).items():
             단추.setChecked(n == 이름)
+            self._엔진칠하기(단추, n == 이름)
         self._엔진말하기()
+
+    @staticmethod
+    def _엔진칠하기(단추, 골랐나: bool) -> None:
+        """고른 엔진을 **눈에 띄게** 칠한다.
+
+        ★★ `quiet` 단추에는 눌린 꼴이 없다 — 찍어 보니 claude 를 골랐는데 로컬이
+           더 밝아 보였다. **무엇이 도는지 모르고 값비싼 손을 부르면 안 된다.**
+        """
+        if 골랐나:
+            단추.setStyleSheet(
+                f"QPushButton {{ color: {theme.css(theme.T.ACCENT)}; font-weight: 700;"
+                f" border: 1px solid {theme.css(theme.T.ACCENT, 0.55)};"
+                f" border-radius: 9px; padding: 1px 9px; }}")
+        else:
+            단추.setStyleSheet(
+                f"QPushButton {{ color: {theme.css(theme.T.DIM, 0.65)};"
+                f" border: 1px solid transparent; padding: 1px 9px; }}")
 
     def _엔진말하기(self) -> None:
         """지금 무엇이 답하는지 칸에 적어 둔다 — 모르고 값비싼 손을 부르면 안 된다."""

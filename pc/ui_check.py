@@ -2237,6 +2237,10 @@ def run() -> None:
         assert [n for n, b in _창코드._엔진단추.items() if b.isChecked()] == ["claude"], \
             [n for n, b in _창코드._엔진단추.items() if b.isChecked()]
         assert "claude" in _창코드.chat_box.placeholderText()
+        # ★★ **고른 것이 눈에 보여야 한다.** 무엇이 도는지 모르고 값비싼 손을 부르면
+        #   안 된다 — 찍어 보니 claude 를 골랐는데 로컬이 더 밝았다.
+        assert "font-weight" in _창코드._엔진단추["claude"].styleSheet(), "고른 엔진이 안 보인다"
+        assert "font-weight" not in _창코드._엔진단추["로컬"].styleSheet(), "안 고른 것도 굵다"
         _창코드.채팅엔진고르기("없는엔진")
         assert _창코드._채팅엔진 == "claude", "모르는 엔진으로 바뀌었다"
 
