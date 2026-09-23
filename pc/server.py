@@ -1572,7 +1572,11 @@ class Handler(BaseHTTPRequestHandler):
             손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0, max_tokens=400)
         # ★ 오간 말을 주면 **이어서** 답한다. 밖에서 오는 값이라 꼴은 `앞말다듬기` 가 거른다.
         앞말 = body.get("history") or body.get("앞말") or []
-        난것 = _묻기.묻기(n, 손, 물음, 앞말=앞말 if isinstance(앞말, list) else [])
+        # ★★ **모델 창을 물어서 넘긴다.** 짐작한 값을 쓰면 창이 다른 기계·다른 판에서
+        #   조용히 넘친다 — 굽힌 앱이 「4233 > 4096」 으로 막혔던 자리다(2026-09-24).
+        칸 = int(getattr(self.server.backend, "n_ctx", 0) or 0)
+        난것 = _묻기.묻기(n, 손, 물음, 앞말=앞말 if isinstance(앞말, list) else [],
+                     칸=칸)
 
         남긴것 = None
         if body.get("남길까") or body.get("keep"):
@@ -3463,6 +3467,13 @@ def _self_check() -> None:
                                 body="맥에서 한글 경로에 Qt 플러그인이 걸리면 창이 안 뜬다."))
     note_store.reindex()
     import query as _묻9
+
+    # ★★ **모델 창을 실제로 물어본다.** 짐작한 값을 쓰면 창이 다른 기계에서 넘친다.
+    import inspect as _본다9
+
+    _소스9 = _본다9.getsource(Handler._wiki_ask)
+    assert "n_ctx" in _소스9, "모델 창을 안 물어보고 짐작한다"
+    assert "칸=칸" in _소스9, "물어본 창을 묻기에 안 넘긴다"
 
     # ★★ **앞말이 모델에게 실제로 간다.** 배선만 보면 「받아서 버리는」 것을 못 잡는다.
     _본말9 = []

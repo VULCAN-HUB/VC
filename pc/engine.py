@@ -162,7 +162,15 @@ class LocalEngine(Backend):
 
     name = "local"
 
-    def __init__(self, model_dir: str | Path = "../models", n_ctx: int = 4096,
+    # ★★ **채팅에 쓰려면 4096 은 좁다.** 근거 다섯 장에 앞말까지 실으면 바로 넘쳐서
+    #   굽힌 앱이 「Requested tokens (4233) exceed context window of 4096」 으로
+    #   막혔다(실기 · 2026-09-24). 넘치는 것 자체는 `query` 가 재서 막지만, 좁으면
+    #   근거가 잘려 답이 얕아진다. qwen3-8b 은 훨씬 넓은 창을 견딘다.
+    #   ★ 값이 걱정되면 설정 `backend.n_ctx` 로 되돌린다 — 창이 넓으면 KV 칸만큼
+    #     메모리를 더 쓴다. 넓힌 쪽이 「채팅처럼 쓴다」에 맞는다고 보고 기본을 올렸다.
+    기본칸 = 8192
+
+    def __init__(self, model_dir: str | Path = "../models", n_ctx: int = 기본칸,
                  n_gpu_layers: int = -1, idle_unload_sec: int = IDLE_UNLOAD_SEC,
                  loader: Callable[..., Any] | None = None) -> None:
         self.model_dir = Path(model_dir)
@@ -464,6 +472,10 @@ def _self_check() -> None:
 
     # 비전 모델의 짝(mmproj)은 목록에 안 나오고, 짝이 있으면 사진을 본다고 표시한다.
     (root / "llava-1.6-7b-q4.mmproj.gguf").write_bytes(b"fake")
+    # ★ 기본 창이 채팅에 쓸 만큼 넓은가 — 좁히면 근거가 잘려 답이 얕아진다
+    assert LocalEngine(root, loader=FakeLlama).n_ctx >= 8192
+    assert LocalEngine(root, n_ctx=4096, loader=FakeLlama).n_ctx == 4096   # 되돌릴 수 있다
+
     eng2 = LocalEngine(root, loader=FakeLlama)
     assert "llava-1.6-7b-q4.mmproj" not in eng2.available(), eng2.available()
     assert eng2.mmproj_of(root / "llava-1.6-7b-q4.gguf") is not None
