@@ -2340,6 +2340,17 @@ class MainWindow(QWidget):
                 lambda _=False, n=이름: (self.맡기기멈추기() if self._맡김중 == n
                                        else self.맡기기시작(n, self.ask_box.text())))
             self._코드줄.addWidget(맡단추)
+            # ★★ **협업 단추.** 하나가 고치고 다른 하나가 그 차이를 본다. 창에서 못
+            #   쓰면 만든 것이 아니다 — 문만 있고 길이 없던 자리다.
+            둘단추 = QPushButton("   " + ("■ 멈추기" if 돌고있나 else "▶▶ 둘이 함께 (짓고·보고)"))
+            둘단추.setObjectName("quiet")
+            둘단추.setMinimumWidth(1)
+            둘단추.setToolTip("클로드가 고치고 Codex 가 그 차이를 검토해. 보는 쪽은 읽기만 한다")
+            둘단추.clicked.connect(
+                lambda _=False, n=이름: (self.맡기기멈추기() if self._맡김중 == n
+                                       else self.맡기기시작(n, self.ask_box.text(),
+                                                        보는손="codex")))
+            self._코드줄.addWidget(둘단추)
             난것 = codefiles.나무(이름)
             for 상대 in 난것["파일"][:120]:
                 단추 = QPushButton("   " + 상대)
@@ -2368,8 +2379,13 @@ class MainWindow(QWidget):
         self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
         self._later(self.코드그리기)
 
-    def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None) -> None:
-        """에이전트 CLI 에게 맡긴다. **느린 부름은 딴 실에서** — 창이 굳으면 안 된다."""
+    def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None,
+              보는손: str = "", 보는물건=None) -> None:
+        """에이전트 CLI 에게 맡긴다. **느린 부름은 딴 실에서** — 창이 굳으면 안 된다.
+
+        `보는손` 을 주면 **협업**이다 — 하나가 고치고 다른 하나가 그 차이를 본다.
+        길은 하나로 둔다(타이머·멈춤·끝맺음이 똑같으니 갈라 놓으면 한쪽만 고쳐진다).
+        """
         지시 = (지시 or "").strip()
         if self._맡김중:
             self.report(f"이미 「{self._맡김중}」 에 하나 돌고 있어. 멈추고 다시 해.", [])
@@ -2385,16 +2401,30 @@ class MainWindow(QWidget):
             # ★ **까닭을 말한다.** 조용히 실패하면 왜 안 되는지 아무도 모른다.
             self.report(f"「{손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
             return
+        # ★ 보는 손도 **없으면 미리 말한다** — 반쯤 돌다 실패하면 값만 쓴다
+        if 보는손 and 보는물건 is None:
+            본손 = agentcli.손고르기(보는손)
+            if 본손 is None or not 본손.있나():
+                self.report(f"보는 손 「{보는손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
+                return
         self._맡김중, self._맡김멈춤 = 프로젝트, False
         self._맡김시작 = time.monotonic()
         self._맡김타이머.start()
         self._later(self.코드그리기)          # 단추가 「멈추기」로 바뀐다
-        self.report(f"{프로젝트} 에 맡겼어 ({손}) — {지시[:60]}", [])
+        누가 = f"{손} → {보는손}" if 보는손 else 손
+        self.report(f"{프로젝트} 에 맡겼어 ({누가}) — {지시[:60]}", [])
 
         def 일() -> None:
-            난것 = agentcli.돌리기(프로젝트, 지시, 손, 멈춤=lambda: self._맡김멈춤,
-                              손물건=손물건)
-            난것["지시"] = 지시
+            # ★★ **창고는 안 만진다.** 끝난 뒤 창 실에서 적는다(같은 색인을 두 실이
+            #   만지면 엉킨다). 그래서 협업도 「돌리기」와 「적기」가 갈려 있다.
+            if 보는손:
+                난것 = hermes.협업돌리기(프로젝트, 지시, 손, 보는손,
+                                  멈춤=lambda: self._맡김멈춤,
+                                  짓는물건=손물건, 보는물건=보는물건)
+            else:
+                난것 = {"지음": agentcli.돌리기(프로젝트, 지시, 손,
+                                          멈춤=lambda: self._맡김멈춤, 손물건=손물건)}
+            난것["지시"], 난것["협업"] = 지시, bool(보는손)
             self.handoff_done.emit(프로젝트, 난것)
 
         report.딴실로("맡기기", 일)
@@ -2419,11 +2449,16 @@ class MainWindow(QWidget):
         self._맡김중, self._맡김멈춤 = "", False
         self._맡김타이머.stop()
         self.footer.setText("")
-        난것 = hermes.돌린뒤(self.notes, 프로젝트, 돌림.get("지시") or "", 돌림)
-        바뀐 = 돌림.get("바뀐파일") or []
+        지시 = 돌림.get("지시") or ""
+        지음 = 돌림.get("지음") or {}
+        if 돌림.get("협업"):
+            난것 = hermes.협업뒤(self.notes, 프로젝트, 지시, 돌림)
+        else:
+            난것 = hermes.돌린뒤(self.notes, 프로젝트, 지시, 지음)
+        바뀐 = 지음.get("바뀐파일") or []
         self.refresh()
         self._later(self.코드그리기)
-        self.report(난것.get("사람말") or agentcli.사람말(돌림),
+        self.report(난것.get("사람말") or agentcli.사람말(지음),
                     (난것.get("적립") or {}).get("만든것") or [])
         if 바뀐:
             self.show_results([(f"{프로젝트}/{f}", "") for f in 바뀐])

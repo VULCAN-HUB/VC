@@ -21,6 +21,7 @@ git 으로 재서, 창고에 적립**하면 된다. 키가 없어도 된다(사�
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -51,9 +52,17 @@ class 손:
         """
         raise NotImplementedError
 
+    def 읽을말(self, 나온것: str) -> str:
+        """CLI 가 **사람에게 한 말**. 껍데기를 쓴 손은 여기서 벗긴다.
+
+        ★★ 날것(`나온말`)은 자취로 그대로 둔다 — 벗긴 것만 남기면 벗기기가 틀렸을 때
+           무엇이 왔는지 알 길이 없다. 그래서 **둘 다 들고 간다.**
+        """
+        return (나온것 or "").strip()
+
     def 끝말(self, 나온것: str) -> str:
-        """CLI 가 마지막으로 한 말. 보고에 쓴다 — **성공 판정에는 안 쓴다.**"""
-        줄 = [x for x in (나온것 or "").splitlines() if x.strip()]
+        """마지막 한 줄. 보고에 쓴다 — **성공 판정에는 안 쓴다.**"""
+        줄 = [x for x in self.읽을말(나온것).splitlines() if x.strip()]
         return 줄[-1][:500] if 줄 else ""
 
 
@@ -74,6 +83,23 @@ class 클로드(손):
         return [self.실행파일, "-p", 지시, "--output-format", "json",
                 "--permission-mode", "plan" if 읽기전용 else "acceptEdits"]
 
+    def 읽을말(self, 나온것: str) -> str:
+        """★★ `--output-format json` 은 **껍데기에 싸서** 준다 — 사람 말은 `result` 안에 있다.
+
+        안 벗기면 창고의 검토 자리에 토큰 셈이 적힌 JSON 덩이가 들어앉는다(실기에서
+        그렇게 됐다). 벗기다 실패하면 **날것을 그대로** 돌려준다 — 껍데기 모양이
+        바뀌어도 말이 사라지지는 않게.
+        """
+        글 = (나온것 or "").strip()
+        if not 글.startswith("{"):
+            return 글
+        try:
+            싼것 = json.loads(글)
+        except ValueError:
+            return 글
+        속 = 싼것.get("result") if isinstance(싼것, dict) else None
+        return 속.strip() if isinstance(속, str) and 속.strip() else 글
+
 
 class 코덱스(손):
     """Codex. `exec` 가 비대화식이고 **기본이 읽기 전용 샌드박스**다.
@@ -81,6 +107,9 @@ class 코덱스(손):
     ★ 고치게 하려면 `--sandbox workspace-write` 가 필요하다 — 권한을 **필요한 만큼만** 연다.
     ★★ **한도에 걸리면 끝난 코드가 1 이다**(2026-09-24 실기 · codex-cli 0.156.1).
        그래서 「성공을 끝난 코드로 잰다」가 여기서도 맞는다 — 한도 오류를 성공으로 안 읽는다.
+    ★ **`읽을말` 은 아직 날것 그대로다.** codex 가 말을 어떤 꼴로 내는지 실기로 못 쟀다
+      (한도에 걸려 한 번도 끝까지 못 돌았다). 확인 안 된 벗기기를 넣으면 말이 통째로
+      사라질 수 있으니, 재 보기 전까지는 **안 벗긴다** — 지저분해도 말은 남는다.
     """
 
     이름 = "codex"
@@ -167,8 +196,11 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     """에이전트 CLI 를 프로젝트 폴더에서 돌린다.
 
     돌려주는 것:
-        `{"손", "됐나", "끝난코드", "나온말", "탈말", "끝말", "바뀐파일",
+        `{"손", "됐나", "끝난코드", "나온말", "읽을말", "탈말", "끝말", "바뀐파일",
           "원래더럽던것", "차이", "든시간", "왜"}`
+
+    ★ `나온말` 은 **날것**, `읽을말` 은 **껍데기를 벗긴 사람 말**이다. 사람·창고에
+      보일 때는 `읽을말`, 자취로 남길 때는 `나온말`.
     """
     지시 = (지시 or "").strip()
     if not hermes.영문이름인가(프로젝트):
@@ -238,6 +270,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
             "됐나": (끝난코드 == 0 and not 끊겼나 and not (읽기전용 and 바뀐)),
             "끝난코드": 끝난코드,
             "나온말": 나온말 or "", "탈말": 탈말 or "", "끝말": 그손.끝말(나온말),
+            "읽을말": 그손.읽을말(나온말),
             "바뀐파일": 바뀐, "원래더럽던것": 원래, "차이": 차,
             "든시간": round(든시간, 1), "끊겼나": 끊겼나, "머리": 전["머리"],
             "읽기전용": 읽기전용, "왜": 왜}
@@ -275,6 +308,19 @@ def _self_check() -> None:
     assert 클로드().명령("고쳐라", 읽기전용=False)[-1] == "acceptEdits"
     # 다 열어 두는 판은 안 쓴다 — 열어 두면 막을 수가 없다
     assert "bypassPermissions" not in " ".join(클로드().명령("고쳐라"))
+    # ★★ **껍데기를 벗긴다.** `--output-format json` 은 말을 `result` 안에 싼다 —
+    #   안 벗기면 창고의 검토 자리에 JSON 덩이가 들어앉는다(실기가 그렇게 됐다).
+    싼것 = '{"type":"result","is_error":false,"result":"고칠 데가 없다","total_cost_usd":0.1}'
+    assert 클로드().읽을말(싼것) == "고칠 데가 없다", 클로드().읽을말(싼것)
+    assert 클로드().끝말(싼것) == "고칠 데가 없다", 클로드().끝말(싼것)
+    # 껍데기 모양이 바뀌어도 **말이 사라지면 안 된다** — 못 벗기면 날것 그대로
+    assert 클로드().읽을말("그냥 말이다") == "그냥 말이다"
+    assert 클로드().읽을말('{"쪼개진 껍데기') == '{"쪼개진 껍데기'
+    assert 클로드().읽을말('{"result": 3}') == '{"result": 3}'
+    assert 클로드().읽을말("") == ""
+    # 딴 손은 안 싸니까 그대로
+    assert 코덱스().읽을말(" 다 됐다 \n") == "다 됐다"
+
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")
     assert "workspace-write" in 코덱스().명령("일해라")
@@ -294,6 +340,7 @@ def _self_check() -> None:
         assert 난것["됐나"] and 난것["끝난코드"] == 0, 난것
         assert 난것["바뀐파일"] == [], 난것
         assert "가짜 손이 돌았다" in 난것["나온말"], 난것["나온말"]
+        assert 난것["읽을말"] == 난것["나온말"].strip()   # 안 싸는 손은 그대로
 
         # --- 파일을 고치는 손 → git 이 잡아낸다 ---
         난것 = 돌리기("CliApp", "a.py 고쳐라", 뿌리=뿌리,

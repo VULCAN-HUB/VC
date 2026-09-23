@@ -1486,7 +1486,8 @@ class Handler(BaseHTTPRequestHandler):
                           "changed": 지.get("바뀐파일") or [], "diff": 지.get("차이") or "",
                           "why": 지.get("왜") or ""},
                 "reviewer": ({"hand": 봄.get("손"), "ok": bool(봄.get("됐나")),
-                              "said": (봄.get("나온말") or "").strip()[:4000],
+                              "said": ((봄.get("읽을말") or 봄.get("나온말") or "")
+                                       .strip()[:4000]),
                               "why": 봄.get("왜") or ""} if 봄 else {}),
                 "kept": (난것["적립"] or {}).get("만든것") or [],
                 "text": 난것.get("사람말") or ""})

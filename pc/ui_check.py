@@ -2146,7 +2146,7 @@ def run() -> None:
         assert _난맡검, "맡기기가 딴 실에서 죽었다 — 끝났다는 신호가 안 왔다"
         app.processEvents()
         assert _창코드._맡김중 == "", "끝났는데 돌고 있다고 남아 있다"
-        _돌맡검 = _난맡검["결과"]
+        _돌맡검 = (_난맡검["결과"] or {}).get("지음") or {}
         assert _돌맡검["됐나"] and _돌맡검["바뀐파일"] == ["src/main.py"], _돌맡검
         assert (_맡자리 / "src" / "main.py").read_text(encoding="utf-8") == "x = 9\n"
         # ★★ **창고 쓰기는 창에서** 한다 — 한 일이 창고에 남는다
@@ -2160,6 +2160,54 @@ def run() -> None:
             assert not _상자맡검.isModal(), "스킬 상자가 창을 막는다"
             _창코드._스킬상자 = None
             _상자맡검.close()
+            app.processEvents()
+
+        # ★★ **협업도 창에서 돌아간다** — 문만 있고 창에 길이 없으면 만든 것이 아니다.
+        #   짓는 손이 고치고, 보는 손은 **읽기만** 한다(둘 다 가짜로 잰다).
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
+                    "commit", "-qm", "둘째"], capture_output=True)
+
+        class _본손검(_시엘검.가짜):
+            이름 = "보는이"
+
+            def 명령(self, 지시, 읽기전용=False):
+                import json as _j
+                import sys as _s
+                싼것 = _j.dumps({"type": "result", "result": "좋다 — 고칠 데가 없다"},
+                              ensure_ascii=False)
+                return [_s.executable, "-c", f"print({싼것!r})"]
+
+            def 읽을말(self, 나온것):
+                return _시엘검.클로드().읽을말(나온것)
+
+        _난맡검.clear()
+        _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 11로",
+                       손물건=_시엘검.가짜(str(_맡자리 / "src" / "main.py"), "x = 11\n"),
+                       보는손="보는이", 보는물건=_본손검())
+        assert _창코드._맡김중 == "CodePanel", "협업이 안 돌기 시작했다"
+        _끝둘검 = _때맡검.monotonic() + 30
+        while not _난맡검 and _때맡검.monotonic() < _끝둘검:
+            app.processEvents()
+            _때맡검.sleep(0.02)
+        assert _난맡검, "협업이 딴 실에서 죽었다"
+        app.processEvents()
+        _둘검 = _난맡검["결과"]
+        assert _둘검.get("협업") is True, _둘검
+        assert (_둘검.get("지음") or {}).get("바뀐파일") == ["src/main.py"], _둘검.get("지음")
+        # ★★ 보는 손이 실제로 불렸고 **아무것도 안 고쳤다**
+        assert _둘검.get("봄"), "바뀐 것이 있는데 보는 손을 안 불렀다"
+        assert _둘검["봄"]["읽기전용"] is True and _둘검["봄"]["바뀐파일"] == [], _둘검["봄"]
+        # ★★ 검토 말이 **껍데기가 아니라 말로** 창고에 붙는다
+        _창코드.notes.reindex()
+        _몸둘검 = "\n".join(r["body"] or "" for r in _창코드.notes.conn.execute(
+            "SELECT body FROM notes WHERE kind = '작업'"))
+        assert "가 본 것" in _몸둘검 and "좋다 — 고칠 데가 없다" in _몸둘검, _몸둘검[-400:]
+        assert "total_cost_usd" not in _몸둘검, "껍데기가 창고에 들어갔다"
+        _상자둘검 = getattr(_창코드, "_스킬상자", None)
+        if _상자둘검 is not None:
+            _창코드._스킬상자 = None
+            _상자둘검.close()
             app.processEvents()
 
         # 창고 글을 열면 코드 모드가 풀린다
