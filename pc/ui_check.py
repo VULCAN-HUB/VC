@@ -2210,6 +2210,81 @@ def run() -> None:
             _상자둘검.close()
             app.processEvents()
 
+        # ★★ **채팅 칸 — 접힘/올라옴 · 엔진 갈아 끼우기 · 보내기.**
+        #   「엔진이 로컬·claude·codex 로 바뀔 뿐 전부 VC 다」(오너 2026-09-24).
+        assert not _창코드.chat.isVisible(), "채팅 칸이 처음부터 펴져 있다"
+        # 말하는 자리를 누르면 올라온다
+        from PyQt5.QtCore import QEvent as _이벤트채팅
+        from PyQt5.QtGui import QMouseEvent as _누름채팅
+        from PyQt5.QtCore import QPointF as _점채팅
+
+        def _say누르기():
+            누름 = _누름채팅(_이벤트채팅.MouseButtonPress, _점채팅(4.0, 4.0),
+                         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+            _창코드.eventFilter(_창코드.say, 누름)
+            app.processEvents()
+
+        _say누르기()
+        assert _창코드.chat.isVisible(), "말하는 자리를 눌렀는데 채팅이 안 올라온다"
+        _say누르기()
+        assert not _창코드.chat.isVisible(), "또 눌렀는데 안 내려간다"
+        _창코드.채팅열기(True)
+        app.processEvents()
+
+        # ★ 고른 하나만 눌려 있어야 한다 — 둘이 눌려 있으면 무엇이 도는지 모른다
+        _창코드.채팅엔진고르기("claude")
+        assert _창코드._채팅엔진 == "claude"
+        assert [n for n, b in _창코드._엔진단추.items() if b.isChecked()] == ["claude"], \
+            [n for n, b in _창코드._엔진단추.items() if b.isChecked()]
+        assert "claude" in _창코드.chat_box.placeholderText()
+        _창코드.채팅엔진고르기("없는엔진")
+        assert _창코드._채팅엔진 == "claude", "모르는 엔진으로 바뀌었다"
+
+        # ★★ **고칠 자리를 모르면 안 시킨다.** 조용히 아무 데나 고치면 되돌리기 어렵다.
+        _창코드._연프로젝트 = None
+        _창코드._엔진말하기()
+        _창코드.chat_box.setText("뭐든 고쳐라")
+        _창코드.채팅보내기()
+        app.processEvents()
+        assert _창코드._맡김중 == "", "프로젝트도 안 열고 에이전트가 돌았다"
+        assert "프로젝트를 열어" in _창코드._say_text, _창코드._say_text
+
+        # ★ 오간 말이 칸에 쌓인다 — 말하는 자리는 한 줄이라 앞말이 지워진다
+        _쌓인 = _창코드.chat_log.toPlainText()
+        assert "뭐든 고쳐라" in _쌓인 and "프로젝트를 열어" in _쌓인, _쌓인[-300:]
+        # 빈 말은 안 보낸다
+        _창코드.chat_box.setText("   ")
+        _창코드.채팅보내기()
+        assert _창코드.chat_log.toPlainText() == _쌓인, "빈 말이 보내졌다"
+
+        # ★★ **로컬은 창고에 묻는다.** 엔진이 바뀌어도 창구는 하나다.
+        _물은것 = []
+        _옛묻기 = _창코드.창고에묻기
+        _창코드.창고에묻기 = lambda 말: _물은것.append(말)
+        try:
+            _창코드.채팅엔진고르기("로컬")
+            _창코드.chat_box.setText("VC 가 뭐야")
+            _창코드.채팅보내기()
+            assert _물은것 == ["VC 가 뭐야"], _물은것
+        finally:
+            _창코드.창고에묻기 = _옛묻기
+
+        # ★★ **엔진이 claude 면 그 손으로 맡긴다** — 가짜 손으로 전 경로를 잰다
+        _맡긴것 = []
+        _옛맡김 = _창코드.맡기기시작
+        _창코드.맡기기시작 = lambda p, t, 손="", **ㄴ: _맡긴것.append((p, t, 손))
+        try:
+            _창코드._연프로젝트 = "CodePanel"
+            _창코드.채팅엔진고르기("codex")
+            assert "CodePanel" in _창코드.chat_box.placeholderText()
+            _창코드.chat_box.setText("x 를 3으로")
+            _창코드.채팅보내기()
+            assert _맡긴것 == [("CodePanel", "x 를 3으로", "codex")], _맡긴것
+        finally:
+            _창코드.맡기기시작 = _옛맡김
+        _창코드.채팅엔진고르기("로컬")
+        _창코드.채팅열기(False)
+
         # 창고 글을 열면 코드 모드가 풀린다
         _창코드.notes.write(Note(title="딴 글", body="몸"))
         _창코드.notes.reindex()

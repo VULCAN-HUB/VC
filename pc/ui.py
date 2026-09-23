@@ -441,7 +441,11 @@ class MainWindow(QWidget):
         self.say = QLabel()
         self.say.setWordWrap(True)
         self.say.setObjectName("say")
-        self._say_text = "준비됐어. 항목을 누르면 그 얘기를 해줄게."
+        self._say_text = "준비됐어. 항목을 누르면 그 얘기를 해줄게.  ▲ 눌러서 말 걸기"
+        # ★ 누르면 채팅 칸이 올라온다. `QLabel` 에는 눌린 신호가 없어 걸러서 받는다.
+        self.say.installEventFilter(self)
+        self.say.setCursor(Qt.PointingHandCursor)
+        self.say.setToolTip("누르면 아래에 채팅 칸이 올라온다")
         self._caret_on = True
         self._paint_say()
         # 깜빡이는 커서. 멈춘 화면이 아니라 듣고 있는 중이라는 표시다.
@@ -461,6 +465,11 @@ class MainWindow(QWidget):
         graph_box.addWidget(self.graph, 1)
         graph_box.addLayout(legend_row)
         graph_box.addWidget(self.say)
+        # ★★ **VC 와 말을 주고받는 칸.** 엔진이 로컬·claude·codex 로 바뀔 뿐 **전부
+        #   VC 다**(오너가 그렇게 못 박았다 · 2026-09-24). 그래서 칸도 하나고, 고르는
+        #   것은 「누구에게 말하나」가 아니라 「무엇으로 답하나」다.
+        #   ★ 처음엔 접혀 있다 — 늘 펴 두면 그래프가 좁아진다. 말하는 자리를 누르면 올라온다.
+        graph_box.addWidget(self._채팅칸만들기())
         left = QFrame()
         left.setLayout(graph_box)
         self.left = left
@@ -1391,6 +1400,14 @@ class MainWindow(QWidget):
         if event.type() in (QEvent.KeyPress, QEvent.MouseButtonPress,
                             QEvent.MouseMove, QEvent.Wheel):
             self.graph.깨우기()
+        # ★ 말하는 자리를 누르면 채팅 칸이 올라온다. 늘 펴 두면 그래프가 좁아지고,
+        #   접어만 두면 있는 줄을 모른다 — 말이 나오는 그 자리를 누르게 한다.
+        # ★ `getattr` 로 본다 — 거름망은 **칸이 다 서기 전에도** 불린다(창을 짓는
+        #   중에 들어온 누름이 `say` 를 찾다 죽었다).
+        if (event.type() == QEvent.MouseButtonPress
+                and obj is getattr(self, "say", None)):
+            self.채팅열기()
+            return True
         # 누름이 어디에 떨어졌는지 최근 넷을 들고 있는다 — 친 말이 글로 새면 자국에 같이 적는다.
         if event.type() == QEvent.MouseButtonPress and obj.isWidgetType():
             self._누름들 = (getattr(self, "_누름들", []) +
@@ -2377,6 +2394,7 @@ class MainWindow(QWidget):
 
     def _프로젝트펼치기(self, 이름: str) -> None:
         self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
+        self._엔진말하기()          # 채팅 칸이 어디를 고칠지 바로 보여 준다
         self._later(self.코드그리기)
 
     def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None,
@@ -3699,6 +3717,126 @@ class MainWindow(QWidget):
         if self.voice is not None:
             self.voice._last = {}
 
+    # ★★ **엔진만 갈아 낀다.** 「누구에게 말하나」가 아니라 「무엇으로 답하나」다 —
+    #   오너가 「엔진이 로컬·클로드·코덱스로 바뀔 뿐 전부 VC 다」라고 못 박았다.
+    채팅엔진들 = (
+        ("로컬", "로컬", "VC 제 엔진이 창고를 뒤져 답한다. 빠르고 값이 안 든다"),
+        ("claude", "claude", "클로드 코드가 지금 연 프로젝트의 코드를 고친다"),
+        ("codex", "codex", "Codex 가 지금 연 프로젝트의 코드를 고친다"),
+    )
+
+    def _채팅칸만들기(self) -> QWidget:
+        """말 주고받는 칸. **접혀 있다가 올라온다.**"""
+        self._채팅엔진 = "로컬"
+        칸 = QFrame()
+        칸.setObjectName("chat")
+        줄 = QVBoxLayout(칸)
+        줄.setContentsMargins(0, 8, 0, 0)
+        줄.setSpacing(6)
+
+        self.chat_log = QTextEdit()
+        self.chat_log.setReadOnly(True)
+        self.chat_log.setObjectName("chatlog")
+        self.chat_log.setMinimumHeight(90)
+        self.chat_log.setMaximumHeight(220)
+        # ★ 넓어지는 것을 막는다 — 곁 칸이 밀려 목록이 화면 밖으로 나간 적이 있다
+        self.chat_log.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.chat_log.setMinimumWidth(1)
+        줄.addWidget(self.chat_log)
+
+        고름 = QHBoxLayout()
+        고름.setSpacing(6)
+        고름.addWidget(QLabel("엔진"))
+        self._엔진단추 = {}
+        for 이름, 글, 도움 in self.채팅엔진들:
+            단추 = QPushButton(글)
+            단추.setObjectName("quiet")
+            단추.setCheckable(True)
+            단추.setChecked(이름 == self._채팅엔진)
+            단추.setToolTip(도움)
+            단추.setMinimumWidth(1)
+            단추.clicked.connect(lambda _=False, n=이름: self.채팅엔진고르기(n))
+            self._엔진단추[이름] = 단추
+            고름.addWidget(단추)
+        고름.addStretch(1)
+        줄.addLayout(고름)
+
+        self.chat_box = QLineEdit()
+        self.chat_box.setObjectName("ask")
+        self.chat_box.setMinimumWidth(1)
+        self.chat_box.setPlaceholderText("VC 에게 말하기 — Enter 로 보낸다")
+        # ★★ **한글 이름 메서드를 신호에 바로 걸면 안 된다.** PyQt 가 슬롯 이름을
+        #   ASCII 로 바꾸려다 `UnicodeEncodeError` 로 죽고, 창이 아예 안 뜬다.
+        #   이 덫에 세 번 걸렸다 — 람다로 감싸면 이름을 안 본다.
+        self.chat_box.returnPressed.connect(lambda: self.채팅보내기())
+        줄.addWidget(self.chat_box)
+
+        칸.setVisible(False)
+        self.chat = 칸
+        self._엔진말하기()
+        return 칸
+
+    def 채팅열기(self, 열까: bool | None = None) -> None:
+        """말하는 자리를 누르면 올라오고, 또 누르면 내려간다."""
+        칸 = getattr(self, "chat", None)
+        if 칸 is None:
+            return
+        열까 = (not 칸.isVisible()) if 열까 is None else bool(열까)
+        칸.setVisible(열까)
+        if 열까:
+            self.chat_box.setFocus()
+
+    def 채팅엔진고르기(self, 이름: str) -> None:
+        """엔진을 바꾼다. **고른 하나만 눌린 채로 둔다** — 둘이 눌려 있으면 무엇이
+        도는지 알 수 없다."""
+        if 이름 not in dict((n, 1) for n, _, _ in self.채팅엔진들):
+            return
+        self._채팅엔진 = 이름
+        for n, 단추 in getattr(self, "_엔진단추", {}).items():
+            단추.setChecked(n == 이름)
+        self._엔진말하기()
+
+    def _엔진말하기(self) -> None:
+        """지금 무엇이 답하는지 칸에 적어 둔다 — 모르고 값비싼 손을 부르면 안 된다."""
+        상자 = getattr(self, "chat_box", None)
+        if 상자 is None:
+            return
+        if self._채팅엔진 == "로컬":
+            상자.setPlaceholderText("VC 에게 묻기 — 창고를 뒤져 답한다")
+        else:
+            어디 = self._연프로젝트 or "(프로젝트를 먼저 열어)"
+            상자.setPlaceholderText(f"{self._채팅엔진} 에게 시키기 — {어디} 의 코드를 고친다")
+
+    def 채팅보내기(self) -> None:
+        """친 말을 보낸다. **엔진만 다르고 창구는 하나다.**"""
+        말 = (self.chat_box.text() or "").strip()
+        if not 말:
+            return
+        self.chat_box.clear()
+        self._채팅적기("나", 말)
+        if self._채팅엔진 == "로컬":
+            self.창고에묻기(말)
+            return
+        # ★ 고칠 자리를 모르면 안 시킨다. 조용히 아무 데나 고치면 되돌리기가 어렵다.
+        프로젝트 = getattr(self, "_연프로젝트", "")
+        if not 프로젝트:
+            self.report("먼저 코드 칸에서 프로젝트를 열어 — 어디를 고칠지 알아야 해.", [])
+            return
+        self.맡기기시작(프로젝트, 말, 손=self._채팅엔진)
+
+    def _채팅적기(self, 누가: str, 말: str) -> None:
+        """오간 말을 칸에 쌓는다. **VC 가 하는 말은 여기로도 흐른다** — 말하는 자리는
+        한 줄이라 앞말이 곧 지워지는데, 채팅은 되돌아볼 수 있어야 한다."""
+        기록 = getattr(self, "chat_log", None)
+        말 = (말 or "").strip()
+        if 기록 is None or not 말:
+            return
+        빛 = theme.css(theme.T.ACCENT if 누가 != "나" else theme.T.DIM, 0.95)
+        기록.append(f'<span style="color:{빛}"><b>{html.escape(누가)}</b></span> '
+                  f'{html.escape(말)}')
+        막대 = 기록.verticalScrollBar()
+        막대.setValue(막대.maximum())
+
     def report(self, text: str, touching: list[str], aloud: bool = True) -> None:
         """VC가 말한다. 딛고 있는 항목들이 순서대로 밝아진다.
 
@@ -3708,6 +3846,8 @@ class MainWindow(QWidget):
         self._say_text = text
         self._caret_on = True
         self._paint_say()
+        # ★ VC 가 하는 말은 채팅에도 흐른다 — 말하는 자리는 한 줄이라 앞말이 지워진다
+        self._채팅적기("VC", text)
         self.graph.speak(touching)
 
         # 말하는 동안만 달아오른다. 글자 길이로 시간을 어림한다 — 실제 말이 끝나는

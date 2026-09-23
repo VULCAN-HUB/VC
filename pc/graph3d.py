@@ -390,6 +390,12 @@ class GraphView(QGraphicsView):
     잠들때까지 = 90.0
     # 잠들었을 때의 재깍이 간격(ms). 멈추는 대신 늦춘다 — 깨어날 자리가 그대로 남는다.
     잠든간격 = 1000
+    # ★★ **앞에 떠 있는 동안은 멈추지 않는다.** 예전엔 90초 손을 안 대면 곧장
+    #   `잠든간격` 으로 떨어뜨렸는데, 초당 한 장은 사람 눈에 **멈춘 화면**이다 —
+    #   오너가 「시간 지나면 항목 움직임이 멈춘다」고 본 것이 이 자리다(2026-09-24).
+    #   자는 것은 **가려졌을 때만** 두고, 보이는 동안은 이 간격으로 느긋하게 돈다.
+    #   초당 열 장이면 도는 것이 보이면서 값은 1/3 이다.
+    느긋간격 = 100
 
     def __init__(self) -> None:
         super().__init__()
@@ -459,6 +465,7 @@ class GraphView(QGraphicsView):
         self._slow = 0        # 연달아 밀린 프레임 수
         self._깬때 = time.perf_counter()   # 마지막으로 사람 손이 닿은 때
         self._잠듦 = False                 # 자는 중이라고 파일에 적어 뒀나
+        self._느긋했나 = False             # 손을 한참 안 대 늦춰 둔 상태인가
         # 뒤에서 파일을 훑는 동안은 연출을 쉰다. 그리는 값이 훑기를 굶긴다.
         self._indexing = False
         self._release = QTimer(self)
@@ -483,7 +490,17 @@ class GraphView(QGraphicsView):
     def indexing(self, on: bool) -> None:
         """훑는 동안은 그래프도 표식도 쉰다. 그리기가 훑기를 굶기면 안 된다."""
         self._indexing = on
-        self.mark.set_paused(on)
+        self._표식고르기()
+
+    def _표식고르기(self) -> None:
+        """표식이 쉴지 **한 군데서** 정한다.
+
+        ★★ 여기가 갈려 있어서 새 나갔다. 훑기 설정자가 `set_paused(False)` 를 부르면
+           느긋해서 재워 둔 표식이 도로 깨어나, **느긋한데도 불티 1800개를 33ms마다
+           그리고 있었다**(재 보니 28% 였다 · 2026-09-24). 쉴 까닭이 셋이니
+           **셋을 한자리에서 더한다** — 다음에 하나 더 늘어도 여기만 본다.
+        """
+        self.mark.set_paused(self._잠듦 or self._느긋했나 or self._indexing)
 
     def _spin(self) -> None:
         """천천히 도는 연출. **그리는 값이 여기 다 실린다.**
@@ -522,11 +539,16 @@ class GraphView(QGraphicsView):
         if not self.isVisible() or self.window().isMinimized():
             self._재우기(True)
             return
-        if time.perf_counter() - self._깬때 > self.잠들때까지:
-            self._재우기(True)
-            return
-        if self.spin.interval() >= self.잠든간격:
-            self._재우기(False)            # 깨어났다. 처음 빠르기로 되돌린다
+
+        # ★★ **보이는 동안은 안 잔다 — 늦출 뿐이다.** 여기서 `return` 하고 재우던 것이
+        #   「멈췄다」로 보였다. 값이 큰 것은 자전이 아니라 **표식의 불티 1800개**라,
+        #   표식은 그대로 재우고 항목만 느긋하게 돌린다(그 둘을 가른 것이 이 고침이다).
+        느긋 = time.perf_counter() - self._깬때 > self.잠들때까지
+        바닥 = self.느긋간격 if 느긋 else 33
+        # ★ **바뀔 때만 손댄다.** 판마다 넣으면 위에서 늘려 둔 간격을 도로 눌러
+        #   버려서, 밀릴 때 늦추는 장치가 아예 안 듣는다.
+        if self.spin.interval() >= self.잠든간격 or 느긋 != self._느긋했나:
+            self._재우기(False, 느긋)
 
         now = time.perf_counter()
         gap = now - self._last_spin
@@ -548,8 +570,10 @@ class GraphView(QGraphicsView):
             # 200ms 는 초당 다섯 장이라 그 자체가 멈칫으로 보인다. 훑는 동안은
             # 위에서 통째로 쉬므로 여기까지 늦출 일이 없다.
             self.spin.setInterval(min(120, int(want * 1.6)))
-        elif want > 33 and gap < want / 1000.0 * 1.25:
-            self.spin.setInterval(max(33, int(want * 0.8)))
+        elif want > 바닥 and gap < want / 1000.0 * 1.25:
+            # ★ **바닥을 지킨다.** 33 으로 도로 당기면 느긋한 동안에도 제 빠르기로
+            #   돌아가 버려서, 늦춰 둔 뜻이 없어진다.
+            self.spin.setInterval(max(바닥, int(want * 0.8)))
 
         # **손을 얹으면 멈춘다.** 도는 동안에는 겨냥한 점이 이미 옮겨가 있어서 누르면
         # 빗나간다 — 낯선 PC 에서 「큰 원을 겨냥해 누르기도 빗나갔다」로 걸렸고,
@@ -563,7 +587,10 @@ class GraphView(QGraphicsView):
         멈출 = (self.hover is not None
                 and self.STILL_SEC < 섰던지 < self.AWAY_SEC)
         if self._drag is None and not 멈출:
-            self.yaw += 0.0032  # 아주 느리게. 빠르면 읽는 걸 방해한다
+            # ★★ **흐른 시간으로 잰다.** 판마다 같은 값을 더하면 간격을 늦추는 순간
+            #   도는 것도 그만큼 느려진다 — 느긋하게 돌리려다 「거의 안 돈다」가 된다.
+            #   한 판이 오래 걸린 때는 잘라 낸다(멈췄다 튀는 것을 막는다).
+            self.yaw += 0.0032 * min(max(gap, 0.0), 0.25) / 0.033
         self.tick = (self.tick + 1) % 10000
         root = self.nodes.get(ROOT)
         if root is not None:
@@ -1467,7 +1494,7 @@ class GraphView(QGraphicsView):
         self.set_hover(None)
         super().leaveEvent(event)
 
-    def _재우기(self, 잘까: bool) -> None:
+    def _재우기(self, 잘까: bool, 느긋: bool = False) -> None:
         # ★ **자는 동안에도 「자는 중」이 파일에 찍혀야 한다.** 안 찍으면 마지막으로
         # 쓴 값(33ms)이 그대로 남아, 읽는 사람이 **「문턱이 안 걸렸나」로 헤맨다** —
         # 시험하는 쪽이 실제로 그 33ms 를 보고 그리 갈 뻔했고, 판 수를 두 번 세서
@@ -1483,8 +1510,11 @@ class GraphView(QGraphicsView):
         21% 까지만 내려갔는데, 최소화하면 1.8% 였다 — 그 차이가 표식이었다.
         재우는 자리를 한 함수로 묶어 **다음에 그리는 것이 하나 더 늘어도 여기만 본다.**
         """
-        self.spin.setInterval(self.잠든간격 if 잘까 else 33)
-        self.mark.set_paused(잘까 or self._indexing)
+        self._느긋했나 = 느긋 and not 잘까
+        self.spin.setInterval(self.잠든간격 if 잘까
+                              else (self.느긋간격 if 느긋 else 33))
+        # ★ 값이 큰 것은 자전이 아니라 **표식의 불티 1800개**다. 느긋할 때도 재운다.
+        self._표식고르기()
 
     def 깨우기(self) -> None:
         """사람 손이 닿았다. 잠들어 있었으면 다시 돈다.
@@ -1933,16 +1963,58 @@ def _self_check() -> None:
     view._spin()
     assert view.yaw != 돌기전, "손이 막 닿았는데 안 돈다"
 
-    # 한참 아무 일도 없으면 잠든다 — 멈추는 대신 늦춘다.
+    # ★★ **앞에 떠 있는 동안은 멈추지 않는다.** 한참 손을 안 대면 늦추기만 한다 —
+    #   초당 한 장은 사람 눈에 멈춘 화면이라, 오너가 「시간 지나면 항목 움직임이
+    #   멈춘다」고 짚었다(2026-09-24). 값이 큰 것은 자전이 아니라 표식이므로,
+    #   **표식만 재우고 항목은 돌린다.**
     view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
-    잠들기전 = view.yaw
+    느긋하기전 = view.yaw
     view._last_spin = time.perf_counter() - 0.5
     view._spin()
-    assert view.yaw == 잠들기전, "아무도 안 만지는데 계속 돈다"
-    assert view.spin.interval() == view.잠든간격, view.spin.interval()
+    assert view.yaw != 느긋하기전, "앞에 떠 있는데 항목이 멈췄다"
+    assert view.spin.interval() == view.느긋간격, view.spin.interval()
     # ★★ **그리는 것이 둘이다.** 그래프만 재웠더니 「앞에 있고 손 안 댐」이 21% 로만
-    # 내려갔다(최소화는 1.8%). 그 차이가 **표식의 불티 1800개**였다.
-    assert view.mark.paused, "그래프는 자는데 표식이 계속 그린다"
+    # 내려갔다(최소화는 1.8%). 그 차이가 **표식의 불티 1800개**였다 — 그래서 느긋할
+    # 때도 표식은 재운다. 항목이 도는 값은 표식에 대면 작다.
+    assert view.mark.paused, "느긋한데 표식이 계속 불티를 그린다"
+    # ★★ **표식을 재우는 자리는 하나뿐이다.** 훑기 설정자가 따로 `set_paused` 를
+    #   부르던 탓에, 느긋해서 재워 둔 표식이 도로 깨어나 28% 를 태우고 있었다.
+    view.indexing = True
+    view.indexing = False
+    assert view.mark.paused, "훑기가 끝나면서 느긋한 표식까지 깨웠다"
+    view.깨우기()
+    view._last_spin = time.perf_counter() - 0.5
+    view._spin()
+    assert not view.mark.paused, "손이 닿았는데 표식이 안 깬다"
+    # ★ **느긋해도 도는 빠르기는 같아야 한다.** 판마다 같은 값을 더하면 간격을 세 배
+    #   늦추는 순간 도는 것도 세 배 느려져 「거의 안 돈다」가 된다 — 흐른 시간으로 잰다.
+    view._깬때 = time.perf_counter()
+    view._재우기(False)
+    빠른전 = view.yaw
+    view._last_spin = time.perf_counter() - 0.099
+    view._spin()
+    빠를때 = view.yaw - 빠른전
+    view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
+    느린전 = view.yaw
+    view._last_spin = time.perf_counter() - 0.099
+    view._spin()
+    느릴때 = view.yaw - 느린전
+    # ★ 재는 사이에 μs 단위 흔들림이 있으니 **자릿수로** 본다. 흐른 시간을 안 쓰면
+    #   세 배 차이가 나므로, 1% 안이면 「같은 빠르기」가 맞다.
+    assert abs(빠를때 - 느릴때) < 빠를때 * 0.01, (빠를때, 느릴때)
+    # 되돌아가는 자리도 바닥을 지킨다 — 안 지키면 느긋한 동안 33 으로 도로 당겨진다
+    view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
+    for _ in range(12):
+        view._last_spin = time.perf_counter() - 0.001
+        view._spin()
+    assert view.spin.interval() >= view.느긋간격, view.spin.interval()
+
+    # 가려지면 그때는 **정말로 잔다** — 아무도 안 보는데 그릴 까닭이 없다
+    view.hide()
+    view._last_spin = time.perf_counter() - 0.5
+    view._spin()
+    assert view.spin.interval() == view.잠든간격, view.spin.interval()
+    view.show()
 
     # 손이 닿으면 곧바로 깬다. 안 깨면 사람이 만져도 화면이 굳어 보인다.
     view.깨우기()
