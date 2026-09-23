@@ -60,25 +60,27 @@ class 손:
 class 클로드(손):
     """클로드 코드. `-p` 가 한 번 돌리고 끝나는 모습이다.
 
-    ★ 깃발은 **실제로 깔고 한 번 돌려 봐야** 확정된다(이 맥엔 아직 없다).
-      여기 모아 둔 까닭이 그것이다 — 틀리면 이 줄만 고친다.
+    ★★ **깃발은 실기로 확정했다**(2026-09-24 · claude 2.1.267):
+       - 짓는 손 `--permission-mode acceptEdits` → `x = 1` 을 `x = 2` 로 **실제로 고쳤다**
+       - 보는 손 `--permission-mode plan` → 「**반드시 고쳐라**」고 시켜도 계획만 쓰고
+         **파일은 그대로였다**(`git status` 비어 있음). 말이 아니라 **판이 막는다.**
+       `bypassPermissions` 는 안 쓴다 — 다 열어 두면 막을 수가 없다.
     """
 
     이름 = "claude"
     실행파일 = "claude"
 
     def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
-        # ★★ **읽기전용을 깃발로 못 박지 않는다.** 확인 안 된 깃발을 넣으면 안 도는
-        #   명령이 된다 — 이 맥엔 아직 안 깔려 실기로 못 쟀다. 대신 **말로 시키고,
-        #   돌린 뒤 git 으로 잰다**(`돌리기` 가 고쳤으면 탈로 잡는다).
-        #   깔고 확인되면 여기 한 줄만 고친다.
-        return [self.실행파일, "-p", 지시, "--output-format", "json"]
+        return [self.실행파일, "-p", 지시, "--output-format", "json",
+                "--permission-mode", "plan" if 읽기전용 else "acceptEdits"]
 
 
 class 코덱스(손):
     """Codex. `exec` 가 비대화식이고 **기본이 읽기 전용 샌드박스**다.
 
     ★ 고치게 하려면 `--sandbox workspace-write` 가 필요하다 — 권한을 **필요한 만큼만** 연다.
+    ★★ **한도에 걸리면 끝난 코드가 1 이다**(2026-09-24 실기 · codex-cli 0.156.1).
+       그래서 「성공을 끝난 코드로 잰다」가 여기서도 맞는다 — 한도 오류를 성공으로 안 읽는다.
     """
 
     이름 = "codex"
@@ -267,6 +269,12 @@ def _self_check() -> None:
     assert 손고르기("claude").이름 == "claude" and 손고르기("CODEX").이름 == "codex"
     assert 손고르기("없는손") is None
     assert "-p" in 클로드().명령("일해라") and "일해라" in 클로드().명령("일해라")
+    # ★★ **실기로 확정한 깃발**(2026-09-24 · claude 2.1.267). 보는 손은 `plan` 이라
+    #   「반드시 고쳐라」고 시켜도 파일을 못 고친다 — 말이 아니라 판이 막는다.
+    assert 클로드().명령("보기만", 읽기전용=True)[-1] == "plan", 클로드().명령("보기만", True)
+    assert 클로드().명령("고쳐라", 읽기전용=False)[-1] == "acceptEdits"
+    # 다 열어 두는 판은 안 쓴다 — 열어 두면 막을 수가 없다
+    assert "bypassPermissions" not in " ".join(클로드().명령("고쳐라"))
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")
     assert "workspace-write" in 코덱스().명령("일해라")
