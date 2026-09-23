@@ -571,6 +571,48 @@ def only_one(data: Path | None = None) -> bool:
     return True
 
 
+# ★★ **맥은 문서·바탕화면 폴더를 권한으로 막는다.** Finder 로 띄운 앱은 허락이 날
+#   때까지 `opendir` 안에서 **통째로 멈춘다** — 창도 서버도 안 뜬 채 0% 로 매달렸고,
+#   아무 말도 안 남아서 무엇이 막혔는지 알 길이 없었다(실기로 잡았다 · 2026-09-24).
+#   터미널로 돌리면 터미널의 허락을 물려받아 잘 돌아, **구운 것으로만 나던 탈**이다.
+막힘기다림 = 5.0
+
+
+def 창고막혔나(자리: Path | None = None, 초: float = 막힘기다림) -> str:
+    """창고 자리를 읽을 수 있나. 읽히면 빈 글, 아니면 **사람이 할 일 한 줄.**
+
+    ★ 재는 것 자체가 막히므로 **딴 실에서** 재고 시간을 끊는다 — 여기서 같이 멈추면
+      재는 뜻이 없다. 딴 실은 남겨 둔다(끊을 수 없는 시스템 부름 안에 있다).
+    """
+    import threading
+
+    자리 = Path(자리) if 자리 else notes_dir()
+    난것: dict[str, object] = {}
+
+    def 본다() -> None:
+        try:
+            next(os.scandir(자리), None)
+            난것["됐다"] = True
+        except StopIteration:
+            난것["됐다"] = True
+        except OSError as e:
+            난것["탈"] = e
+
+    실 = threading.Thread(target=본다, daemon=True)
+    실.start()
+    실.join(초)
+    if 난것.get("됐다"):
+        return ""
+    if isinstance(난것.get("탈"), OSError):
+        탈 = 난것["탈"]
+        if getattr(탈, "errno", 0) != 1:        # EPERM 이 아니면 권한 얘기가 아니다
+            return f"창고를 못 읽는다: {탈}"
+    어디 = 자리.parts[3] if len(자리.parts) > 3 else "그 폴더"
+    return (f"맥이 「{어디}」 폴더를 막고 있어 창고({자리})를 못 읽는다. "
+            "화면에 허락을 묻는 창이 떴으면 «허용»을 누르고, 안 떴으면 "
+            "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 에서 VC 를 켜라.")
+
+
 def notes_dir() -> Path:
     return data_dir() / "data" / "notes"
 
@@ -1040,6 +1082,33 @@ def _self_check() -> None:
     assert config_path().parent == state_dir(), config_path()
     # 같은 프로세스 안에서는 **늘 같은 자리**다 — 매번 새로 만들면 검사끼리 못 이어진다
     assert _가둔자리() == _가둔자리()
+
+    # ★★ **막힌 창고를 재는 데서 같이 멈추면 안 된다.** 맥이 문서 폴더를 막으면
+    #   `opendir` 이 허락이 날 때까지 안 돌아온다 — 재는 쪽은 시간을 끊어야 한다
+    #   (실기로 잡았다 · 2026-09-24: 구운 앱이 0% 로 매달렸다).
+    assert 창고막혔나(Path(tempfile.gettempdir()), 2.0) == ""
+    assert "No such file" in 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0)
+
+    import threading as _실검
+    import time as _때검
+
+    _잰때 = _실검.Event()
+    _옛스캔 = os.scandir
+
+    def _매달리는스캔(자리):
+        _잰때.wait(30)          # 영영 안 돌아오는 시스템 부름 흉내
+        return iter(())
+
+    os.scandir = _매달리는스캔
+    try:
+        _t0 = _때검.monotonic()
+        _말 = 창고막혔나(Path(tempfile.gettempdir()), 0.5)
+        _든것 = _때검.monotonic() - _t0
+        assert _든것 < 4, f"막힌 자리를 재다 같이 멈췄다({_든것:.1f}초)"
+        assert "허용" in _말 and "시스템 설정" in _말, _말
+    finally:
+        os.scandir = _옛스캔
+        _잰때.set()
 
     print("paths self-check 통과")
 

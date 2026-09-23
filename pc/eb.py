@@ -294,6 +294,18 @@ def main(argv: list[str] | None = None) -> int:
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
 
+    # ★★ **막혀 있으면 말하고 나서 기다린다.** 맥이 문서 폴더를 막으면 우리는
+    #   `opendir` 안에서 통째로 멈추는데, 그 자리엔 창도 서버도 없어 **아무 말도 안
+    #   남았다** — Finder 로 띄운 앱이 0% 로 매달려 있는데 까닭을 알 길이 없었다
+    #   (실기로 잡았다 · 2026-09-24). 막는 것이 아니라 **말을 하고** 그대로 간다 —
+    #   허락이 나면 이어서 켜지고, 안 나면 무엇을 눌러야 하는지가 남는다.
+    if 막힘 := paths.창고막혔나():
+        print("★ " + 막힘)
+        try:
+            report.trail("창고 막힘 — " + 막힘)
+        except Exception:
+            pass
+
     # ★★ 기계 파일을 앱 자리로(오너 결정 2026-09-15) — **혼자 켜기 잠금을 잡은 뒤, db 를 열기 전에.**
     #   이미 떠 있는 VC 가 db 를 쥐고 있을 때 옮기면 반쪽이 된다 — 서버가 살아 있거나 잠금을 못 잡으면 건너뛴다.
     if not server_alive() and paths.only_one():
