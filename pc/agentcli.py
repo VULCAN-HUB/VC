@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -73,8 +75,6 @@ def 찾기(실행파일: str) -> str:
     ★★ **온전한 자리를 써야 한다.** `Popen` 에 `env` 를 줘도 실행파일은 **부모의**
        PATH 로 찾는다(파이썬이 그렇게 돈다) — 그래서 여기서 미리 풀어 준다.
     """
-    import shutil
-
     return shutil.which(실행파일, path=길()) or "" if 실행파일 else ""
 
 
@@ -83,6 +83,16 @@ class 손:
 
     이름 = ""
     실행파일 = ""
+    # ★ 한 판마다 `돌리기` 가 채워 준다. 마지막 말을 **파일로** 받는 손이 쓴다.
+    말자리: Path | None = None
+
+    def 끝난말(self) -> str:
+        """손이 `말자리` 에 적어 둔 마지막 말. 안 쓰는 손은 빈 글."""
+        자리 = self.말자리
+        try:
+            return 자리.read_text(encoding="utf-8").strip() if 자리 and 자리.exists() else ""
+        except OSError:
+            return ""
 
     def 있나(self) -> bool:
         return bool(찾기(self.실행파일))
@@ -95,17 +105,20 @@ class 손:
         """
         raise NotImplementedError
 
-    def 읽을말(self, 나온것: str) -> str:
+    def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
         """CLI 가 **사람에게 한 말**. 껍데기를 쓴 손은 여기서 벗긴다.
 
         ★★ 날것(`나온말`)은 자취로 그대로 둔다 — 벗긴 것만 남기면 벗기기가 틀렸을 때
            무엇이 왔는지 알 길이 없다. 그래서 **둘 다 들고 간다.**
+        ★★ **stdout 이 비면 stderr 를 본다.** 탈난 까닭을 거기 적는 손이 있다 —
+           안 보면 「탈났다」고만 하고 **왜인지는 빈 칸**이 된다(codex 가 실제로 그랬다:
+           한도 오류가 통째로 stderr 에 있어 보고가 비었다 · 2026-09-24).
         """
-        return (나온것 or "").strip()
+        return (나온것 or "").strip() or (탈난것 or "").strip()
 
-    def 끝말(self, 나온것: str) -> str:
+    def 끝말(self, 나온것: str, 탈난것: str = "") -> str:
         """마지막 한 줄. 보고에 쓴다 — **성공 판정에는 안 쓴다.**"""
-        줄 = [x for x in self.읽을말(나온것).splitlines() if x.strip()]
+        줄 = [x for x in self.읽을말(나온것, 탈난것).splitlines() if x.strip()]
         return 줄[-1][:500] if 줄 else ""
 
 
@@ -126,7 +139,7 @@ class 클로드(손):
         return [self.실행파일, "-p", 지시, "--output-format", "json",
                 "--permission-mode", "plan" if 읽기전용 else "acceptEdits"]
 
-    def 읽을말(self, 나온것: str) -> str:
+    def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
         """★★ `--output-format json` 은 **껍데기에 싸서** 준다 — 사람 말은 `result` 안에 있다.
 
         안 벗기면 창고의 검토 자리에 토큰 셈이 적힌 JSON 덩이가 들어앉는다(실기에서
@@ -134,6 +147,8 @@ class 클로드(손):
         바뀌어도 말이 사라지지는 않게.
         """
         글 = (나온것 or "").strip()
+        if not 글:
+            return (탈난것 or "").strip()
         if not 글.startswith("{"):
             return 글
         try:
@@ -150,19 +165,27 @@ class 코덱스(손):
     ★ 고치게 하려면 `--sandbox workspace-write` 가 필요하다 — 권한을 **필요한 만큼만** 연다.
     ★★ **한도에 걸리면 끝난 코드가 1 이다**(2026-09-24 실기 · codex-cli 0.156.1).
        그래서 「성공을 끝난 코드로 잰다」가 여기서도 맞는다 — 한도 오류를 성공으로 안 읽는다.
-    ★ **`읽을말` 은 아직 날것 그대로다.** codex 가 말을 어떤 꼴로 내는지 실기로 못 쟀다
-      (한도에 걸려 한 번도 끝까지 못 돌았다). 확인 안 된 벗기기를 넣으면 말이 통째로
-      사라질 수 있으니, 재 보기 전까지는 **안 벗긴다** — 지저분해도 말은 남는다.
+    ★★ **codex 는 stdout 에 아무것도 안 쓴다.** 머리말도 답도 탈도 전부 stderr 다
+       (실기로 쟀다 · 2026-09-24). 그래서 굽힌 앱으로 협업을 돌렸더니 「탈났다」고만
+       하고 **까닭이 빈 칸**이었다. 두 겹으로 막는다:
+         1. `-o` 로 **마지막 말만 파일에 받는다**(문서에 있는 깃발이다).
+         2. 그 파일이 비면 **stderr 를 그대로** 쓴다 — 지저분해도 까닭은 남는다.
+       ★ 성공했을 때 `-o` 가 실제로 무엇을 적는지는 아직 못 쟀다(한도). 그래도
+         되짚을 자리가 있으니 **말이 사라지지는 않는다.**
     """
 
     이름 = "codex"
     실행파일 = "codex"
 
     def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
-        # ★ 기본이 읽기 전용이라 **보는 손일 때는 아무 깃발도 안 준다** — 문서가 그렇다.
-        if 읽기전용:
-            return [self.실행파일, "exec", 지시]
-        return [self.실행파일, "exec", "--sandbox", "workspace-write", 지시]
+        # ★ 기본이 읽기 전용이라 **보는 손일 때는 샌드박스 깃발을 안 준다** — 문서가 그렇다.
+        말깃발 = ["-o", str(self.말자리)] if self.말자리 else []
+        판깃발 = [] if 읽기전용 else ["--sandbox", "workspace-write"]
+        return [self.실행파일, "exec", *판깃발, *말깃발, 지시]
+
+    def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
+        # ★ `-o` 가 적어 준 것이 가장 깨끗하다. 없으면 stdout, 그것도 없으면 stderr.
+        return self.끝난말() or (나온것 or "").strip() or (탈난것 or "").strip()
 
 
 class 가짜(손):
@@ -269,14 +292,24 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     # ★★ **띄울 때도 같은 길을 준다.** 찾기만 고치면 claude 는 뜨고 그 속의 node 를
     #   못 찾아 죽는다. 그리고 실행파일은 **미리 온전한 자리로 풀어 둔다** — `env` 를
     #   줘도 파이썬은 부모의 PATH 로 찾기 때문이다.
+    # ★ 마지막 말을 **파일로** 받는 손을 위한 자리. 프로젝트 **밖**에 둔다 —
+    #   안에 두면 git 이 「바뀐 파일」로 세어 누가 뭘 고쳤는지 어지러워진다.
+    말집 = tempfile.mkdtemp(prefix="vc-손말-")
+    그손.말자리 = Path(말집) / "끝말.txt"
+
     명령줄 = list(그손.명령(지시, 읽기전용))
     if 명령줄:
         명령줄[0] = 찾기(명령줄[0]) or 명령줄[0]
     판환경 = {**os.environ, "PATH": 길()}
     try:
+        # ★★ **stdin 을 막는다.** codex 는 stdin 이 열려 있으면 「Reading additional
+        #   input from stdin…」 하고 기다린다 — 창에는 stdin 이 없으니 굳을 수 있다.
         판 = subprocess.Popen(명령줄, cwd=str(자리), env=판환경,
+                            stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except (OSError, ValueError) as e:
+        그손.말자리 = None
+        shutil.rmtree(말집, ignore_errors=True)
         return {"손": 그손.이름, "됐나": False, "왜": f"못 띄웠다: {type(e).__name__}"}
 
     try:
@@ -297,6 +330,8 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
             판.kill()
         except Exception:
             pass
+        그손.말자리 = None
+        shutil.rmtree(말집, ignore_errors=True)
         return {"손": 그손.이름, "됐나": False, "왜": f"돌리다 터졌다: {type(e).__name__}: {e}"}
     든시간 = time.perf_counter() - t
 
@@ -316,11 +351,16 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     #   **git 으로 잰다** — 보는 손이 고치면 누구 탓인지 못 가린다.
     if 읽기전용 and 바뀐:
         왜 = f"읽기만 하라 했는데 {len(바뀐)}개를 고쳤다: {' · '.join(바뀐[:3])}"
+    # ★ 말을 **먼저 꺼내 두고** 치운다 — 지운 뒤에 읽으면 빈 글이 된다
+    읽을것, 끝것 = 그손.읽을말(나온말, 탈말), 그손.끝말(나온말, 탈말)
+    그손.말자리 = None
+    shutil.rmtree(말집, ignore_errors=True)
+
     return {"손": 그손.이름,
             "됐나": (끝난코드 == 0 and not 끊겼나 and not (읽기전용 and 바뀐)),
             "끝난코드": 끝난코드,
-            "나온말": 나온말 or "", "탈말": 탈말 or "", "끝말": 그손.끝말(나온말),
-            "읽을말": 그손.읽을말(나온말),
+            "나온말": 나온말 or "", "탈말": 탈말 or "",
+            "끝말": 끝것, "읽을말": 읽을것,
             "바뀐파일": 바뀐, "원래더럽던것": 원래, "차이": 차,
             "든시간": round(든시간, 1), "끊겼나": 끊겼나, "머리": 전["머리"],
             "읽기전용": 읽기전용, "왜": 왜}
@@ -370,6 +410,26 @@ def _self_check() -> None:
     assert 클로드().읽을말("") == ""
     # 딴 손은 안 싸니까 그대로
     assert 코덱스().읽을말(" 다 됐다 \n") == "다 됐다"
+    # ★★ **stdout 이 비면 stderr 를 본다.** 안 그러면 「탈났다」고만 하고 까닭이 빈
+    #   칸이 된다 — codex 가 실제로 그랬다(모든 말을 stderr 로 낸다 · 2026-09-24).
+    assert 코덱스().읽을말("", "ERROR: 한도에 걸렸다") == "ERROR: 한도에 걸렸다"
+    assert 클로드().읽을말("", "죽었다") == "죽었다"
+    assert 손().읽을말("", "까닭") == "까닭"
+    assert 코덱스().끝말("", "첫 줄\n마지막 줄") == "마지막 줄"
+    # stdout 이 있으면 그것이 이긴다 — stderr 는 되짚을 자리일 뿐
+    assert 코덱스().읽을말("한 말", "시끄러운 머리말") == "한 말"
+
+    # ★ codex 는 `-o` 로 **마지막 말만 파일에 받는다**. 그것이 가장 깨끗하다.
+    with tempfile.TemporaryDirectory() as _말tmp:
+        손말 = 코덱스()
+        손말.말자리 = Path(_말tmp) / "끝말.txt"
+        assert "-o" in 손말.명령("보기만", 읽기전용=True), 손말.명령("보기만", True)
+        assert str(손말.말자리) in 손말.명령("보기만", 읽기전용=True)
+        assert 손말.읽을말("", "시끄러운 머리말") == "시끄러운 머리말"   # 아직 안 적혔다
+        손말.말자리.write_text("  판정: 좋다  \n", encoding="utf-8")
+        assert 손말.읽을말("stdout 것", "stderr 것") == "판정: 좋다", 손말.읽을말("a", "b")
+    # 말자리가 없으면 깃발도 없다 — 없는 파일을 가리키면 codex 가 탈난다
+    assert "-o" not in 코덱스().명령("보기만", 읽기전용=True)
 
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")
@@ -390,8 +450,8 @@ def _self_check() -> None:
             def 명령(self, 지시, 읽기전용=False):
                 return [self.실행파일]
 
-            def 읽을말(self, 나온것):
-                return 클로드().읽을말(나온것)
+            def 읽을말(self, 나온것, 탈난것=""):
+                return 클로드().읽을말(나온것, 탈난것)
 
         옛길, 옛자리 = os.environ.get("PATH", ""), 더볼자리
         globals()["더볼자리"] = (*옛자리, str(가짜빈))
@@ -446,6 +506,48 @@ def _self_check() -> None:
         assert 난것["바뀐파일"] == ["b.py"], 난것["바뀐파일"]
         assert "오너가고친것.py" in 난것["원래더럽던것"], 난것["원래더럽던것"]
         assert "조심" in 사람말(난것), 사람말(난것)
+
+        # ★★ **탈난 까닭이 빈 칸이면 안 된다.** stderr 로만 말하는 손이 있다.
+        class _탈만말하는손(손):
+            이름, 실행파일 = "탈만", "python3"
+
+            def 있나(self):
+                return True
+
+            def 명령(self, 지시, 읽기전용=False):
+                import sys as _s
+                return [_s.executable, "-c",
+                        "import sys; sys.stderr.write('ERROR: 한도에 걸렸다'); sys.exit(1)"]
+
+        난것 = 돌리기("CliApp", "일해라", 뿌리=뿌리, 손물건=_탈만말하는손())
+        assert not 난것["됐나"], 난것
+        assert 난것["읽을말"] == "ERROR: 한도에 걸렸다", 난것["읽을말"]
+        assert "한도" in 사람말(난것), 사람말(난것)
+
+        # ★★ **stdin 을 막는다.** 열어 두면 stdin 을 기다리는 손이 영영 안 끝난다
+        #   (codex 가 「Reading additional input from stdin…」 하고 선다).
+        class _stdin기다리는손(손):
+            이름, 실행파일 = "기다림", "python3"
+
+            def 있나(self):
+                return True
+
+            def 명령(self, 지시, 읽기전용=False):
+                import sys as _s
+                return [_s.executable, "-c",
+                        "import sys; print(len(sys.stdin.read()))"]
+
+        t0 = time.perf_counter()
+        난것 = 돌리기("CliApp", "일해라", 뿌리=뿌리, 제한초=8, 손물건=_stdin기다리는손())
+        assert not 난것["끊겼나"], "stdin 이 열려 있어 손이 기다렸다"
+        assert 난것["읽을말"] == "0", 난것["읽을말"]
+        assert time.perf_counter() - t0 < 8, "stdin 을 기다리느라 늦었다"
+
+        # ★ 말집은 **프로젝트 밖**이라 바뀐 파일로 안 세어진다. 그리고 치워진다.
+        손치움 = 코덱스()
+        난것 = 돌리기("CliApp", "일해라", 뿌리=뿌리, 손물건=가짜())
+        assert 난것["바뀐파일"] == [], 난것["바뀐파일"]
+        assert 손치움.말자리 is None
 
         # ★★ **성공을 말로 재지 않는다** — 「됐다」고 해도 끝난 코드가 0 이 아니면 탈이다
         난것 = 돌리기("CliApp", "실패해라", 뿌리=뿌리, 손물건=가짜(끝난코드=3))

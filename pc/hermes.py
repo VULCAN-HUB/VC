@@ -573,8 +573,8 @@ def _self_check() -> None:
                               ensure_ascii=False)
                 return [_s.executable, "-c", f"print({싼것!r})"]
 
-            def 읽을말(self, 나온것):
-                return _시둘.클로드().읽을말(나온것)
+            def 읽을말(self, 나온것, 탈난것=""):
+                return _시둘.클로드().읽을말(나온것, 탈난것)
 
         난것 = 협업(창고둘, "Duet", "a.py 의 x 를 2로", 뿌리=뿌리둘,
                  짓는물건=_시둘.가짜(str(자리둘 / "a.py"), "x = 2\n"),

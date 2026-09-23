@@ -2178,8 +2178,8 @@ def run() -> None:
                               ensure_ascii=False)
                 return [_s.executable, "-c", f"print({싼것!r})"]
 
-            def 읽을말(self, 나온것):
-                return _시엘검.클로드().읽을말(나온것)
+            def 읽을말(self, 나온것, 탈난것=""):
+                return _시엘검.클로드().읽을말(나온것, 탈난것)
 
         _난맡검.clear()
         _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 11로",
