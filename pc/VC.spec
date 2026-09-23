@@ -205,5 +205,15 @@ if MAC:
             "NSMicrophoneUsageDescription": "VC 에게 말로 시키려고 마이크를 쓴다",
             # 폰 앱·같은 공유기 기기가 붙는 서버(8765)
             "NSLocalNetworkUsageDescription": "같은 와이파이의 폰 앱이 VC 창고에 붙는다",
+            # ★★ **창고가 `~/Documents/VC` 다.** 맥은 Documents 를 권한으로 막는데,
+            #   문구가 없으면 **묻지도 않고 그냥 매달린다** — Finder 로 띄운 앱이
+            #   `os.scandir` 에서 굳어 서버도 창도 안 떴다(실기로 잡았다 · 2026-09-24).
+            #   터미널로 돌릴 때는 터미널의 허락을 물려받아 잘 돌아서, **구운 것으로만
+            #   나던 탈**이다. 문구를 넣어야 맥이 물어보고, 오너가 허락할 수 있다.
+            "NSDocumentsFolderUsageDescription":
+                "VC 의 기록 창고가 문서 폴더의 VC 안에 있다",
+            # 창고를 딴 자리로 옮겨 둔 경우까지 — 물어볼 자리를 미리 열어 둔다
+            "NSDesktopFolderUsageDescription": "창고를 바탕화면에 두었을 때만 쓴다",
+            "NSDownloadsFolderUsageDescription": "받은 모델·글을 들일 때만 쓴다",
         },
     )

@@ -1005,6 +1005,20 @@ def _self_check() -> None:
         assert not _안적힌, ("VC.spec 의 hiddenimports 에 없다 — 구운 판에서 죽는다: "
                           + ", ".join(_안적힌))
 
+        # ★★ **맥이 막는 폴더를 쓰면 문구가 있어야 한다.** 없으면 맥은 **묻지도 않고**
+        #   막고, 우리는 `os.scandir` 에서 통째로 굳는다 — Finder 로 띄운 앱이
+        #   서버도 창도 못 띄운 채 0% 로 매달려 있었다(실기로 잡았다 · 2026-09-24).
+        #   터미널에서는 터미널의 허락을 물려받아 잘 돌아서, **구운 것으로만 나던 탈**이다.
+        _막는폴더 = {"Documents": "NSDocumentsFolderUsageDescription",
+                  "Desktop": "NSDesktopFolderUsageDescription",
+                  "Downloads": "NSDownloadsFolderUsageDescription"}
+        _쓰는자리 = str(paths.data_dir())
+        for _칸, _문구 in _막는폴더.items():
+            if f"/{_칸}/" in _쓰는자리 + "/":
+                assert _문구 in _스펙글, (
+                    f"창고가 {_칸} 안인데 VC.spec 에 {_문구} 가 없다 — "
+                    "맥이 묻지도 않고 막아서 구운 앱이 켜다 굳는다")
+
     print("eb self-check 통과")
 
 
