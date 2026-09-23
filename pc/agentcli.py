@@ -69,6 +69,26 @@ def 길() -> str:
     return os.pathsep.join(자리)
 
 
+꼬리최대 = 3000           # stderr 를 되짚을 때 남길 끝자락
+
+
+def 꼬리(글: str, 최대: int = 꼬리최대) -> str:
+    """끝에서부터 남긴다. **탈난 까닭은 끝에 있다.**
+
+    ★★ 앞에서 자르면 머리말만 남고 까닭이 잘려 나간다 — codex 의 stderr 가 딱
+       그 꼴이었다(머리말 + 우리가 준 지시가 통째로 앞에 있고 ERROR 는 맨 끝).
+    """
+    글 = (글 or "").strip()
+    if len(글) <= 최대:
+        return 글
+    잘린 = 글[-최대:]
+    # 줄 가운데서 끊지 않는다 — 반 토막 줄은 읽기 나쁘다
+    금 = 잘린.find("\n")
+    if 0 <= 금 < 200:
+        잘린 = 잘린[금 + 1:]
+    return "…(앞은 줄였다)\n" + 잘린
+
+
 def 찾기(실행파일: str) -> str:
     """그 CLI 의 온전한 자리. 없으면 빈 글.
 
@@ -114,7 +134,7 @@ class 손:
            안 보면 「탈났다」고만 하고 **왜인지는 빈 칸**이 된다(codex 가 실제로 그랬다:
            한도 오류가 통째로 stderr 에 있어 보고가 비었다 · 2026-09-24).
         """
-        return (나온것 or "").strip() or (탈난것 or "").strip()
+        return (나온것 or "").strip() or 꼬리(탈난것)
 
     def 끝말(self, 나온것: str, 탈난것: str = "") -> str:
         """마지막 한 줄. 보고에 쓴다 — **성공 판정에는 안 쓴다.**"""
@@ -148,7 +168,7 @@ class 클로드(손):
         """
         글 = (나온것 or "").strip()
         if not 글:
-            return (탈난것 or "").strip()
+            return 꼬리(탈난것)
         if not 글.startswith("{"):
             return 글
         try:
@@ -185,7 +205,7 @@ class 코덱스(손):
 
     def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
         # ★ `-o` 가 적어 준 것이 가장 깨끗하다. 없으면 stdout, 그것도 없으면 stderr.
-        return self.끝난말() or (나온것 or "").strip() or (탈난것 or "").strip()
+        return self.끝난말() or (나온것 or "").strip() or 꼬리(탈난것)
 
 
 class 가짜(손):
@@ -413,6 +433,14 @@ def _self_check() -> None:
     # ★★ **stdout 이 비면 stderr 를 본다.** 안 그러면 「탈났다」고만 하고 까닭이 빈
     #   칸이 된다 — codex 가 실제로 그랬다(모든 말을 stderr 로 낸다 · 2026-09-24).
     assert 코덱스().읽을말("", "ERROR: 한도에 걸렸다") == "ERROR: 한도에 걸렸다"
+    # ★★ **되짚을 때는 꼬리를 잡는다** — 탈난 까닭은 끝에 있다. 앞에서 자르면
+    #   머리말만 남는다(codex stderr 가 그 꼴이었다: 머리말+지시가 앞, ERROR 가 끝).
+    시끄러운 = "머리말\n" * 4000 + "ERROR: 한도에 걸렸다"
+    난말 = 코덱스().읽을말("", 시끄러운)
+    assert 난말.endswith("ERROR: 한도에 걸렸다"), 난말[-80:]
+    assert len(난말) <= 꼬리최대 + 40, len(난말)
+    assert 난말.startswith("…(앞은 줄였다)"), 난말[:40]
+    assert 꼬리("짧다") == "짧다"
     assert 클로드().읽을말("", "죽었다") == "죽었다"
     assert 손().읽을말("", "까닭") == "까닭"
     assert 코덱스().끝말("", "첫 줄\n마지막 줄") == "마지막 줄"
