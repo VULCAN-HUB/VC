@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -105,6 +106,14 @@ class 손:
     실행파일 = ""
     # ★ 한 판마다 `돌리기` 가 채워 준다. 마지막 말을 **파일로** 받는 손이 쓴다.
     말자리: Path | None = None
+    # ★★ **이어 말하기.** 앞 판의 세션을 주면 그 대화를 **이어서** 한다 — 이것이
+    #   없으면 한 마디 할 때마다 처음 보는 사이가 되어 「채팅」이 아니다.
+    #   실기로 쟀다(2026-09-24): 「내가 좋아하는 숫자는 47」 뒤에 이어 물으니 47 이라 했다.
+    이어서: str = ""
+
+    def 세션찾기(self, 나온것: str, 탈난것: str = "") -> str:
+        """이번 판의 세션 이름. 다음 판에 `이어서` 로 돌려주면 대화가 이어진다."""
+        return ""
 
     def 끝난말(self) -> str:
         """손이 `말자리` 에 적어 둔 마지막 말. 안 쓰는 손은 빈 글."""
@@ -156,8 +165,22 @@ class 클로드(손):
     실행파일 = "claude"
 
     def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
+        # ★ 이어 말할 때는 `--resume` 을 붙인다. 실기 확인(2026-09-24): 앞 판에서 말한
+        #   것을 다음 판이 기억했다. 안 붙이면 매번 처음 보는 사이가 된다.
+        이음 = ["--resume", self.이어서] if self.이어서 else []
         return [self.실행파일, "-p", 지시, "--output-format", "json",
-                "--permission-mode", "plan" if 읽기전용 else "acceptEdits"]
+                "--permission-mode", "plan" if 읽기전용 else "acceptEdits", *이음]
+
+    def 세션찾기(self, 나온것: str, 탈난것: str = "") -> str:
+        글 = (나온것 or "").strip()
+        if not 글.startswith("{"):
+            return ""
+        try:
+            싼것 = json.loads(글)
+        except ValueError:
+            return ""
+        것 = 싼것.get("session_id") if isinstance(싼것, dict) else None
+        return 것.strip() if isinstance(것, str) else ""
 
     def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
         """★★ `--output-format json` 은 **껍데기에 싸서** 준다 — 사람 말은 `result` 안에 있다.
@@ -198,10 +221,23 @@ class 코덱스(손):
     실행파일 = "codex"
 
     def 명령(self, 지시: str, 읽기전용: bool = False) -> list[str]:
-        # ★ 기본이 읽기 전용이라 **보는 손일 때는 샌드박스 깃발을 안 준다** — 문서가 그렇다.
+        # ★ 기본이 읽기 전용이라 **보는 손일 때는 아무 깃발도 안 준다** — 문서가 그렇다.
         말깃발 = ["-o", str(self.말자리)] if self.말자리 else []
+        if self.이어서:
+            # ★★ `exec resume` 에는 **`--sandbox` 가 없다**(도움말로 확인). 대신 설정
+            #   덮어쓰기가 먹는다 — `--strict-config` 로 걸어 보니 머리말에
+            #   `sandbox: workspace-write` 라고 찍혔다(실기 · 2026-09-24).
+            판깃발 = [] if 읽기전용 else ["-c", 'sandbox_mode="workspace-write"']
+            return [self.실행파일, "exec", "resume", *판깃발, *말깃발,
+                    self.이어서, 지시]
         판깃발 = [] if 읽기전용 else ["--sandbox", "workspace-write"]
         return [self.실행파일, "exec", *판깃발, *말깃발, 지시]
+
+    def 세션찾기(self, 나온것: str, 탈난것: str = "") -> str:
+        # ★ codex 는 머리말을 **stderr** 에 찍는다 — `session id: <uuid>` 가 거기 있다.
+        맞은것 = re.search(r"session id:\s*([0-9A-Fa-f][0-9A-Fa-f-]{7,})",
+                        (탈난것 or "") + "\n" + (나온것 or ""))
+        return 맞은것.group(1) if 맞은것 else ""
 
     def 읽을말(self, 나온것: str, 탈난것: str = "") -> str:
         # ★ `-o` 가 적어 준 것이 가장 깨끗하다. 없으면 stdout, 그것도 없으면 stderr.
@@ -278,12 +314,15 @@ def 지금상태(자리: Path) -> dict:
 
 def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한초: int = 기본제한초,
         뿌리: Path | None = None, 멈춤=None, 손물건: 손 | None = None,
-        읽기전용: bool = False) -> dict:
+        읽기전용: bool = False, 이어서: str = "") -> dict:
     """에이전트 CLI 를 프로젝트 폴더에서 돌린다.
 
     돌려주는 것:
         `{"손", "됐나", "끝난코드", "나온말", "읽을말", "탈말", "끝말", "바뀐파일",
-          "원래더럽던것", "차이", "든시간", "왜"}`
+          "원래더럽던것", "차이", "든시간", "세션", "왜"}`
+
+    ★★ `이어서` 에 앞 판의 `세션` 을 주면 **그 대화를 이어서** 한다. 안 주면 매번
+       처음 보는 사이가 된다 — 「채팅」이 되려면 이것이 있어야 한다.
 
     ★ `나온말` 은 **날것**, `읽을말` 은 **껍데기를 벗긴 사람 말**이다. 사람·창고에
       보일 때는 `읽을말`, 자취로 남길 때는 `나온말`.
@@ -316,6 +355,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     #   안에 두면 git 이 「바뀐 파일」로 세어 누가 뭘 고쳤는지 어지러워진다.
     말집 = tempfile.mkdtemp(prefix="vc-손말-")
     그손.말자리 = Path(말집) / "끝말.txt"
+    그손.이어서 = (이어서 or "").strip()
 
     명령줄 = list(그손.명령(지시, 읽기전용))
     if 명령줄:
@@ -373,7 +413,11 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
         왜 = f"읽기만 하라 했는데 {len(바뀐)}개를 고쳤다: {' · '.join(바뀐[:3])}"
     # ★ 말을 **먼저 꺼내 두고** 치운다 — 지운 뒤에 읽으면 빈 글이 된다
     읽을것, 끝것 = 그손.읽을말(나온말, 탈말), 그손.끝말(나온말, 탈말)
+    # ★★ **세션은 실패했어도 챙긴다.** 한도에 걸린 판도 대화 자체는 열려 있어,
+    #   버리면 다음 마디가 처음 보는 사이로 돌아간다.
+    세션 = 그손.세션찾기(나온말, 탈말) or 그손.이어서
     그손.말자리 = None
+    그손.이어서 = ""
     shutil.rmtree(말집, ignore_errors=True)
 
     return {"손": 그손.이름,
@@ -383,7 +427,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
             "끝말": 끝것, "읽을말": 읽을것,
             "바뀐파일": 바뀐, "원래더럽던것": 원래, "차이": 차,
             "든시간": round(든시간, 1), "끊겼나": 끊겼나, "머리": 전["머리"],
-            "읽기전용": 읽기전용, "왜": 왜}
+            "읽기전용": 읽기전용, "세션": 세션, "왜": 왜}
 
 
 def 사람말(난것: dict) -> str:
@@ -458,6 +502,29 @@ def _self_check() -> None:
         assert 손말.읽을말("stdout 것", "stderr 것") == "판정: 좋다", 손말.읽을말("a", "b")
     # 말자리가 없으면 깃발도 없다 — 없는 파일을 가리키면 codex 가 탈난다
     assert "-o" not in 코덱스().명령("보기만", 읽기전용=True)
+
+    # ★★ **이어 말하기.** 앞 판의 세션을 주면 그 대화를 이어서 한다 — 실기로 쟀다
+    #   (2026-09-24): 「좋아하는 숫자는 47」 뒤에 이어 물으니 47 이라 답했다.
+    이은클 = 클로드()
+    이은클.이어서 = "SESS-1"
+    assert "--resume" in 이은클.명령("또"), 이은클.명령("또")
+    assert 이은클.명령("또")[-1] == "SESS-1"
+    assert "--resume" not in 클로드().명령("처음")     # 처음엔 안 붙인다
+    assert 클로드().세션찾기('{"session_id":"S9","result":"ok"}') == "S9"
+    assert 클로드().세션찾기("그냥 말") == "" and 클로드().세션찾기("") == ""
+    # codex 는 머리말을 stderr 에 찍는다 — 거기서 세션을 줍는다(실기로 본 그 줄이다)
+    assert 코덱스().세션찾기("", "session id: 01a0cf74-bd65-78c1-85ec-591273451563") \
+        == "01a0cf74-bd65-78c1-85ec-591273451563"
+    assert 코덱스().세션찾기("", "아무 말") == ""
+    이은코 = 코덱스()
+    이은코.이어서 = "ID9"
+    # ★ `exec resume` 에는 `--sandbox` 가 없다(도움말) — 설정 덮어쓰기로 연다.
+    #   `--strict-config` 로 걸어 보니 머리말에 `sandbox: workspace-write` 라 찍혔다.
+    assert 이은코.명령("고쳐라")[:3] == ["codex", "exec", "resume"], 이은코.명령("고쳐라")
+    assert 'sandbox_mode="workspace-write"' in 이은코.명령("고쳐라")
+    assert "--sandbox" not in 이은코.명령("고쳐라"), "resume 에 없는 깃발을 준다"
+    assert 이은코.명령("고쳐라")[-2:] == ["ID9", "고쳐라"]
+    assert 'sandbox_mode="workspace-write"' not in 이은코.명령("보기만", 읽기전용=True)
 
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")
@@ -534,6 +601,28 @@ def _self_check() -> None:
         assert 난것["바뀐파일"] == ["b.py"], 난것["바뀐파일"]
         assert "오너가고친것.py" in 난것["원래더럽던것"], 난것["원래더럽던것"]
         assert "조심" in 사람말(난것), 사람말(난것)
+
+        # ★★ **세션은 실패했어도 챙긴다** — 버리면 다음 마디가 처음 보는 사이가 된다
+        class _세션손(손):
+            이름, 실행파일 = "세션", "python3"
+
+            def 있나(self):
+                return True
+
+            def 명령(self, 지시, 읽기전용=False):
+                import sys as _s
+                return [_s.executable, "-c",
+                        "import sys; sys.stderr.write('session id: 01a0cf74-bd65-78c1-85ec-591273451563'); sys.exit(1)"]
+
+            def 세션찾기(self, 나온것, 탈난것=""):
+                return 코덱스().세션찾기(나온것, 탈난것)
+
+        난것 = 돌리기("CliApp", "일해라", 뿌리=뿌리, 손물건=_세션손())
+        assert not 난것["됐나"] and 난것["세션"] == "01a0cf74-bd65-78c1-85ec-591273451563", 난것
+        # 손물건은 다시 쓰이니 **판이 끝나면 비워 둔다** — 안 비우면 딴 대화로 샌다
+        손비움 = 코덱스()
+        돌리기("CliApp", "일해라", 뿌리=뿌리, 손물건=손비움, 이어서="ZZZ")
+        assert 손비움.이어서 == "", 손비움.이어서
 
         # ★★ **탈난 까닭이 빈 칸이면 안 된다.** stderr 로만 말하는 손이 있다.
         class _탈만말하는손(손):

@@ -38,7 +38,7 @@ import settings
 import talklog
 
 from PyQt5.QtCore import QEvent, QFileSystemWatcher, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QTextCursor
+from PyQt5.QtGui import QKeySequence, QTextBlockFormat, QTextCursor
 from PyQt5.QtWidgets import (
     QApplication,
     QShortcut,
@@ -1408,6 +1408,18 @@ class MainWindow(QWidget):
                 and obj is getattr(self, "say", None)):
             self.채팅열기()
             return True
+        # ★★ **엔터로도 열린다.** 누르기만 두면 손을 마우스로 옮겨야 한다 — 채팅은
+        #   키보드로 시작해서 키보드로 끝나는 것이 자연스럽다(오너 2026-09-24).
+        #   ★ **글 치는 칸에 손이 가 있으면 안 가로챈다.** 가로채면 찾기 칸 엔터도,
+        #     글 쓰다 줄 바꾸기도 다 망가진다 — 빈 데에서 누를 때만 연다.
+        if (event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+                and not self._글칸인가(obj)
+                and getattr(self, "chat", None) is not None
+                and not self.chat.isVisible()):
+            self.채팅열기(True)
+            return True
         # 누름이 어디에 떨어졌는지 최근 넷을 들고 있는다 — 친 말이 글로 새면 자국에 같이 적는다.
         if event.type() == QEvent.MouseButtonPress and obj.isWidgetType():
             self._누름들 = (getattr(self, "_누름들", []) +
@@ -2398,7 +2410,7 @@ class MainWindow(QWidget):
         self._later(self.코드그리기)
 
     def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None,
-              보는손: str = "", 보는물건=None) -> None:
+              보는손: str = "", 보는물건=None, 이어서: str = "") -> None:
         """에이전트 CLI 에게 맡긴다. **느린 부름은 딴 실에서** — 창이 굳으면 안 된다.
 
         `보는손` 을 주면 **협업**이다 — 하나가 고치고 다른 하나가 그 차이를 본다.
@@ -2426,7 +2438,9 @@ class MainWindow(QWidget):
                 self.report(f"보는 손 「{보는손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
                 return
         self._맡김중, self._맡김멈춤 = 프로젝트, False
+        self._맡김손 = 보는손 and f"{손}+{보는손}" or 손
         self._맡김시작 = time.monotonic()
+        self._채팅도는중(f"● {self._맡김손} 가 생각 중…")
         self._맡김타이머.start()
         self._later(self.코드그리기)          # 단추가 「멈추기」로 바뀐다
         누가 = f"{손} → {보는손}" if 보는손 else 손
@@ -2438,9 +2452,9 @@ class MainWindow(QWidget):
             if 보는손:
                 난것 = hermes.협업돌리기(프로젝트, 지시, 손, 보는손,
                                   멈춤=lambda: self._맡김멈춤,
-                                  짓는물건=손물건, 보는물건=보는물건)
+                                  짓는물건=손물건, 보는물건=보는물건, 이어서=이어서)
             else:
-                난것 = {"지음": agentcli.돌리기(프로젝트, 지시, 손,
+                난것 = {"지음": agentcli.돌리기(프로젝트, 지시, 손, 이어서=이어서,
                                           멈춤=lambda: self._맡김멈춤, 손물건=손물건)}
             난것["지시"], 난것["협업"] = 지시, bool(보는손)
             self.handoff_done.emit(프로젝트, 난것)
@@ -2459,6 +2473,7 @@ class MainWindow(QWidget):
             return
         초 = int(time.monotonic() - self._맡김시작)
         self.footer.setText(f"  /  ▶ {self._맡김중} 에 맡긴 지 {초}초 — 코드 칸에서 멈출 수 있어")
+        self._채팅도는중(f"● {self._맡김손 or '에이전트'} 가 {초}초째 생각 중…")
 
     def _맡김끝(self, 프로젝트: str, 돌림: dict) -> None:
         """딴 실이 끝났다. **창고 쓰기는 여기서** 한다 — 같은 색인을 두 실이 만지면 안 된다."""
@@ -2467,8 +2482,14 @@ class MainWindow(QWidget):
         self._맡김중, self._맡김멈춤 = "", False
         self._맡김타이머.stop()
         self.footer.setText("")
+        self._채팅도는중("")
         지시 = 돌림.get("지시") or ""
         지음 = 돌림.get("지음") or {}
+        # ★★ **줄기를 챙긴다.** 안 챙기면 다음 마디가 처음 보는 사이로 돌아가
+        #   「채팅」이 아니라 한 마디씩 던지는 것이 된다.
+        줄기 = 지음.get("세션") or ""
+        if 줄기 and 지음.get("손"):
+            self._채팅줄기[(프로젝트, 지음["손"])] = 줄기
         if 돌림.get("협업"):
             난것 = hermes.협업뒤(self.notes, 프로젝트, 지시, 돌림)
         else:
@@ -3198,7 +3219,7 @@ class MainWindow(QWidget):
 
         report.딴실로("AI 도움(요약·번역)", 일)
 
-    def 창고에묻기(self, 물음: str) -> None:
+    def 창고에묻기(self, 물음: str, 앞말: list | None = None) -> None:
         """묻기(Query) — 서버에 **창고를 뒤져 답해 달라**고 한다. 딴 실에서 돈다.
 
         ★ 모델 답은 실측 15초쯤이라 창에서 곧장 부르면 **그동안 창이 굳는다.**
@@ -3214,7 +3235,8 @@ class MainWindow(QWidget):
             답, 근거 = "", []
             요청 = urllib.request.Request(
                 f"{link.base}/eb/v1/wiki/ask", method="POST",
-                data=json.dumps({"text": 물음}, ensure_ascii=False).encode(),
+                data=json.dumps({"text": 물음, "history": list(앞말 or [])},
+                                ensure_ascii=False).encode(),
                 headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(요청, timeout=180) as r:
@@ -3728,6 +3750,10 @@ class MainWindow(QWidget):
     def _채팅칸만들기(self) -> QWidget:
         """말 주고받는 칸. **접혀 있다가 올라온다.**"""
         self._채팅엔진 = "로컬"
+        # ★★ **대화는 이어진다.** 엔진·프로젝트마다 제 줄기를 들고 있다 — 섞으면
+        #   claude 에게 하던 말이 codex 대화로 새 들어간다.
+        self._채팅줄기: dict[tuple, str] = {}
+        self._채팅앞말: list[dict] = []
         칸 = QFrame()
         칸.setObjectName("chat")
         줄 = QVBoxLayout(칸)
@@ -3760,7 +3786,25 @@ class MainWindow(QWidget):
             self._엔진단추[이름] = 단추
             고름.addWidget(단추)
         고름.addStretch(1)
+        # ★ 이어 말하다 **줄기를 끊는** 자리. 없으면 지난 말이 영영 따라다닌다.
+        새것 = QPushButton("새 대화")
+        새것.setObjectName("quiet")
+        새것.setMinimumWidth(1)
+        새것.setToolTip("여태 한 말을 잊고 처음부터 — 엉뚱한 데로 흘렀을 때 누른다")
+        새것.clicked.connect(lambda: self.채팅새로())
+        self._새대화단추 = 새것
+        고름.addWidget(새것)
         줄.addLayout(고름)
+
+        # ★★ **도는 중인 것이 보여야 한다.** 에이전트는 십몇 초씩 걸리는데 아무 표시도
+        #   없으면 「먹통인가」 싶어 또 보낸다 — 값비싼 손이 둘 돌면 같은 폴더가 엉킨다.
+        self.chat_status = QLabel("")
+        self.chat_status.setObjectName("chatstatus")
+        self.chat_status.setStyleSheet(theme.small(theme.T.ACCENT, 0.85, 10))
+        self.chat_status.setMinimumWidth(1)
+        self.chat_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.chat_status.setVisible(False)
+        줄.addWidget(self.chat_status)
 
         self.chat_box = QLineEdit()
         self.chat_box.setObjectName("ask")
@@ -3776,6 +3820,22 @@ class MainWindow(QWidget):
         self.chat = 칸
         self._엔진말하기()
         return 칸
+
+    @staticmethod
+    def _글칸인가(것) -> bool:
+        """글을 치는 칸인가. **여기 걸리면 엔터를 안 가로챈다.**
+
+        ★ 칸 자체가 아니라 **그 안의 부품**에 키가 떨어질 수 있다(`QTextEdit` 의
+          뷰포트 따위). 그래서 위로 거슬러 올라가며 본다 — 안 그러면 「글 치는
+          중인데 엔터가 먹혔다」가 난다.
+        """
+        for _ in range(6):
+            if 것 is None:
+                return False
+            if isinstance(것, (QLineEdit, QTextEdit)):
+                return True
+            것 = 것.parent() if hasattr(것, "parent") else None
+        return False
 
     def 채팅열기(self, 열까: bool | None = None) -> None:
         """말하는 자리를 누르면 올라오고, 또 누르면 내려간다."""
@@ -3834,14 +3894,33 @@ class MainWindow(QWidget):
         self.chat_box.clear()
         self._채팅적기("나", 말)
         if self._채팅엔진 == "로컬":
-            self.창고에묻기(말)
+            # ★ 로컬은 세션이 없다 — **오간 말을 들고 가서** 이어 답하게 한다.
+            self.창고에묻기(말, 앞말=list(self._채팅앞말))
             return
         # ★ 고칠 자리를 모르면 안 시킨다. 조용히 아무 데나 고치면 되돌리기가 어렵다.
         프로젝트 = getattr(self, "_연프로젝트", "")
         if not 프로젝트:
             self.report("먼저 코드 칸에서 프로젝트를 열어 — 어디를 고칠지 알아야 해.", [])
             return
-        self.맡기기시작(프로젝트, 말, 손=self._채팅엔진)
+        self.맡기기시작(프로젝트, 말, 손=self._채팅엔진,
+                    이어서=self._채팅줄기.get((프로젝트, self._채팅엔진), ""))
+
+    def _채팅도는중(self, 말: str) -> None:
+        """도는 중임을 채팅 칸에 보인다. 빈 말이면 감춘다."""
+        칸 = getattr(self, "chat_status", None)
+        if 칸 is None:
+            return
+        칸.setText(말)
+        칸.setVisible(bool(말))
+
+    def 채팅새로(self) -> None:
+        """줄기를 끊는다 — 여태 한 말을 잊고 처음부터."""
+        self._채팅줄기.clear()
+        self._채팅앞말.clear()
+        기록 = getattr(self, "chat_log", None)
+        if 기록 is not None:
+            기록.clear()
+        self._채팅적기("VC", "새 대화로 시작할게. 여태 한 말은 잊었어.")
 
     def _채팅적기(self, 누가: str, 말: str) -> None:
         """오간 말을 칸에 쌓는다. **VC 가 하는 말은 여기로도 흐른다** — 말하는 자리는
@@ -3850,9 +3929,32 @@ class MainWindow(QWidget):
         말 = (말 or "").strip()
         if 기록 is None or not 말:
             return
-        빛 = theme.css(theme.T.ACCENT if 누가 != "나" else theme.T.DIM, 0.95)
-        기록.append(f'<span style="color:{빛}"><b>{html.escape(누가)}</b></span> '
-                  f'{html.escape(말)}')
+        앞말 = getattr(self, "_채팅앞말", None)
+        if 앞말 is not None:
+            앞말.append({"role": "user" if 누가 == "나" else "assistant", "content": 말})
+            del 앞말[:-20]          # 멀리 간 말은 놓는다 — 다 이고 가면 느려진다
+        # ★ 한 줄에 이름과 말을 붙여 놓으니 어디까지가 누구 말인지 안 읽혔다.
+        #   이름을 위에 얹고 말은 들여 쓴다 — 여러 줄짜리 답이 오면 그 차이가 크다.
+        나인가 = 누가 == "나"
+        빛 = theme.css(theme.T.DIM if 나인가 else theme.T.ACCENT, 0.95)
+        글빛 = theme.css(theme.T.TEXT, 0.92)
+        몸 = html.escape(말).replace("\n", "<br>")
+        # ★★ **마디 사이는 블록 여백으로 벌린다.** `div`·`p` 에 `margin-top` 을 주고
+        #   `setDefaultStyleSheet` 까지 써 봤는데 **둘 다 Qt 가 안 먹어서** 말이 한
+        #   덩이로 붙어 보였다(찍어서 두 번 잡았다). 커서로 주는 것은 먹는다.
+        커서 = 기록.textCursor()
+        커서.movePosition(QTextCursor.End)
+        빈문서 = 기록.document().isEmpty()
+        이름칸 = QTextBlockFormat()
+        이름칸.setTopMargin(0 if 빈문서 else 11)
+        if not 빈문서:
+            커서.insertBlock(이름칸)
+        else:
+            커서.setBlockFormat(이름칸)
+        커서.insertHtml(f'<span style="color:{빛};font-weight:700">'
+                      f'{html.escape(누가)}</span>')
+        커서.insertBlock(QTextBlockFormat())
+        커서.insertHtml(f'<span style="color:{글빛}">{몸}</span>')
         막대 = 기록.verticalScrollBar()
         막대.setValue(막대.maximum())
 

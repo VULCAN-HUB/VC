@@ -2137,6 +2137,10 @@ def run() -> None:
         _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 9로",
                        손물건=_시엘검.가짜(str(_맡자리 / "src" / "main.py"), "x = 9\n"))
         assert _창코드._맡김중 == "CodePanel", "돌고 있다고 표시가 안 된다"
+        # ★★ **도는 중인 것이 채팅에도 보인다** — 아무 표시가 없으면 또 보낸다
+        # ★ 채팅 칸이 접혀 있으면 자식도 «안 보임»이다 — **제 상태**로 재야 한다
+        assert _창코드.chat_status.isVisibleTo(_창코드.chat), "생각 중 표시가 숨어 있다"
+        assert "생각 중" in _창코드.chat_status.text(), _창코드.chat_status.text()
         # ★ 하나 도는 동안 또 시키면 막는다 — 둘이 같은 폴더를 고치면 엉킨다
         _창코드.맡기기시작("CodePanel", "또 시켜본다", 손물건=_시엘검.가짜())
         _끝맡검 = _때맡검.monotonic() + 20
@@ -2146,6 +2150,7 @@ def run() -> None:
         assert _난맡검, "맡기기가 딴 실에서 죽었다 — 끝났다는 신호가 안 왔다"
         app.processEvents()
         assert _창코드._맡김중 == "", "끝났는데 돌고 있다고 남아 있다"
+        assert not _창코드.chat_status.isVisibleTo(_창코드.chat), "끝났는데 생각 중이라고 남아 있다"
         _돌맡검 = (_난맡검["결과"] or {}).get("지음") or {}
         assert _돌맡검["됐나"] and _돌맡검["바뀐파일"] == ["src/main.py"], _돌맡검
         assert (_맡자리 / "src" / "main.py").read_text(encoding="utf-8") == "x = 9\n"
@@ -2253,6 +2258,16 @@ def run() -> None:
         assert _창코드._맡김중 == "", "프로젝트도 안 열고 에이전트가 돌았다"
         assert "프로젝트를 열어" in _창코드._say_text, _창코드._say_text
 
+        # ★★ **마디 사이가 벌어져야 읽힌다.** `div`·`p` 여백은 Qt 가 안 먹어서 말이
+        #   한 덩이로 붙어 보였다(찍어서 두 번 잡았다) — 블록 여백으로 준다.
+        _쪽들 = []
+        _블록 = _창코드.chat_log.document().begin()
+        while _블록.isValid():
+            _쪽들.append((_블록.text(), _블록.blockFormat().topMargin()))
+            _블록 = _블록.next()
+        assert any(여백 > 0 for _, 여백 in _쪽들), f"마디 사이가 안 벌어진다: {_쪽들}"
+        assert _쪽들[0][1] == 0, "첫 마디 위에도 여백이 붙는다"
+
         # ★ 오간 말이 칸에 쌓인다 — 말하는 자리는 한 줄이라 앞말이 지워진다
         _쌓인 = _창코드.chat_log.toPlainText()
         assert "뭐든 고쳐라" in _쌓인 and "프로젝트를 열어" in _쌓인, _쌓인[-300:]
@@ -2264,12 +2279,14 @@ def run() -> None:
         # ★★ **로컬은 창고에 묻는다.** 엔진이 바뀌어도 창구는 하나다.
         _물은것 = []
         _옛묻기 = _창코드.창고에묻기
-        _창코드.창고에묻기 = lambda 말: _물은것.append(말)
+        _창코드.창고에묻기 = lambda 말, 앞말=None: _물은것.append((말, list(앞말 or [])))
         try:
             _창코드.채팅엔진고르기("로컬")
             _창코드.chat_box.setText("VC 가 뭐야")
             _창코드.채팅보내기()
-            assert _물은것 == ["VC 가 뭐야"], _물은것
+            assert _물은것 and _물은것[0][0] == "VC 가 뭐야", _물은것
+            # ★★ **앞말을 들고 간다** — 로컬은 세션이 없어 이것 없이는 이어 말 못 한다
+            assert any("뭐든 고쳐라" == m["content"] for m in _물은것[0][1]), _물은것[0][1]
         finally:
             _창코드.창고에묻기 = _옛묻기
 
@@ -2286,6 +2303,66 @@ def run() -> None:
             assert _맡긴것 == [("CodePanel", "x 를 3으로", "codex")], _맡긴것
         finally:
             _창코드.맡기기시작 = _옛맡김
+
+        # ★★ **엔터로도 열린다**(오너 2026-09-24). 누르기만 두면 손을 마우스로 옮겨야 한다.
+        from PyQt5.QtGui import QKeyEvent as _키채팅
+
+        def _엔터(대상):
+            _창코드.eventFilter(대상, _키채팅(_이벤트채팅.KeyPress, Qt.Key_Return,
+                                          Qt.NoModifier))
+            app.processEvents()
+
+        _창코드.채팅열기(False)
+        _엔터(_창코드.graph)
+        assert _창코드.chat.isVisible(), "엔터를 눌렀는데 채팅이 안 열린다"
+        # ★★ **글 치는 칸에서는 안 가로챈다** — 찾기 칸 엔터도, 글 쓰다 줄 바꾸기도
+        #   다 망가진다. 뷰포트처럼 **칸 속 부품**에 떨어져도 안 가로채야 한다.
+        _창코드.채팅열기(False)
+        _엔터(_창코드.ask_box)
+        assert not _창코드.chat.isVisible(), "찾기 칸 엔터를 가로챘다"
+        _엔터(_창코드.chat_log.viewport())
+        assert not _창코드.chat.isVisible(), "글칸 속 부품의 엔터를 가로챘다"
+        _창코드.채팅열기(True)
+
+        # ★★ **대화가 이어진다.** 세션을 안 물려주면 한 마디마다 처음 보는 사이가 된다.
+        _이은것 = []
+        _옛맡김2 = _창코드.맡기기시작
+        _창코드.맡기기시작 = lambda p, t, 손="", 이어서="", **ㄴ: _이은것.append((t, 손, 이어서))
+        try:
+            _창코드._연프로젝트 = "CodePanel"
+            _창코드.채팅엔진고르기("claude")
+            _창코드.chat_box.setText("첫 마디")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("첫 마디", "claude", ""), _이은것   # 처음엔 빈 줄기
+            # 한 판이 끝나면서 줄기를 챙긴다
+            _창코드._맡김중 = ""
+            _창코드._맡김끝("CodePanel", {"지시": "첫 마디", "지음": {
+                "손": "claude", "됐나": True, "세션": "SESS-7", "바뀐파일": []}})
+            app.processEvents()
+            assert _창코드._채팅줄기[("CodePanel", "claude")] == "SESS-7", _창코드._채팅줄기
+            _창코드.chat_box.setText("둘째 마디")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("둘째 마디", "claude", "SESS-7"), _이은것[-1]
+            # ★ 엔진이 다르면 **딴 줄기다** — 섞으면 claude 에게 한 말이 codex 로 샌다
+            _창코드.채팅엔진고르기("codex")
+            _창코드.chat_box.setText("코덱스에게")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("코덱스에게", "codex", ""), _이은것[-1]
+            # ★ 「새 대화」는 줄기를 끊는다
+            _창코드.채팅엔진고르기("claude")
+            _창코드.채팅새로()
+            assert _창코드._채팅줄기 == {}, _창코드._채팅줄기
+            _창코드.chat_box.setText("다시 처음")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("다시 처음", "claude", ""), _이은것[-1]
+        finally:
+            _창코드.맡기기시작 = _옛맡김2
+            _상자새 = getattr(_창코드, "_스킬상자", None)
+            if _상자새 is not None:
+                _창코드._스킬상자 = None
+                _상자새.close()
+                app.processEvents()
+
         _창코드.채팅엔진고르기("로컬")
         _창코드.채팅열기(False)
 

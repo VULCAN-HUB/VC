@@ -1570,7 +1570,9 @@ class Handler(BaseHTTPRequestHandler):
         모델 = (self.server.picked.get("using") or {}).get("chat") or ""
         if 모델 and (self.server.cfg.get("backend") or {}).get("kind") == "local":
             손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0, max_tokens=400)
-        난것 = _묻기.묻기(n, 손, 물음)
+        # ★ 오간 말을 주면 **이어서** 답한다. 밖에서 오는 값이라 꼴은 `앞말다듬기` 가 거른다.
+        앞말 = body.get("history") or body.get("앞말") or []
+        난것 = _묻기.묻기(n, 손, 물음, 앞말=앞말 if isinstance(앞말, list) else [])
 
         남긴것 = None
         if body.get("남길까") or body.get("keep"):
@@ -3461,6 +3463,13 @@ def _self_check() -> None:
                                 body="맥에서 한글 경로에 Qt 플러그인이 걸리면 창이 안 뜬다."))
     note_store.reindex()
     import query as _묻9
+
+    # ★★ **앞말이 모델에게 실제로 간다.** 배선만 보면 「받아서 버리는」 것을 못 잡는다.
+    _본말9 = []
+    _묻9.묻기(note_store, lambda 말들: (_본말9.extend(말들), "그렇다")[1], "한글 경로",
+            앞말=[{"role": "user", "content": "앞에 한 말"}])
+    assert any(m["content"] == "앞에 한 말" for m in _본말9), _본말9
+    assert _본말9[-1]["role"] == "user" and "한글 경로" in _본말9[-1]["content"]
 
     _난묻9 = _묻9.묻기(note_store, lambda 말들: "창이 안 뜬다 [[묻기 시험 글]]", "한글 경로")
     assert _난묻9["근거"] == ["묻기 시험 글"], _난묻9

@@ -124,11 +124,34 @@ def 가짜링크지우기(답: str, 본것: list[str]) -> str:
     return LINK_RE.sub(벗기, 답 or "")
 
 
+앞말최대 = 6              # 모델에게 넘길 앞 마디 수. 많이 주면 답이 흐려지고 느려진다
+
+
+def 앞말다듬기(앞말: list | None, 몇: int = 앞말최대) -> list[dict]:
+    """오간 말을 모델이 먹을 꼴로. **믿을 수 있는 것만 추린다.**
+
+    ★★ 바깥에서 들어오는 것이라 꼴을 안 믿는다 — 역할이 이상하면 버린다.
+       서버 문으로도 들어오는 값이다.
+    """
+    나온것 = []
+    for 것 in (앞말 or [])[-몇 * 2:]:
+        if not isinstance(것, dict):
+            continue
+        역할 = str(것.get("role") or 것.get("누가") or "").strip().lower()
+        말 = str(것.get("content") or 것.get("말") or "").strip()
+        역할 = "assistant" if 역할 in ("assistant", "vc", "답") else "user"
+        if 말:
+            나온것.append({"role": 역할, "content": 말[:4000]})
+    return 나온것[-몇:]
+
+
 def 묻기(창고: Notes, 부르기: Callable[[list[dict]], str] | None, 물음: str,
-       몇: int = 한바퀴) -> dict:
+       몇: int = 한바퀴, 앞말: list | None = None) -> dict:
     """창고를 뒤져 답한다. `{"답", "근거", "본것", "왜"}`.
 
     ★ 모델이 없으면 **찾은 것만** 돌려준다 — 그것만으로도 사람에게는 쓸모가 있다.
+    ★★ `앞말` 은 **모델에게만** 준다. 찾기에는 안 섞는다 — 섞으면 지난 말이 검색을
+       끌고 가서, 새로 물은 것과 상관없는 글이 근거로 올라온다.
     """
     물음 = (물음 or "").strip()
     if not 물음:
@@ -141,8 +164,9 @@ def 묻기(창고: Notes, 부르기: Callable[[list[dict]], str] | None, 물음:
         return {"답": "", "근거": [], "본것": 본것, "왜": "모델이 없다"}
 
     말 = 프롬프트.format(물음=물음, 근거=근거글(창고, 본것, 물음))
+    보낼것 = [*앞말다듬기(앞말), {"role": "user", "content": 말}]
     try:
-        답 = (부르기([{"role": "user", "content": 말}]) or "").strip()
+        답 = (부르기(보낼것) or "").strip()
     except Exception as e:
         return {"답": "", "근거": [], "본것": 본것, "왜": f"모델이 답을 못 했다: {type(e).__name__}"}
     답 = re.sub(r"(?s)<think>.*?</think>", "", 답).strip()
@@ -245,6 +269,17 @@ def _self_check() -> None:
         assert wiki.가운데항목 not in 찾기(창고, "한글 경로")
 
         창고.conn.close()
+
+    # ★★ **앞말은 모델에게만 간다** — 찾기에 섞으면 지난 말이 검색을 끌고 간다
+    assert 앞말다듬기(None) == [] and 앞말다듬기([]) == []
+    assert 앞말다듬기([{"role": "user", "content": " 안녕 "}]) == [
+        {"role": "user", "content": "안녕"}]
+    assert 앞말다듬기([{"누가": "VC", "말": "그래"}]) == [
+        {"role": "assistant", "content": "그래"}]
+    assert 앞말다듬기(["쓰레기", {"role": "user", "content": ""}, 3]) == []
+    assert 앞말다듬기([{"role": "sudo", "content": "x"}])[0]["role"] == "user"
+    긴것 = [{"role": "user", "content": str(i)} for i in range(40)]
+    assert len(앞말다듬기(긴것)) == 앞말최대 and 앞말다듬기(긴것)[-1]["content"] == "39"
 
     print("query self-check 통과")
 
