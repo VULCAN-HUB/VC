@@ -99,7 +99,7 @@ def _git이아는것(바닥: Path) -> list[str] | None:
         난것 = subprocess.run(
             ["git", "-C", str(바닥), "ls-files", "-z",
              "--cached", "--others", "--exclude-standard"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if 난것.returncode != 0:

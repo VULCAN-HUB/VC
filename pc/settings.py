@@ -1330,6 +1330,8 @@ def _self_check() -> None:
             paths.save_config({**paths.load_config(), "pair_token": "폰열쇠시험"})
             폰창 = open_dialog(win, n)
             assert "폰 연결" in 폰창.갈래이름 and 폰창.폰QR.isHidden(), "QR 이 단추 없이 떠 있다"
+            # 테일스케일이 없는 기계에서도 돈다 — 주소는 가짜로 끼운다(꺼진 쪽은 위에서 잰다)
+            폰창.테일주소 = lambda: "100.64.0.1"
             폰창.폰단추.click()
             assert not 폰창.폰QR.isHidden() and not 폰창.폰QR.pixmap().isNull(), "QR 을 못 그렸다"
             폰창.deleteLater()

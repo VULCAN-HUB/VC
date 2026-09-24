@@ -1,0 +1,33 @@
+﻿# ⚠ **이 파일은 굽는 스크립트가 다시 쓴다.** 판 번호는 손으로 고치지 마라 —
+#   `paths.py` 의 `VERSION` 한 자리에만 적혀 있고 여기로 흘러온다.
+# 실행파일 버전 메타. **채워 두면 오탐이 준다** — 만든 이가 비어 있는 exe는
+# 백신이 더 의심한다(예전 배포에서 확인).
+#
+# 드러나는 이름은 브랜드뿐이다. 실명·연락처는 여기 안 넣는다.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 5, 19, 0),
+    prodvers=(0, 5, 19, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable("041204b0", [        # 한국어 · 유니코드
+        StringStruct("CompanyName", "VULCAN"),
+        StringStruct("FileDescription", "VC — 로컬 우선 개인 AI 작업공간"),
+        StringStruct("FileVersion", "0.5.19.0"),
+        StringStruct("InternalName", "VC"),
+        StringStruct("LegalCopyright", "(c) 2026 Unknown"),
+        StringStruct("OriginalFilename", "VC.exe"),
+        StringStruct("ProductName", "VC"),
+        StringStruct("ProductVersion", "0.5.19.0"),
+      ])
+    ]),
+    VarFileInfo([VarStruct("Translation", [0x0412, 1200])])
+  ]
+)

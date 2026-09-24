@@ -65,7 +65,7 @@ def _git(자리: Path, *인자: str) -> bool:
     """git 한 번. **없거나 실패해도 프로젝트는 선다** — git 은 있으면 좋은 것이지 조건이 아니다."""
     try:
         난것 = subprocess.run(["git", "-C", str(자리), *인자],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         return 난것.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -456,10 +456,10 @@ def _self_check() -> None:
         # git 이 있으면 신원까지 박는다. 없어도 프로젝트는 선다.
         if "git" in 난것["만든것"]:
             이름난것 = subprocess.run(["git", "-C", str(자리), "config", "user.name"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, encoding="utf-8")
             assert 이름난것.stdout.strip() == GIT_이름, 이름난것.stdout
             메일난것 = subprocess.run(["git", "-C", str(자리), "config", "user.email"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, encoding="utf-8")
             assert 메일난것.stdout.strip() == GIT_메일
 
         # ★ **이미 있으면 안 덮는다**

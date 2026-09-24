@@ -139,7 +139,7 @@ def pin_qt_plugins() -> bool:
     if 곳 is None:
         return False        # 구운 판은 PyInstaller 가 제 길로 넣는다
 
-    자리 = str(곳)
+    자리 = 곳.as_posix()     # Qt 는 윈도우에서도 「/」 로 돌려준다 — 「\」 로 대면 늘 없다고 본다
     if 자리 not in QCoreApplication.libraryPaths():
         QCoreApplication.addLibraryPath(자리)
     _QT_PINNED = 자리 in QCoreApplication.libraryPaths()
@@ -1003,7 +1003,7 @@ def _self_check() -> None:
     곳 = qt_plugins_dir()
     assert 곳 is not None and (곳 / "platforms").is_dir(), f"Qt 플러그인 폴더가 없다: {곳}"
     assert pin_qt_plugins() and pin_qt_plugins(), "Qt 플러그인 자리를 못 박는다(두 번 불러도 돼야 한다)"
-    assert str(곳) in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
+    assert 곳.as_posix() in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
     # Qt 가 스스로 말하는 자리는 **한글이 깨져 있을 수 있다** — 그래서 박는 것이다.
     # 깨지지 않는 자리(영문 경로)에서는 둘이 같다. 어느 쪽이든 박은 자리는 살아 있어야 한다.
     스스로 = QLibraryInfo.location(QLibraryInfo.PluginsPath)

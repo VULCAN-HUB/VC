@@ -316,7 +316,7 @@ def 손고르기(이름: str) -> 손 | None:
 def _git(자리: Path, *인자: str) -> str:
     try:
         난것 = subprocess.run(["git", "-C", str(자리), *인자],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.SubprocessError):
         return ""
     return 난것.stdout if 난것.returncode == 0 else ""
@@ -416,7 +416,8 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
         #   input from stdin…」 하고 기다린다 — 창에는 stdin 이 없으니 굳을 수 있다.
         판 = subprocess.Popen(명령줄, cwd=str(자리), env=판환경,
                             stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace")
     except (OSError, ValueError) as e:
         그손.말자리 = None
         shutil.rmtree(말집, ignore_errors=True)

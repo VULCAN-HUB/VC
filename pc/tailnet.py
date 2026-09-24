@@ -67,7 +67,7 @@ def _터널인터페이스주소(목록: str | None, 윈도우: bool) -> str | N
         # ipconfig: 「... adapter Tailscale:」 머리 아래 줄들이 그 어댑터 것이다
         덩이 = re.split(r"\r?\n(?=\S)", 목록)
         for d in 덩이:
-            if "tailscale" in d.splitlines()[0].lower():
+            if "tailscale" in (d.splitlines() or [""])[0].lower():
                 if (ip := _테일넷주소(d)):
                     return ip
         return None

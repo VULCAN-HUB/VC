@@ -1165,9 +1165,12 @@ def _모두검사() -> int:
     터진것, 잰것 = [], []
     for 이름 in 모듈들:
         t0 = time.perf_counter()
+        # ★ 자식은 UTF-8 로 찍고 UTF-8 로 읽는다. 안 그러면 윈도우(cp949)에서
+        #   실패 줄이 통째로 깨져 무엇이 터졌는지 못 읽는다.
         난것 = subprocess.run([sys.executable, str(자리 / f"{이름}.py"), "--check"],
-                             capture_output=True, text=True, errors="replace",
-                             cwd=str(자리), timeout=600)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             cwd=str(자리), timeout=600,
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         초 = time.perf_counter() - t0
         잰것.append((이름, 난것.returncode, 초))
         if 난것.returncode != 0:
