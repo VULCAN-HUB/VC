@@ -1374,7 +1374,15 @@ class MainWindow(QWidget):
         눈이 불편한 사람은 쓸 수가 없다. 옵시디언은 `Ctrl +/-` 로 된다.
         바꾼 값은 설정에 남겨 다음에 켤 때 그대로 뜬다.
         """
-        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else theme.기본배율)
+        self.글자배율로(theme.배율() + 만큼 if 만큼 else 0)
+
+    def 글자배율로(self, 값: float, 말할까: bool = True) -> float:
+        """글자 배율을 **그 값으로** 맞춘다. `값<=0` 이면 이 기계의 기본으로.
+
+        ★ `Ctrl +/-` 와 설정 창이 **같은 이 길**을 쓴다. 둘이 따로 정하면
+          한쪽에서 바꾼 것이 다른 쪽에 안 비치고, 저장하는 자리도 갈린다.
+        """
+        새배율 = theme.배율바꾸기(값 if 값 and 값 > 0 else theme.기본배율)
         self._apply_style()
         for 아이 in self.findChildren(QWidget):
             아이.style().unpolish(아이)
@@ -1383,7 +1391,9 @@ class MainWindow(QWidget):
             paths.save_config({**paths.load_config(), "글자배율": 새배율})
         except Exception:
             pass        # 못 남겨도 이번 판에는 적용된다
-        self.report(f"글자 {round(새배율 * 100)}%", [ROOT])
+        if 말할까:
+            self.report(f"글자 {round(새배율 * 100)}%", [ROOT])
+        return 새배율
 
     def escape(self) -> None:
         """Esc. **`[[` 목록이 떠 있으면 그것부터 닫는다.**"""
