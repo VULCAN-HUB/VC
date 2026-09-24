@@ -93,6 +93,33 @@ try {
     Write-Host "== SHA-256 $sha"
     "v$Ver  $sha" | Out-File (Join-Path $OutDir "판.txt") -Encoding utf8
 
+    # ★★ **단일 설치 파일도 낸다.** zip 은 받아서 「어디에 풀지?」가 남고, 푼 뒤에도
+    # 시작 메뉴에 안 뜬다. 설치 파일 한 장이면 누르고 끝이다.
+    # ★ onefile 로는 안 만든다 — 기동 3.95초→1.36초(2.9배)에 백신 오탐이다(VC.spec 머리말).
+    #   폴더 통째로 굽고 그것을 설치 프로그램으로 감싼다.
+    $ISCC = @(
+        # ★ 괄호가 든 환경변수는 중괄호로 감싸야 읽힌다 — `$env:ProgramFiles(x86)` 는 안 된다
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($ISCC) {
+        Write-Host "== 설치 파일 굽는 중"
+        & $ISCC "/DVer=$Ver" "/DSrc=$App" "/DOut=$OutDir" "$Link\tools\VC.iss" | Out-Null
+        $Exe = Join-Path $OutDir "VC-설치-$Ver.exe"
+        if (Test-Path $Exe) {
+            $esha = (Get-FileHash $Exe -Algorithm SHA256).Hash
+            "$esha  VC-설치-$Ver.exe" | Out-File "$Exe.sha256" -Encoding utf8
+            Write-Host "== 설치 파일 $Exe"
+            Write-Host "== SHA-256 $esha"
+        } else {
+            Write-Host "!! 설치 파일이 안 나왔다 — zip 은 멀쩡하다"
+        }
+    } else {
+        # ★ 없다고 굽기를 막지 않는다 — zip 만으로도 쓸 수 있다.
+        Write-Host "!! Inno Setup 이 없어 설치 파일은 건너뛴다"
+        Write-Host "   winget install JRSoftware.InnoSetup  뒤 다시 구우면 나온다"
+    }
+
     if (-not $SkipScan) {
         # **배포 전에 반드시 본다.** 행사 당일 백신에 막히면 되돌릴 방법이 없다.
         $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"

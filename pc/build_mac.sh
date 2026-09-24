@@ -59,4 +59,19 @@ ZIP="$OUTDIR/VC-mac-v$VER.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent dist/VC.app "$ZIP"     # zip 은 심볼릭 링크를 깨뜨린다 — ditto 로 묶는다
 shasum -a 256 "$ZIP"
-echo "== 끝. $ZIP · $(( ($(date +%s) - START) / 60 ))분"
+
+# ★★ **단일 설치 파일(.dmg)도 같이 낸다.** zip 은 받아서 「어디로 옮기지?」가 남는다 —
+#   dmg 는 열면 «응용 프로그램» 이 옆에 있어 끌어다 놓으면 끝이다.
+#   onefile 로는 안 만든다 — 재 보니 기동이 3.95초 → 1.36초로 2.9배 느려지고
+#   임시폴더에 푸는 것이 백신 오탐의 대표 트리거다(`VC.spec` 머리말).
+echo "== 설치본(.dmg)"
+DMG="$OUTDIR/VC-mac-v$VER.dmg"
+STAGE=$(mktemp -d)
+cp -a dist/VC.app "$STAGE/"
+ln -s /Applications "$STAGE/응용 프로그램"
+rm -f "$DMG"
+hdiutil create -volname "VC $VER" -srcfolder "$STAGE" -ov -quiet -format UDZO "$DMG"
+rm -rf "$STAGE"
+shasum -a 256 "$DMG"
+
+echo "== 끝. $ZIP · $DMG · $(( ($(date +%s) - START) / 60 ))분"
