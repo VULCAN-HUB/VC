@@ -2300,10 +2300,14 @@ class Notes:
         # ★ 앞머리 표가 새로 생겨 비어 있으면 **이번 한 번은 전부** 다시 읽는다.
         #   파일이 안 바뀌었으니 평소 같으면 건너뛰는데, 그러면 `status:` 가 영영 0장이다.
         처음채우기 = getattr(self, "_앞머리채울까", False)
-        known = {} if 처음채우기 else {
-            r["path"]: r["mtime"]
-            for r in self.conn.execute("SELECT path, mtime FROM notes")
-        }
+        # ★★ **걷어낼 목록은 늘 진짜 색인에서 뽑는다.** 예전엔 `처음채우기` 일 때
+        #   `known` 을 통째로 비웠는데, 그러면 「바뀐 것」뿐 아니라 **「사라진 것」까지
+        #   비어** 지워진 글이 색인에 영영 남았다.
+        #   창고 하나를 여러 기계가 같이 쓸 때(NAS 꼴) 이게 바로 드러난다 —
+        #   **맥에서 지운 글이 윈도우에서 계속 보인다**(실기로 잡았다 · 2026-09-24).
+        색인에있던 = {r["path"]: r["mtime"]
+                 for r in self.conn.execute("SELECT path, mtime FROM notes")}
+        known = {} if 처음채우기 else 색인에있던
         todo = []
         for path in self.notes_files():
             # 목록을 만드는 사이에도 남이 지운다. **사라진 것은 없는 것으로 친다** —
@@ -2341,7 +2345,7 @@ class Notes:
             changed += 1
             if changed % 500 == 0:
                 self.conn.commit()
-        for gone in set(known) - seen:
+        for gone in set(색인에있던) - seen:
             self.forget(gone, commit=False)
             changed += 1
         self.conn.commit()
@@ -5465,6 +5469,25 @@ def _self_check() -> None:
         성한 = Notes(뿌리, 색인, index_now=False)
         assert not 성한._색인이비었나(), "성한 색인을 비었다고 한다"
         성한.conn.close()
+
+    # ★★ **창고 하나를 여러 기계가 같이 쓴다(NAS 꼴).** 한쪽에서 지운 글이 다른
+    #   기계 색인에 남아 있으면 안 된다 — 「맥에서 지웠는데 윈도우에서 계속 보인다」가
+    #   된다. `처음채우기` 일 때 걷어낼 목록까지 비워서 실제로 그랬다(2026-09-24).
+    with tempfile.TemporaryDirectory() as _나스:
+        _한쪽 = Notes(Path(_나스) / "창고", str(Path(_나스) / "A.db"))
+        _한쪽.write(Note(title="같이 쓰는 글", kind="메모", body="A 가 적었다"))
+        _한쪽.reindex()
+        _딴쪽 = Notes(Path(_나스) / "창고", str(Path(_나스) / "B.db"))
+        _딴쪽.reindex()
+        assert _딴쪽.read("같이 쓰는 글") is not None, "딴 기계가 쓴 글이 안 보인다"
+        # 한쪽이 지우면 딴쪽 색인에서도 빠져야 한다 — **처음채우기 중이어도** 그렇다
+        _한쪽.delete("같이 쓰는 글")
+        _딴쪽._앞머리채울까 = True
+        _딴쪽.reindex()
+        _남은 = [r["title"] for r in _딴쪽.conn.execute("SELECT title FROM notes")]
+        assert "같이 쓰는 글" not in _남은, f"지운 글이 딴 기계 색인에 남았다: {_남은}"
+        _한쪽.conn.close()
+        _딴쪽.conn.close()
 
     # ★★ **셋(윈도우·맥·폰)이 같은 창고를 본다** — 맥에서만 되는 이름을 만들면
     #   윈도우 손님이 그 글만 조용히 못 받는다.

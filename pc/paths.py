@@ -475,6 +475,13 @@ def _적어둔자리() -> Path | None:
     if frozen():
         찾을자리.append(Path(sys.executable).parent / SPOT)   # 사람이 놓는 자리
     찾을자리.append(app_dir() / SPOT)                        # 딸린 것 옆(_internal)
+    # ★★ **앱 자리에도 둘 수 있다.** 맥에서는 위 두 자리가 **`.app` 껍데기 안**이라
+    #   앱을 새로 깔면 쪽지가 통째로 사라진다 — 그러면 창고가 조용히 제자리로
+    #   돌아가고, 쓰는 사람 눈엔 기록이 없어진 것이 된다. 창고를 NAS·공유 폴더에
+    #   두고 여러 기계로 이어서 일할 때 바로 걸릴 자리다(오너 2026-09-24).
+    # ★ 여기는 고리가 안 생긴다 — `_앱자리기본()` 은 운영체제만 보고 정해서
+    #   쪽지를 읽지 않는다(`state_dir()` 을 쓰면 서로를 불러 돈다).
+    찾을자리.append(_앱자리기본() / SPOT)
     try:
         적힌 = ""
         for 쪽지 in 찾을자리:
@@ -1156,6 +1163,28 @@ def _self_check() -> None:
     # ★ 일할 자리는 늘 있어야 한다 — 없으면 프로젝트 없이는 아무것도 못 시킨다
     assert 일터().is_dir() and 일터().name == "workbench", 일터()
     assert str(notes_dir()) not in str(일터()), "창고 안에 일터를 두면 AI 가 거기 흘린다"
+
+    # ★★ **앱 자리에 둔 쪽지도 먹어야 한다.** 맥에서는 `.app` 안의 쪽지가 앱을
+    #   새로 깔면 사라진다 — 창고를 NAS 에 두고 여러 기계로 이어 일할 때 걸린다.
+    _앱쪽지 = _앱자리기본() / SPOT
+    _옛앱쪽지 = _앱쪽지.read_text(encoding="utf-8") if _앱쪽지.exists() else None
+    _옛환경 = {k: os.environ.pop(k, None) for k in ("VC_DATA", "VC_STATE")}
+    with tempfile.TemporaryDirectory() as _나스자리:
+        try:
+            _앱쪽지.parent.mkdir(parents=True, exist_ok=True)
+            _앱쪽지.write_text(_나스자리 + "\n", encoding="utf-8")
+            assert _적어둔자리() == Path(_나스자리), _적어둔자리()
+            # ★ 고리가 안 생긴다 — 앱 자리는 쪽지를 안 본다
+            assert _앱자리기본() != Path(_나스자리)
+        finally:
+            if _옛앱쪽지 is None:
+                _앱쪽지.unlink(missing_ok=True)
+            else:
+                _앱쪽지.write_text(_옛앱쪽지, encoding="utf-8")
+            for k, v in _옛환경.items():
+                if v is not None:
+                    os.environ[k] = v
+    assert _적어둔자리() != Path(_나스자리), "치웠는데 아직 그 자리를 가리킨다"
 
     print("paths self-check 통과")
 
