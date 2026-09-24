@@ -45,6 +45,27 @@ def server_alive(port: int = PORT, timeout: float = 0.6) -> bool:
         return False
 
 
+def 모델내리기(서버) -> None:
+    """★★ **끝내기 전에 로컬 모델을 내린다.**
+
+    안 내리면 llama.cpp 의 Metal 판이 **프로세스 종료 중에 assert 로 죽는다** —
+    `ggml_metal_device_free` 가 `__cxa_finalize_ranges` 안에서 터져 끝난 코드가
+    **134(abort)** 다. 실기로 쟀다(2026-09-24): 모델을 쓰면 134, 안 쓰면 0,
+    **내리고 끝내면 0.** 오너가 로컬로 한 마디만 해도 창을 닫을 때마다 맥이
+    크래시 보고를 띄웠을 자리다.
+
+    ★ 무슨 일이 나도 끄는 것을 막지 않는다 — 못 내려도 꺼지기는 해야 한다.
+    """
+    뒤 = getattr(서버, "backend", None)
+    내리기 = getattr(뒤, "unload", None)
+    if not callable(내리기):
+        return
+    try:
+        내리기()
+    except Exception as e:
+        report.trail(f"모델 못 내렸다: {type(e).__name__}: {e}")
+
+
 def start_server(cfg: dict) -> srv.EBServer:
     store = srv.Store(cfg.get("db_path") or str(paths.store_path()))
     # 훑지 않고 연다. 항목이 쌓이면 훑는 데만 몇 십 초가 드는데, 그동안 서버가
@@ -332,8 +353,9 @@ def main(argv: list[str] | None = None) -> int:
             report.trail(f"기계 파일 앱 자리로 — 옮김 {len(옮김['옮김'])} · 남김 {옮김['남김']}")
 
     cfg = srv.load_config()
+    켠서버 = None
     if want_server and not server_alive():
-        start_server(cfg)
+        켠서버 = start_server(cfg)
         print(f"VC 서버 {HOST}:{PORT} (프로토콜 {srv.PROTOCOL_VERSION})")
         # ★ **토큰 값은 찍지 않는다 — 자리만 말한다.** stdout 을 파일로 받는 쓰임(`--no-ui > 기록`)이
         #   있어 값을 찍으면 열쇠가 파일에 남는다. `--doctor` 와 같은 규칙이다(열쇠를 두 군데 두지 않는다).
@@ -410,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
         _화면상태재기(app, win)
     code = app.exec_()
     report.trail(f"끔 ({code})")
+    # ★★ **모델을 내리고 끝낸다** — 안 내리면 종료 중에 Metal 이 abort 한다(134).
+    모델내리기(켠서버)
     report.stop_watching()
     return code
 
@@ -1045,6 +1069,39 @@ def _self_check() -> None:
                 assert _문구 in _스펙글, (
                     f"창고가 {_칸} 안인데 VC.spec 에 {_문구} 가 없다 — "
                     "맥이 묻지도 않고 막아서 구운 앱이 켜다 굳는다")
+
+    # ★★ **끝내기 전에 모델을 내리는 길이 있어야 한다.** 안 내리면 llama.cpp 의
+    #   Metal 판이 종료 중에 터져 끝난 코드가 134 가 된다(실기로 쟀다 · 2026-09-24).
+    import inspect as _본다끝
+
+    _소스끝 = _본다끝.getsource(main)
+    assert "모델내리기(" in _소스끝, "끝낼 때 모델을 안 내린다 — 종료 중에 abort 한다"
+    assert _소스끝.index("app.exec_()") < _소스끝.index("모델내리기("), \
+        "창이 끝나기 전에 모델을 내린다"
+
+    class _내려간손:
+        def __init__(self):
+            self.내렸나 = False
+
+        def unload(self):
+            self.내렸나 = True
+
+    class _서버흉내:
+        backend = _내려간손()
+
+    _흉내 = _서버흉내()
+    모델내리기(_흉내)
+    assert _흉내.backend.내렸나, "모델을 안 내렸다"
+    모델내리기(None)                     # 서버가 없어도 안 터진다
+
+    class _터지는손:
+        def unload(self):
+            raise RuntimeError("못 내린다")
+
+    class _탈서버:
+        backend = _터지는손()
+
+    모델내리기(_탈서버())                # 못 내려도 끄는 것은 막지 않는다
 
     print("eb self-check 통과")
 
