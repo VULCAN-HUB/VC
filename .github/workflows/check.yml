@@ -1,0 +1,58 @@
+# 올릴 때마다 윈도우·맥 **둘 다**에서 자체점검 57개를 돌린다.
+#
+# ★★ **왜 두었나.** 2026-09-25 에 윈도우에서만 나는 탈 셋을 잡는 데 하루가 갔다.
+#    맥에서는 멀쩡하니 자국이 안 남고, 그 기계를 만질 수 없어서 명령 한 줄마다
+#    사람이 붙여 넣고 결과를 옮겨 오기를 여덟 번 했다. 기계가 스스로 돌면 그 왕복이
+#    통째로 없어진다. 그날 잡은 셋은 전부 「바닥이 다른 자리」였다:
+#      · offscreen 글꼴이 윈도우에는 하나도 없다
+#      · offscreen 에서 QMessageBox 를 띄우면 프로세스가 죽는다
+#      · 안 읽은 요청 몸을 남기고 닫으면 윈도우는 연결을 끊는다
+#
+# ★ 이름·표현식은 **영문으로** 쓴다. 보여 주는 글만 한글이다 —
+#   깃허브 표현식(${{ matrix.os }})에 한글 이름을 넣으면 안 읽힌다.
+name: 검사
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:      # 손으로도 돌릴 수 있게
+
+# 잇달아 올리면 앞엣것은 접는다 — 마지막 것만 알면 된다
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 검사 ${{ matrix.os }}
+    strategy:
+      # ★★ **한쪽이 깨져도 다른 쪽을 끝까지 돌린다.** 안 그러면 윈도우가 깨질 때마다
+      #    맥 결과가 잘려, 둘 다 깨진 건지 윈도우만인지를 모른다 — 그걸 모르면
+      #    「바닥이 다른 자리」인지 우리 논리가 틀린 건지 가릴 수가 없다.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: pc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'     # 설치 문서가 정한 최소 판
+          cache: pip
+          cache-dependency-path: pc/requirements-ci.txt
+
+      - name: 딸린 것 깔기
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements-ci.txt
+
+      # ★ 하나라도 터지면 0이 아닌 값을 내므로 여기서 그대로 빨간불이 된다
+      - name: 자체점검 57개
+        run: python eb.py --모두검사
