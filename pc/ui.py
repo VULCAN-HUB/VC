@@ -18,6 +18,7 @@ UI는 PC 프로그램의 곁가지다. 본체는 폰이고(결정 25) 여기서�
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import functools
@@ -37,7 +38,7 @@ import settings
 import talklog
 
 from PyQt5.QtCore import QEvent, QFileSystemWatcher, QRectF, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QTextCursor
+from PyQt5.QtGui import QKeySequence, QTextBlockFormat, QTextCursor
 from PyQt5.QtWidgets import (
     QApplication,
     QShortcut,
@@ -66,10 +67,20 @@ from panels import (PROPOSAL_AREA_MIN_H, ActivityFeed, Folded, Gaps, HudPanel, I
                     Results, ServerLink, Years)
 from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT, GraphView
 import notes as notes_module
+import facets
 import orders
+import wiki
+import hermes
+import wikilog
+import piles
 from notes import Note, Notes, WriteBlocked, read_text, flip_task, headings, section
 from skills import Skill, SkillStore, analyze
 from store import Store
+
+
+def _키글(키: str) -> str:
+    """차림표에 적는 단축키 글. **맥은 Qt 가 Ctrl 을 ⌘ 로 읽는다** — `(Ctrl+,)` 로 적혀 헷갈렸다(오너 2026-09-15)."""
+    return 키.replace("Ctrl+", "⌘") if sys.platform == "darwin" else 키
 
 # --- 화면 상수 ----------------------------------------------------------
 #
@@ -203,12 +214,31 @@ def _쓰기막히면알림(돌려줄=None):
 
 
 class MainWindow(QWidget):
+    # AI 요약·번역이 끝나면(딴 실) — (제목, 머리, 글). ★ 신호 이름은 영문(한글이면 Qt 가 터진다)
+    assist_done = pyqtSignal(str, str, str)
+    # 묻기(Query) 가 끝났다 — 물음 · 답 · 근거 제목들.
+    # ★ **신호 이름은 영문이어야 한다.** 한글로 두면 PyQt 가 이름을 ascii 로 굽다
+    #   `UnicodeEncodeError` 로 창이 통째로 안 뜬다(2026-09-21 재서 확인).
+    query_done = pyqtSignal(str, str, list, bool)
+    # 맡기기(에이전트 CLI)가 끝났다 — 프로젝트 · 돌린 결과(dict).
+    # ★ 신호 이름은 영문이어야 한다(한글이면 PyQt 가 ascii 로 굽다 터진다).
+    handoff_done = pyqtSignal(str, object)
+    # 새 판이 있나 물어본 결과 — 딴 실에서 창 실로
+    update_found = pyqtSignal(object)
+
     def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
         """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
         무엇이 무엇을 쓰는지 따라갈 수가 없다. 덩어리를 넘나드는 것은
         `left`(그래프 판)·`scroll`·`rescan`(제안 칸) 셋뿐이라 그것만 주고받는다."""
         super().__init__()
         self.notes = notes
+        # 헤르메스 IDE — 지금 펼친 프로젝트와 연 코드 파일(`(프로젝트, 상대경로)`).
+        self._연프로젝트: str | None = None
+        self._연코드: "tuple[str, str] | None" = None
+        # 맡기기 — 지금 돌고 있는 일. 한 번에 하나만 돌린다(둘이 같은 폴더를 고치면 엉킨다).
+        self._맡김중: str = ""
+        self._맡김멈춤 = False
+        self._맡김시작 = 0.0
         self.store = store
         self.link = link or ServerLink()
         self.skills = SkillStore(notes)
@@ -227,12 +257,23 @@ class MainWindow(QWidget):
         # ★ 지난번에 키워 둔 글자 크기를 그대로 되살린다 — 켤 때마다 다시 키워야 하면
         #   있으나 마나다. 값이 없거나 깨졌으면 1.0 이다(설정 한 줄에 창이 안 죽는다).
         try:
-            theme.배율바꾸기(float(paths.load_config().get("글자배율", 1.0)))
+            theme.배율바꾸기(float(paths.load_config().get("글자배율", theme.기본배율)))
         except (TypeError, ValueError):
-            theme.배율바꾸기(1.0)
+            theme.배율바꾸기(theme.기본배율)
         self._apply_style()
 
         left = self._build_head()
+        self.assist_done.connect(lambda t, h, g: self._도움보이기(t, h, g))
+        self.query_done.connect(
+            lambda 물음, 답, 근거, 대화: self._묻기보이기(물음, 답, 근거, 대화))
+        self.handoff_done.connect(lambda 프로젝트, 난것: self._맡김끝(프로젝트, 난것))
+        self.update_found.connect(lambda 난것: self._새판보이기(난것))
+        # 돌아가는 동안 몇 초째인지 보여 준다 — 아무 말이 없으면 멈춘 줄 안다
+        self._맡김타이머 = QTimer(self)
+        self._맡김타이머.setInterval(1000)
+        # ★ **한글 이름 메서드를 신호에 바로 연결하면 안 된다** — PyQt 가 이름을 ascii 로
+        #   굽다 `UnicodeEncodeError` 로 창이 통째로 안 뜬다(오늘 두 번 밟았다).
+        self._맡김타이머.timeout.connect(lambda: self._맡김째깍())
         scroll, rescan = self._build_proposals()
         self._build_body(left, scroll, rescan)
 
@@ -242,6 +283,8 @@ class MainWindow(QWidget):
         self.graph = GraphView()
         self.graph.empty_clicked.connect(lambda: self._later(self.clear_detail))
         self.graph.node_clicked.connect(self.show_note)
+        # 표식이 가운데에서 밀렸을 때 저절로 돌아오기까지의 시간(설정 → 화면). 0이면 끔.
+        self.graph.자동제자리초 = float(settings.되돌리기초())
 
         wordmark = QLabel("VC")
         wordmark.setStyleSheet(
@@ -267,10 +310,18 @@ class MainWindow(QWidget):
         # 엔진 상태. 어떤 모델이 지금 올라와 있는지 화면에서 바로 보이게 한다(결정 36).
         self.engine_label = QLabel()
         self.engine_label.setStyleSheet(
-            f"color:{theme.css(theme.T.ACCENT, 0.55)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
+            f"color:{theme.css(theme.T.DIM, 0.55)}; font-family:{theme.MONO}; font-size:{theme.글자(10)};")
         engine_timer = QTimer(self)
         engine_timer.timeout.connect(self.refresh_engine)
         engine_timer.start(4000)
+        # 폰 길(테일스케일). "모름" = 아직 안 봤다 · None = 꺼짐.
+        self._테일: str | None = "모름"
+        self._띠경고 = ""
+        테일_timer = QTimer(self)
+        # ★ lambda 로 감싼다 — PyQt 는 한글 이름 메서드를 바로 이으면 UnicodeEncodeError 로 터진다.
+        테일_timer.timeout.connect(lambda: self._테일보기())
+        테일_timer.start(30000)
+        self._테일보기()
 
         # 밖에서 고친 것을 받아들인다.
         #
@@ -324,7 +375,8 @@ class MainWindow(QWidget):
         head_left = QVBoxLayout()
         head_left.setSpacing(3)
         head_left.addWidget(wordmark)
-        head_left.addWidget(tagline)
+        # ★ 소개 글은 빼 둔다 — 늘 잘려 「Local-firs」로 보였고 아무것도 안 알렸다(2026-09-18 창 점검).
+        tagline.hide()
         head_left.addWidget(self.engine_label)
 
         # 검색·지시가 한 칸이다. 음성 지시도 결국 같은 문(ask)으로 들어온다.
@@ -337,7 +389,7 @@ class MainWindow(QWidget):
         #   AI 한테는 인사(`hello`)로 알려 주면서 사람한테는 안 알려 준 셈이다.
         #   [잰 것, AI 쪽] 갈래로 좁히면 한 번에 802 → 617자, 찾은 물음 6/20 → 13/20.
         #   빈 칸에만 보이므로 치기 시작하면 사라진다 — 자리를 안 먹는다.
-        self.ask_box.setPlaceholderText("찾거나 시키기    kind:결정   tag:이름   \"그대로\"")
+        self.ask_box.setPlaceholderText("찾거나 시키기    고기, 먹음(쉼표로 좁히기)   kind:결정   tag:이름")
         # 돋보기는 그림이 아니라 단추다 — 붙여 놓고 안 이으면 눌러도 아무 일이 없다.
         find_act = self.ask_box.addAction(
             theme.glyph_icon("search", theme.rgba(theme.T.DIM, 110)), QLineEdit.LeadingPosition)
@@ -347,6 +399,7 @@ class MainWindow(QWidget):
         #   오늘만 다섯 번 나왔다. 자체점검이 이 둘을 견준다(`ui_check`).
         self.ask_box.setToolTip(
             "한 번 치면 관련된 것만 남고, 한 번 더 치면 내용을 연다" + chr(10)
+            + "쉼표로 겹쳐 좁히기 — 고기, 먹음, 배달 (다 든 것만 남는다)" + chr(10)
             + "좁히기 — kind:결정 · tag:이름 · year:2026 · path:2026/09 · title:이름(=file:)" + chr(10)
             + "빼기 — -kind:일 (잡담이 준다) · -낱말" + chr(10)
             + '"따옴표" 는 그 구절 그대로' + chr(10)
@@ -392,7 +445,11 @@ class MainWindow(QWidget):
         self.say = QLabel()
         self.say.setWordWrap(True)
         self.say.setObjectName("say")
-        self._say_text = "준비됐어. 항목을 누르면 그 얘기를 해줄게."
+        self._say_text = "준비됐어. 항목을 누르면 그 얘기를 해줄게.  ▲ 눌러서 말 걸기"
+        # ★ 누르면 채팅 칸이 올라온다. `QLabel` 에는 눌린 신호가 없어 걸러서 받는다.
+        self.say.installEventFilter(self)
+        self.say.setCursor(Qt.PointingHandCursor)
+        self.say.setToolTip("누르면 아래에 채팅 칸이 올라온다")
         self._caret_on = True
         self._paint_say()
         # 깜빡이는 커서. 멈춘 화면이 아니라 듣고 있는 중이라는 표시다.
@@ -412,6 +469,11 @@ class MainWindow(QWidget):
         graph_box.addWidget(self.graph, 1)
         graph_box.addLayout(legend_row)
         graph_box.addWidget(self.say)
+        # ★★ **VC 와 말을 주고받는 칸.** 엔진이 로컬·claude·codex 로 바뀔 뿐 **전부
+        #   VC 다**(오너가 그렇게 못 박았다 · 2026-09-24). 그래서 칸도 하나고, 고르는
+        #   것은 「누구에게 말하나」가 아니라 「무엇으로 답하나」다.
+        #   ★ 처음엔 접혀 있다 — 늘 펴 두면 그래프가 좁아진다. 말하는 자리를 누르면 올라온다.
+        graph_box.addWidget(self._채팅칸만들기())
         left = QFrame()
         left.setLayout(graph_box)
         self.left = left
@@ -511,6 +573,8 @@ class MainWindow(QWidget):
             box.setStyleSheet("line-height:160%;")
             doc = box.document()
             doc.setDocumentMargin(14)
+            # ★ 아래쪽에 숨 쉴 틈. 마지막 줄이 칸 끝에 딱 붙으면 아랫단과 붙어 보인다.
+            box.setViewportMargins(0, 0, 0, 6)
 
         self.side_btn = QPushButton("옆에")
         self.side_btn.setObjectName("quiet")
@@ -602,10 +666,22 @@ class MainWindow(QWidget):
         # 신호를 받는 자리에서 곧장 미룬다 — 한 곳에서 막아야 새로 잇는 것도 안전하다.
         self.years.picked.connect(lambda y: self._later(lambda: self.show_year(y)))
 
-        self.results = Results()
+        self.results = Results(번호매김=True)
         self.results.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
-        self.results.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
+        self.results.picked_at.connect(lambda w: self._later(lambda: self._목록에서열기(w)))
         self.results_head = theme.section("찾은 것", "검색·태그로 걸린 항목. 눌러서 연다")
+        # ★★ 최근 글 — 옵시디언의 파일 목록처럼 **늘 보인다.** 첫 화면이 그래프 점뿐이라
+        #   무슨 글이 있는지 안 보였다(오너 2026-09-18: 번잡하고 보기 불편하다). 칩으로 골라 본다.
+        self.recent = Results(limit=12)
+        self.recent.picked.connect(lambda t: self._later(lambda: self.show_note(t)))
+        self.recent.picked_at.connect(lambda w: self._later(lambda: self.show_note_at(w)))
+        self.recent_head = theme.section("최근 글", "눌러서 연다. 칩으로 사진·태그만 골라 본다")
+        self.recent_chips = QWidget()
+        self._칩줄 = QHBoxLayout(self.recent_chips)
+        self._칩줄.setContentsMargins(0, 0, 0, 0)
+        self._칩줄.setSpacing(4)
+        self._목록갈래 = ""          # "" 최근 · "@사진" · 그 밖은 태그
+        self._칩들: list[str] = []
         self.results_head.hide()
         self.results.hide()
 
@@ -678,13 +754,35 @@ class MainWindow(QWidget):
         dbox.addWidget(self.detail_title)
         dbox.addWidget(self.twin_note)
         dbox.addWidget(self.detail_stack, 1)
-        dbox.addWidget(self.detail_links)
-        dbox.addWidget(self.embeds_head)
-        dbox.addWidget(self.embeds)
-        dbox.addWidget(self.backs_head)
-        dbox.addWidget(self.backs)
-        dbox.addWidget(self.mentions_head)
-        dbox.addWidget(self.mentions)
+        # ★★ **아랫단을 가둔다.** 링크·가리킨 곳·이름만 적힌 곳은 글마다 길이가 제멋대로인데
+        #   카드 높이는 고정이라, 아랫단이 길면 **본문이 최소 높이(150)까지 눌린다** —
+        #   재 보니 620짜리 카드에서 본문 150 · 아랫단 602 였다. 한 줄만 더 늘면 카드를
+        #   넘어 **본문과 겹친다**(오너가 그 꼴을 짚었다 · 2026-09-24).
+        #   그래서 아랫단은 **제 칸 안에서 굴러가게** 두고, 본문 몫을 지킨다.
+        # ★★ **금을 긋는다.** 본문은 굴러가는 칸이라 마지막 줄이 반쯤 잘리는데, 바로
+        #   아래에 링크 줄이 붙어 있으면 **글자끼리 겹친 것으로 읽힌다**(오너가 그 꼴을
+        #   짚었다 · 2026-09-24). 선 하나면 「여기서 끝났다」가 분명해진다.
+        self.detail_rule = theme.Divider()
+        dbox.addWidget(self.detail_rule)
+        아랫단 = QWidget()
+        아래상자 = QVBoxLayout(아랫단)
+        아래상자.setContentsMargins(0, 0, 0, 0)
+        아래상자.setSpacing(4)
+        for 것 in (self.detail_links, self.embeds_head, self.embeds,
+                 self.backs_head, self.backs, self.mentions_head, self.mentions):
+            아래상자.addWidget(것)
+        아래상자.addStretch(0)
+        self.detail_foot = QScrollArea()
+        self.detail_foot.setWidget(아랫단)
+        self.detail_foot.setWidgetResizable(True)
+        self.detail_foot.setFrameShape(QFrame.NoFrame)
+        self.detail_foot.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.detail_foot.viewport().setAutoFillBackground(False)
+        아랫단.setAutoFillBackground(False)
+        # ★ 폭으로는 창을 밀지 않는다 — 긴 이름표 하나가 창 최소 폭을 늘리던 그 병이다
+        self.detail_foot.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.detail_foot.setMinimumWidth(0)
+        dbox.addWidget(self.detail_foot)
 
         self.footer = QLabel()
         self.footer.setStyleSheet(
@@ -696,6 +794,11 @@ class MainWindow(QWidget):
         # 1366 짜리 노트북에는 안 들어간다. **아래 띠는 잘려도 되지만 창은 들어가야 한다.**
         self.footer.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.footer.setMinimumWidth(0)
+        # 세는 값(적은 것 · 보임 · 연결)은 늘 볼 것이 아니다 — 「상태·기록」을 펴야 보인다(결정 17).
+        self.상태글 = QLabel()
+        self.상태글.setStyleSheet(theme.small(theme.T.DIM, 0.3, 9))
+        self.상태글.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.상태글.setMinimumWidth(0)
 
         self.feed = ActivityFeed()
         # 쓸 모델을 고르는 칸. 사양이 다른 PC에서도 각자 맞게 쓴다(결정 42).
@@ -726,15 +829,63 @@ class MainWindow(QWidget):
         side.addWidget(self.gate_card)
         side.addWidget(self.results_head)
         side.addWidget(self.results)
-        side.addWidget(theme.section("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다"))
-        side.addWidget(self.gaps)
+        side.addWidget(self.recent_head)
+        side.addWidget(self.recent_chips)
+        side.addWidget(self.recent)
         side.addWidget(theme.Divider())
-        side.addWidget(theme.section("언제", "해마다 적은 것. 눌러서 그해를 훑는다"))
-        side.addWidget(self.years)
-        side.addWidget(theme.Divider())
+        # 가끔 보는 것은 접어 둔다 — 늘 펴 두니 오른쪽 칸이 번잡했다.
+        # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 **오른쪽에 늘 띄워 두던**
+        #   칸이다(볼트의 `workspace.json` 에서 확인했다: 백링크·나가는 링크·태그·속성·목차).
+        #   `status:` 로 **찾는** 것은 되는데, 창고가 **무엇을 적어 왔는지 한눈에 보는** 길이
+        #   없었다. 평소엔 접어 둔다 — 쓸 때만 편다.
+        self.props = QWidget()
+        self._앞머리줄 = QVBoxLayout(self.props)
+        self._앞머리줄.setContentsMargins(0, 0, 0, 0)
+        self._앞머리줄.setSpacing(2)
+        self._앞머리연것 = ""
+        self.props_fold = Folded("앞머리", "글에 적힌 값(status·source…). 눌러 그 값만 모아 본다", self.props)
+
+        # ★ **살핌 칸**(오너 2026-09-20 · 카파시 LLM Wiki 의 넷째 일). 위키는 저절로 자라니
+        #   **스스로 어긋난다** — 가리키는데 없는 글, 아무와도 안 이어진 쪽, 모아만 두고
+        #   안 합친 원본. 펼 때 살핀다(늘 돌면 큰 창고에서 켤 때마다 훑게 된다).
+        self.audit = QWidget()
+        self._살핌줄 = QVBoxLayout(self.audit)
+        self._살핌줄.setContentsMargins(0, 0, 0, 0)
+        self._살핌줄.setSpacing(2)
+        self.audit_fold = Folded("살핌", "창고가 성한지 본다 — 끊긴 링크·외톨이 쪽·안 합친 원본",
+                                 self.audit)
+        self.audit_fold.head.clicked.connect(lambda: self._later(self.살핌그리기))
+
+        # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 「파일 탐색기」
+        #   자리다. VC 는 새 글을 연/월에 두지만 **사람이 옮겨 둔 자리는 지키므로**
+        #   창고에는 제 나름의 폴더가 생긴다. 평소엔 접어 둔다.
+        self.folders = QWidget()
+        self._폴더줄 = QVBoxLayout(self.folders)
+        self._폴더줄.setContentsMargins(0, 0, 0, 0)
+        self._폴더줄.setSpacing(2)
+        self.folders_fold = Folded("폴더", "창고의 폴더. 눌러 그 안의 글만 모아 본다", self.folders)
+
+        # ★★ **코드 칸**(헤르메스 IDE 첫 조각 · 오너 2026-09-21 「파일 나무 + 편집기」).
+        #   창고 옆에서 프로젝트 파일을 보고 고친다. 평소엔 접어 둔다.
+        self.codes = QWidget()
+        self._코드줄 = QVBoxLayout(self.codes)
+        self._코드줄.setContentsMargins(0, 0, 0, 0)
+        self._코드줄.setSpacing(2)
+        self.codes_fold = Folded("코드", "이 기계의 프로젝트 파일. 눌러서 열고 고친다", self.codes)
+
+        self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
+        self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
+        side.addWidget(self.audit_fold)
+        side.addWidget(self.folders_fold)
+        side.addWidget(self.codes_fold)
+        side.addWidget(self.props_fold)
+        side.addWidget(self.gaps_fold)
+        side.addWidget(self.years_fold)
         side.addWidget(self.proposals_fold)
         side.addWidget(self.feed_fold)
         side.addWidget(self.models_fold)
+        self.status_fold = Folded("상태·기록", "센 값 — 적은 것 · 보임 · 연결", self.상태글)
+        side.addWidget(self.status_fold)
         side.addStretch(1)
         side.addWidget(self.footer)
 
@@ -924,7 +1075,9 @@ class MainWindow(QWidget):
             self.notes.write(Note(
                 title=ROOT,
                 body="여기서 시작한다. 쓸수록 항목이 늘고 서로 이어진다.",
-                kind="agent",
+                # 씨앗 가림은 `지은이: "씨앗"` 로 한다 — 옛 `kind: "agent"` 는 **옛 창고를
+                # 알아보는 뒷길**로만 남는다(`eb.py`). 갈래는 창고 기준을 따른다.
+                kind="엔티티",
                 pinned=True,
                 extra={"지은이": "씨앗"},
             ))
@@ -962,6 +1115,12 @@ class MainWindow(QWidget):
             f"제안 {len(self.proposal_cards):02d}"
         )
         self.years.show_years(self.notes.by_year())
+        self._최근채우기()
+        self.앞머리그리기()      # 창고가 무엇을 적어 왔는지도 같이 새로 센다
+        self.폴더그리기()
+        # ★ 프로젝트를 펼치기 전에는 `~/projects` 를 한 번 훑을 뿐이라 값이 안 든다.
+        #   파일 나무는 **펼친 프로젝트 하나만** 센다.
+        self.코드그리기()
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
@@ -1014,7 +1173,10 @@ class MainWindow(QWidget):
         # 「⚠ 를 띄웠으면 무엇이 이상한지 볼 길이 하나는 있어야 한다」고 짚었는데,
         # 길은 이미 있었고 **그 길이 잘리고 있었던 것**이다.
         # 값진 것을 앞에 두는 규칙을 아래 띠 가운데에만 쓰고 경고에는 안 썼다.
-        self.footer.setText(f"{warn}적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+        self.상태글.setText(f"적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+        # ★ 늘 보이는 한 줄(결정 17)에는 오류 · 준비 중 · 폰 길만 둔다. 센 값은 「상태·기록」을 펴야 보인다.
+        self._띠경고 = warn.removesuffix("  /  ")
+        self._그리띠()
 
     # --- 말로 부르기 -----------------------------------------------------
 
@@ -1146,8 +1308,13 @@ class MainWindow(QWidget):
             ("Ctrl+-", lambda: self.글자키우기(-0.1), "글자 줄이기"),
             ("Ctrl+0", lambda: self.글자키우기(0), "글자 제자리"),
             # ※ 한글 이름 메서드를 `activated=` 에 곧장 넘기면 PyQt 가 이름을 ASCII 로 바꾸다 터진다.
+            # ★ 마우스 없이 쓰는 길은 **적어 둬야 길이다**(오너 2026-09-20). 아래 셋은 단축키가
+            #   아니라 창 안에서 도는 키라 표에 「(키)」로만 적는다 — F1 목록에서 보이게.
             ("F1", lambda: self.단축키보기(), "이 목록"),
             ("F11", lambda: settings.toggle_full(self), "전체화면 켜고 끄기"),
+            # ★ 마우스 없이 그래프를 돌기(오너 2026-09-20). 지금 보는 글부터 잡는다.
+            ("Ctrl+G", lambda: self.그래프잡기(), "그래프로 — ↑↓←→ 로 옮기고 Enter 로 열기"),
+            ("Ctrl+L", lambda: self.둘레보기(), "이 글 둘레만 보기 (다시 누르면 전체로)"),
             ("Ctrl+,", lambda: settings.open_dialog(self, self.notes), "설정 · 내 정보"),
             ("Esc", self.escape, "닫기 · 목록 접기"),
         )
@@ -1162,12 +1329,24 @@ class MainWindow(QWidget):
         쪽 = self.notes.read(제목)
         return 쪽.body if 쪽 else None
 
+    #: 단축키표에 안 들어가는 「창 안에서 도는 키」 — F1 목록에 같이 적는다
+    창안키 = (("↓", "찾기 칸에서 결과 목록으로"),
+            ("↑ · ↓", "결과 줄 오르내리기 (맨 위에서 ↑ 면 찾기 칸으로)"),
+            ("Enter", "고른 결과 열기"),
+            ("Ctrl+1~9", "결과 몇째 줄을 바로 열기 (결과에 손이 가 있으면 숫자만)"),
+            ("Esc", "결과에서 찾기 칸으로 돌아가기"),
+            ("↑↓←→", "그래프에서 이어진 것 사이를 옮기기 (Ctrl+G 로 들어간다)"),
+            ("Ctrl+L", "지금 보는 글 둘레만 — 다시 누르거나 Esc 면 전체로"))
+
     def 단축키글(self) -> str:
         """단축키 목록 글. 같은 일을 하는 키는 한 줄로 묶는다(Ctrl+O · Ctrl+F)."""
         묶음: dict[str, list[str]] = {}
         for keys, _, 설명 in self.단축키표:
             묶음.setdefault(설명, []).append(keys)
-        return chr(10).join(f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items())
+        줄들 = [f"{' · '.join(키들):22}  {설명}" for 설명, 키들 in 묶음.items()]
+        # 창 안에서 도는 키(결과 목록 오르내리기 등)도 같이 적는다 — 되는데 안 적히면 없는 길이다
+        줄들 += ["", "— 결과 목록에서 —"] + [f"{키:22}  {설명}" for 키, 설명 in self.창안키]
+        return chr(10).join(줄들)
 
     def 단축키보기(self) -> None:
         # ★ 공백으로 칸을 맞추면 비례 글꼴에서 줄이 들쭉날쭉했고, 한글 글꼴은 `\` 를 `₩` 로 그렸다(그려 보고 찾았다).
@@ -1195,7 +1374,7 @@ class MainWindow(QWidget):
         눈이 불편한 사람은 쓸 수가 없다. 옵시디언은 `Ctrl +/-` 로 된다.
         바꾼 값은 설정에 남겨 다음에 켤 때 그대로 뜬다.
         """
-        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else 1.0)
+        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else theme.기본배율)
         self._apply_style()
         for 아이 in self.findChildren(QWidget):
             아이.style().unpolish(아이)
@@ -1210,6 +1389,25 @@ class MainWindow(QWidget):
         """Esc. **`[[` 목록이 떠 있으면 그것부터 닫는다.**"""
         if self.detail_body.pop_open():
             self.detail_body.close_pop()
+            return
+        # ★ 결과 줄에 손이 가 있으면 **찾기 칸으로 돌아간다**(오너 2026-09-20 · 마우스 없이 쓰기).
+        #   창 단축키가 Esc 를 먼저 가로채므로 여기서 처리해야 걸린다 — 거름망에 둬 봤자 안 온다.
+        from PyQt5.QtWidgets import QApplication as _앱
+
+        # ★ 둘레 보기 중이면 **그것부터 푼다** — 들어갈 길만 있고 나올 길이 없으면 갇힌다.
+        if self.graph.둘레풀기():
+            self.report("전체 그래프로 돌아왔어.", [])
+            return
+        손 = _앱.instance().focusWidget()
+        # ★ 그래프에 손이 얹혀 있으면(Ctrl+G) Esc 로 찾기 칸에 돌아온다 — 들어갈 길만
+        #   있고 나올 길이 없으면 키보드만 쓰는 사람은 **갇힌다**.
+        if 손 is not None and (손 is self.graph or self.graph.isAncestorOf(손)):
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
+            return
+        if self._결과줄(손) is not None:
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
             return
         self.clear_detail()
 
@@ -1230,10 +1428,51 @@ class MainWindow(QWidget):
         if event.type() in (QEvent.KeyPress, QEvent.MouseButtonPress,
                             QEvent.MouseMove, QEvent.Wheel):
             self.graph.깨우기()
+        # ★ 말하는 자리를 누르면 채팅 칸이 올라온다. 늘 펴 두면 그래프가 좁아지고,
+        #   접어만 두면 있는 줄을 모른다 — 말이 나오는 그 자리를 누르게 한다.
+        # ★ `getattr` 로 본다 — 거름망은 **칸이 다 서기 전에도** 불린다(창을 짓는
+        #   중에 들어온 누름이 `say` 를 찾다 죽었다).
+        if (event.type() == QEvent.MouseButtonPress
+                and obj is getattr(self, "say", None)):
+            self.채팅열기()
+            return True
+        # ★★ **엔터로도 열린다.** 누르기만 두면 손을 마우스로 옮겨야 한다 — 채팅은
+        #   키보드로 시작해서 키보드로 끝나는 것이 자연스럽다(오너 2026-09-24).
+        #   ★ **글 치는 칸에 손이 가 있으면 안 가로챈다.** 가로채면 찾기 칸 엔터도,
+        #     글 쓰다 줄 바꾸기도 다 망가진다 — 빈 데에서 누를 때만 연다.
+        if (event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+                and not self._글칸인가(obj)
+                and getattr(self, "chat", None) is not None
+                and not self.chat.isVisible()):
+            self.채팅열기(True)
+            return True
         # 누름이 어디에 떨어졌는지 최근 넷을 들고 있는다 — 친 말이 글로 새면 자국에 같이 적는다.
         if event.type() == QEvent.MouseButtonPress and obj.isWidgetType():
             self._누름들 = (getattr(self, "_누름들", []) +
                          [f"{type(obj).__name__}:{obj.objectName() or '-'}"])[-4:]
+        # ★★ **마우스 없이도 쓸 수 있어야 한다**(오너 2026-09-20).
+        #   찾기 칸에서 ↓ 를 누르면 결과 첫 줄로, 결과에서 ↑↓ 로 오르내리고 Enter 로 연다.
+        #   전에는 결과로 가려면 **탭을 여남은 번** 눌러야 했다 — 검색→고르기→열기가
+        #   키보드로 끊겨 있었다. 이 고리가 없으면 「키보드로 다 된다」는 말이 거짓이다.
+        # ★ **숫자로 바로 고르기**(오너 2026-09-20). `Ctrl+1`~`9` 는 어디서든, 결과 줄에
+        #   손이 가 있으면 숫자만 눌러도 된다 — 찾기 칸에서는 숫자를 **글자로** 쳐야 하므로
+        #   Ctrl 이 붙을 때만 받는다(안 그러면 「2026」을 못 친다).
+        if event.type() == QEvent.KeyPress and Qt.Key_1 <= event.key() <= Qt.Key_9:
+            컨트롤 = bool(event.modifiers() & Qt.ControlModifier)
+            if 컨트롤 or self._결과줄(obj) is not None:
+                if self._결과고르기(event.key() - Qt.Key_1):
+                    return True
+
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Down, Qt.Key_Up):
+            if obj is self.ask_box and event.key() == Qt.Key_Down:
+                if self._결과줄로(0) is not None:
+                    return True
+            elif self._결과줄(obj) is not None:
+                간데 = self._결과줄로(self._결과줄(obj) + (1 if event.key() == Qt.Key_Down else -1))
+                if 간데 is not None:
+                    return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.detail_body.pop_open()):
             self.detail_body.close_pop()
@@ -1275,9 +1514,9 @@ class MainWindow(QWidget):
             return
         self.열린자리.setText(f"★ 원격 열림 :{port}")
         self.열린자리.setToolTip(
-            f"{host}:{port} 로 듣는다 — 같은 공유기의 다른 기기에서 닿는다. "
+            f"{host}:{port} 로 듣는다 — 같은 공유기와 테일스케일로 이은 다른 기기에서 닿는다. "
             "토큰 없이 들어오면 401로 막힌다. "
-            "원격이 필요 없으면 VC.exe --no-server 로 켜라.")
+            "원격이 필요 없으면 --no-server 를 붙여 켜라.")
         self.열린자리.show()
 
     def _greet_server(self) -> None:
@@ -1286,11 +1525,35 @@ class MainWindow(QWidget):
         self.gate_card.refresh()
         self.models.refresh()
 
+    def _테일보기(self) -> None:
+        """테일스케일 주소를 딴 실에서 본다 — 명령이 늦으면 창이 굳으므로. 결과는 4초 타이머가 줄에 그린다."""
+        import threading
+        import tailnet
+
+        def 일() -> None:
+            self._테일 = tailnet.tailscale_ip()
+            # 「기계 기록 보기 — 둘 다」면 요약 한 장을 기록 폴더 `_VC기록/` 에도(결정 17). 안 바뀌었으면 안 쓴다.
+            if settings.기록보기() == "둘다":
+                report.요약쓰기(self.notes.root)
+        report.딴실로("테일스케일 살피기", 일)
+
+    def _그리띠(self) -> None:
+        """늘 보이는 한 줄(결정 17) — 오류 · 준비 중 · 폰 길. **아무 일 없으면 비운다.**"""
+        말 = [self._띠경고] if self._띠경고 else []
+        # 밖에서 닿게 열렸는데 테일스케일이 꺼졌으면 폰은 집 밖에서 못 닿는다(결정 18·21).
+        if not self.열린자리.isHidden() and self._테일 is None:
+            말.append("⚠ 테일스케일 꺼짐 — 폰이 밖에서 못 닿는다")
+        self.footer.setText("  /  ".join(말))
+        # ★ 경고를 흐린 글자로 두면 안 보인다(맥 창을 그려 보고 잡음) — ⚠ 가 있으면 경고색으로.
+        경고 = any("⚠" in m for m in 말)
+        self.footer.setStyleSheet(theme.small(theme.T.WARN, 0.8, 9) if 경고 else theme.small(theme.T.DIM, 0.3, 9))
+
     def refresh_engine(self) -> None:
         """엔진이 뭘 올려놨는지. 서버가 꺼져 있으면 그 사실을 그대로 보여준다."""
         # 창이 제 메모리를 파일에 적어 둔다. --report 는 창이 아니라 새 프로세스라
         # 자기를 재면 안 되기 때문이다(시험 25-1). 4초 타이머라 여기서 같이 한다.
         report.메모리찍기()
+        self._그리띠()
         out = self.link.call("GET", "/eb/v1/engine")
         if out is None:
             # ★ 「서버 꺼짐」이 원격 줄과 나란히 떠서 **어느 서버가 꺼진 것인지**
@@ -1366,11 +1629,50 @@ class MainWindow(QWidget):
             return
         started = time.monotonic()
 
+        # ★★ **주소 하나만 친 것은 찾는 말이 아니라 「모을 것」이다**(오너 2026-09-20).
+        #   카파시 LLM Wiki 의 첫 일이 **모으기(Clip)** 다 — 사람은 던지기만 하고 정리는
+        #   안 한다. 오너는 크롬을 주로 쓰는데 크롬 공유는 **주소만** 준다(쪽 제목을 안 준다).
+        #   주소를 찾는 말로 치는 일은 사실상 없으므로 여기서 가른다.
+        if wiki.주소인가(text):
+            self.원본모으기(text)
+            return
+
+        # ★★ **물음표로 끝나면 「묻기」다**(카파시 LLM Wiki 의 셋째 일). 찾기 칸이 곧
+        #   지시 칸이라, 문을 따로 만들지 않고 여기서 가른다 — 주소를 「모으기」로
+        #   가른 것과 같은 결이다. 찾는 말에 물음표를 붙이는 일은 사실상 없다.
+        if wiki.물음인가(text):
+            self.창고에묻기(text)
+            return
+
         # **시키는 말이면 그대로 한다.** 검색칸이 곧 지시칸이다 — 따로 두면 어느 칸에
         # 쳐야 하는지를 사람이 외워야 한다. 못 알아들으면 `None` 이라 그냥 검색으로 간다.
         # 알아듣는 일은 `orders.py` 가 하고 여기는 시키기만 한다 — 나중에 말로 시킬 때
         # 같은 길을 쓴다.
         order = orders.read_order(text)
+        # ★★ **글이 창 이름에 가려지면 안 된다**(오너 2026-09-20이 짚었다).
+        #   「확장」이라는 **글**이 있는데 창이 먼저 열리면 그 글은 영영 못 본다 —
+        #   이건 노트 앱이 할 짓이 아니다. 그래서 말끝이 없는 한 마디(「확장」)는
+        #   **창고에 그 말이 든 글이 있으면 찾기로 보낸다.** 창을 열고 싶으면
+        #   「확장 열어줘」처럼 말끝을 붙인다 — 그때는 사람이 창을 부른 것이 분명하다.
+        # ★★ **말로 가르지 않는다**(오너 2026-09-20). 「확장」이 창 이름이자 글 제목일 수 있고,
+        #   「상태창열어줘」라는 **글**도 있을 수 있다 — 어떤 말로 갈라도 부딪힌다.
+        #   그래서 **글이 있으면 글을 보여 주고, 창은 목록 맨 위에 한 줄로 얹는다.**
+        #   한 번 눌러 고르면 된다 — 「열어줘」를 일일이 칠 일이 없다.
+        # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
+        #   「상태창열어줘」라는 **제목의 글**을 쳤더니 열기 규칙이 삼켜 「상태창」 글이 열렸다 —
+        #   내가 적은 글을 제목 그대로 쳤는데 딴 글이 열리면 그건 못 믿는 물건이다.
+        #   시키는 말은 **말끝이 붙은 딴 표현**(「상태창 열어」)이 얼마든지 있다.
+        창줄 = ""
+        if order is not None and order.what == "창열기" and not order.extra:
+            # 창 이름을 먼저 챙겨 둔다 — 아래에서 글이 이겨도 **창 여는 길은 남겨야** 한다.
+            창이름 = str(order.target or text).strip()
+            if self.notes.search(text, k=1):
+                창줄, order = 창이름, None
+        if order is not None and self.notes.read(text.strip()) is not None:
+            # 친 말 그대로가 글 제목이면 그 글이 이긴다. 창 이름이기도 하면 목록 맨 위에 ⚙ 줄로 남는다.
+            if order.what == "창열기":
+                창줄 = str(order.target or text).strip()
+            order = None
         if order is not None and self.do_order(order, started):
             return
 
@@ -1387,7 +1689,14 @@ class MainWindow(QWidget):
         rows = self.notes.search(text)
         hits = [r["title"] for r in rows]
         # 갈래도 같이 넘긴다 — 결과에 여러 갈래가 섞여 오므로 고를 때 그것이 필요하다.
-        self.show_results([(r["title"], r["body"], r["path"], r["kind"]) for r in rows], text)
+        목록 = [(r["title"], r["body"], r["path"], r["kind"]) for r in rows]
+        if 창줄:
+            # 맨 위에 **창 한 줄**. 글이 아니라 화면이라는 게 보이게 톱니를 붙인다.
+            # 「설정창 창 열기」처럼 창이 두 번 나오지 않게 — 이름이 이미 창·화면으로 끝나면 그대로 쓴다
+            이름말 = 창줄 if 창줄.endswith(("창", "화면")) else f"{창줄} 창"
+            목록.insert(0, (f"⚙ {이름말} 열기", "글이 아니라 화면이야 — 누르면 열린다",
+                           f"창:{창줄}", ""))
+        self.show_results(목록, text)
 
         # 되묻는다는 건 시킬 말이 아니라는 뜻이다. 찾을 것이 있으면 찾아준다 —
         # "카페"라고 쳤는데 "어느 쪽이야?"가 나오면 검색칸이 아니게 된다.
@@ -1395,6 +1704,12 @@ class MainWindow(QWidget):
             self.report(done["text"], [ROOT])
             self._log_turn(text, done["text"], "clarify", started)
             return
+
+        if not hits and 창줄:
+            # 글이 있는 줄 알았는데 찾기가 0건이다(뜻 검색까지 비었다) — 그러면 창을 연다.
+            되돌린 = orders.read_order(text)
+            if 되돌린 is not None and self.do_order(되돌린, started):
+                return
 
         if not hits:
             # 시키지도 못하고 찾지도 못했다. 실행이 실패했으면 그 이유를 그대로 전한다.
@@ -1435,12 +1750,205 @@ class MainWindow(QWidget):
                 said += f" 안 보이면 kind:{갈래들[1]} 처럼 갈래로 좁혀 봐."
         elif len(hits) > 1:
             said = f"{self._감싸기(text)} 관련 {len(hits)}개야. 더 좁히면 내용을 보여줄게."
+            # ★★ **찾은 것들 자체를 세어 좁히는 길을 권한다**(오너 2026-09-19).
+            #   「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
+            #   진짜로 갈라지는 것만 권한다 — 전부에 붙은 값·하나뿐인 값은 뺀다.
+            _행 = [dict(r) for r in rows]
+            좁힐길 = facets.한줄(_행, 물은말=text,
+                             앞머리=self.notes.앞머리모음([r.get("title") for r in _행]))
+            if 좁힐길:
+                said += f" {좁힐길}"
         else:
             # 조사는 받침을 본다 — 따옴표·`tag:` 가 붙어도 **끝말**로 고른다(시험 쪽 14)
             said = (f"{self._감싸기(text)}{orders.tail(text.strip(chr(34) + chr(39)), '은/는')} "
                     f"{hits[0]} 하나야. 한 번 더 치면 열어줄게.")
         self.report(said, hits[:3])
         self._log_turn(text, said, "search", started)
+
+    def 원본모으기(self, 주소: str) -> str:
+        """주소를 **원본으로 모은다**(모으기 · Clip). `raw/` 에 갈래 `원본` 으로 들어간다.
+
+        ★ 제목은 `링크 · quasarzone.com` 꼴이다. 주소를 그대로 제목에 쓰면 파일 이름이
+          `https：／／…` 로 깨진다(크롬에서 공유한 주소가 실제로 그렇게 저장됐다).
+        """
+        주소 = 주소.strip()
+        제목 = wiki.원본제목(주소)
+        있던 = self.notes.read(제목)
+        # 같은 집에서 온 것이 이미 있으면 **덧붙인다** — 링크마다 글을 하나씩 만들면
+        # 「링크 · quasarzone.com」 이 수십 개가 된다.
+        몸 = f"- {주소}"
+        if 있던 is not None and 주소 in 있던.body:
+            self.show_note(제목)
+            self.report(f"「{제목}」 에 이미 있어.", [제목])
+            return 제목
+        if 있던 is not None:
+            self.notes.append(제목, 몸, kind=wiki.원본갈래)
+        else:
+            self.notes.write(Note(title=제목, body=f"# {제목}\n\n{몸}\n",
+                                  kind=wiki.원본갈래,
+                                  extra={"출처": "공유", "상태": "살아있음"}))
+        wikilog.적기(self.notes, "모으기", f"{주소}", [제목])
+        self.refresh()
+        # ★ **글을 먼저 열고 말은 나중에.** 거꾸로 하면 여는 쪽이 자기 말로 덮어
+        #   「모았어」가 사라진다(재 보고 알았다 — 「링크 · … 얘기야」만 남았다).
+        self.show_note(제목)
+        self.report(f"모았어 — 「{제목}」 ({wiki.RAW}/ 에 둔다). 합치기는 VC 가 한다.", [제목])
+        return 제목
+
+    def 둘레보기(self) -> None:
+        """지금 보는 글과 **이어진 것만** 그래프에 남긴다. 다시 부르면 전체로 돌아간다.
+
+        ★ 옵시디언의 「로컬 그래프」 자리다. 전체 그래프는 창고가 커질수록 한 화면에
+          다 떠서, 「이 글이 무엇과 묶였나」를 눈으로 골라야 한다.
+        """
+        if self.graph.둘레중:
+            self.graph.둘레풀기()
+            self.report("전체 그래프로 돌아왔어.", [])
+            return
+        제목 = self.detail_title.text().strip()
+        if not 제목 or 제목 not in self.graph.nodes:
+            self.report("먼저 글을 하나 열어 줘 — 그 글 둘레를 보여 줄게.", [])
+            return
+        남은 = self.graph.둘레만(제목)
+        이웃수 = 남은 - 1
+        # ★ **글 카드를 접는다.** 안 접으면 카드가 그래프를 덮어 **둘레가 안 보인다**
+        #   (찍어 보고 알았다 — 남긴 34개 중 화면에 나온 건 가장자리 몇 개뿐이었다).
+        #   보러 가는 동작이므로 글은 비켜 준다. 점을 누르면 다시 열리고, Esc 면 전체로.
+        if 이웃수 > 0:
+            self.clear_detail()
+        if 이웃수 <= 0:
+            self.graph.둘레풀기()
+            self.report(f"「{제목}」 에 이어진 게 아직 없어.", [제목])
+            return
+        self.report(f"「{제목}」 둘레야 — 이어진 것 {이웃수}개만 남겼어. "
+                    f"Ctrl+L 이나 Esc 면 전체로 돌아가.", [제목])
+
+    def 그래프잡기(self) -> None:
+        """그래프에 손을 얹는다(Ctrl+G). 지금 펼친 글이 있으면 그 점부터."""
+        지금 = self.detail_title.text().strip() or None
+        간데 = self.graph.키로시작(지금)
+        if 간데 is None:
+            self.report("그래프에 아직 점이 없어.", [ROOT])
+            return
+        self.report(f"그래프야 — 지금 {간데}. ↑↓←→ 로 옮기고 Enter 로 열어. Esc 면 찾기 칸.", [간데])
+
+    def _결과단추들(self) -> list:
+        """결과 목록의 줄 단추들(차례대로). 키보드로 오르내릴 때 쓴다."""
+        from PyQt5.QtWidgets import QPushButton
+
+        # ★ **보이기 여부에 기대지 않는다.** 창을 안 띄운 자리(자체점검·오프스크린)에서는
+        #   `isVisible()` 이 거짓이라 줄을 하나도 못 찾았다 — 결과가 비면 단추 자체가 없다.
+        return list(self.results.findChildren(QPushButton))
+
+    def _결과고르기(self, 몇: int) -> bool:
+        """결과 목록의 `몇` 번째 줄을 누른 것처럼 연다(숫자키). 없으면 False."""
+        줄들 = self._결과단추들()
+        if not (0 <= 몇 < len(줄들)):
+            return False
+        줄들[몇].click()
+        return True
+
+    def _결과줄(self, obj) -> int | None:
+        """이 위젯이 결과 목록의 몇 번째 줄인가. 아니면 None."""
+        줄들 = self._결과단추들()
+        try:
+            return 줄들.index(obj)
+        except ValueError:
+            return None
+
+    def _결과줄로(self, 몇: int):
+        """그 줄에 초점을 준다. **초점을 준 위젯**을 돌려준다(못 가면 None).
+
+        ★ 돌려주는 이유: 자체점검 자리에서는 창이 활성화되지 않아 `focusWidget()` 이 비어
+          있다 — 그때도 **무엇을 고르려 했는지**는 재야 한다(실제 창에서는 초점이 잘 잡힌다).
+        """
+        줄들 = self._결과단추들()
+        if not 줄들:
+            return None
+        if 몇 < 0:
+            self.ask_box.setFocus()
+            self.ask_box.selectAll()
+            return self.ask_box
+        if 몇 >= len(줄들):
+            return None         # 맨 아래에서 더 내려가면 그대로 둔다(끝인 줄 알게)
+        줄들[몇].setFocus()
+        return 줄들[몇]
+
+    def _목록에서열기(self, 자리: str) -> None:
+        """결과 줄을 눌렀을 때. `창:이름` 은 화면이고, 나머지는 그 자리의 글이다."""
+        자리 = str(자리)
+        if 자리.startswith("창:"):
+            말 = self.창열기(자리[2:])
+            self.report(말, [ROOT])
+            return
+        self.show_note_at(자리)
+
+    def 더미보기(self, 이름: str = "") -> str:
+        """비슷한 것끼리 **더미로 모아** 보여 준다(오너 2026-09-19).
+
+        「더미」 한 마디면 더미 목록, 「더미 고기」면 그 더미의 글들만.
+        ★ 새 모델을 안 부른다 — 창고에 이미 있는 **뜻 벡터**로 묶는다(수백 장이 한 호흡).
+        """
+        더미들, 혼자들, 까닭 = piles.창고에서(self.notes)
+        if 까닭:
+            return 까닭
+        if not 더미들:
+            return "비슷한 것끼리 묶일 만한 게 아직 없어 — 글이 더 쌓이면 묶인다."
+
+        if 이름:
+            골라 = [p for p in 더미들 if 이름 in p.name] or [p for p in 더미들
+                                                      if any(이름 in t for t in p.titles)]
+            if not 골라:
+                있는것 = " · ".join(p.name for p in 더미들[:5])
+                return f"'{이름}' 더미는 없어. 있는 더미 — {있는것}"
+            뭉치 = 골라[0]
+            쪽들 = [(t, (self.notes.read(t).body if self.notes.read(t) else ""), "", "") for t in 뭉치.titles]
+            self.show_results(쪽들, 이름)
+            self.ensure_on_graph(뭉치.titles)
+            self.graph.focus_on(뭉치.titles, zoom=FOCUS_ZOOM)
+            return f"「{뭉치.name}」 더미 {뭉치.size}장이야."
+
+        # 더미 목록 — 줄마다 **그 더미에서 가장 그 더미다운 글**을 건다(눌러서 바로 연다)
+        쪽들 = []
+        for p in 더미들:
+            나머지 = " · ".join(p.titles[1:4])
+            쪽들.append((p.titles[0], f"[{p.name}] {p.size}장 — {나머지}", "", ""))
+        self.show_results(쪽들, "")
+        앞 = " · ".join(f"{p.name}({p.size})" for p in 더미들[:4])
+        꼬리 = f" 혼자인 글 {len(혼자들)}장." if 혼자들 else ""
+        return (f"더미 {len(더미들)}개야 — {앞}.{꼬리} "
+                f"「더미 {더미들[0].name.split(' · ')[0]}」 처럼 치면 그 더미만 보여줄게.")
+
+    #: 말로 부르는 이름 → 설정 창의 어느 칸인가(`None` 이면 설정 창이 아니라 딴 것)
+    창이름 = {
+        "설정": None, "설정창": None, "환경설정": None, "내 정보": None,
+        "폰 연결": "폰 연결", "큐알": "폰 연결", "qr": "폰 연결",
+        "확장": "확장", "확장플러그인": "확장", "확장프로그램": "확장", "플러그인": "확장",
+        "바깥ai": "바깥 AI", "바깥에이아이": "바깥 AI", "모델": "바깥 AI",
+        "지침": "지침", "외부연결": "외부 연결", "화면설정": "화면",
+    }
+
+    def 창열기(self, 이름: str) -> str:
+        """「설정창 열어줘」 · 「확장 열어줘」 — 화면을 연다(오너 2026-09-19).
+
+        ★ 전에는 이런 말이 **「설정창」이라는 글을 찾다** 실패했다. 사람은 글만 부르지 않는다.
+        설정 창은 칸이 스물이라 **그 칸까지 곧장** 연다 — 열어 놓고 찾게 하면 반쯤만 들어준 것이다.
+        """
+        키 = 이름.replace(" ", "").lower()
+        if 키 in ("단축키", "도움말"):
+            self.단축키보기()
+            return "단축키 목록이야."
+        if 키 in ("전체화면", "전체화면켜"):
+            방식 = settings.toggle_full(self)
+            return f"{방식} 으로 바꿨어."
+        if 키 not in {k.replace(" ", "").lower() for k in self.창이름}:
+            return f"'{이름}' 이라는 창은 몰라. 설정 · 폰 연결 · 확장 · 바깥 AI · 단축키 가 있어."
+        칸 = next(v for k, v in self.창이름.items() if k.replace(" ", "").lower() == 키)
+        창 = settings.open_dialog(self, self.notes)
+        if 칸 and 칸 in getattr(창, "갈래이름", []):
+            창.목록.setCurrentRow(창.갈래이름.index(칸))
+            return f"설정 창의 「{칸}」 칸이야."
+        return "설정 창이야."
 
     @_쓰기막히면알림(돌려줄=True)
     def do_order(self, order: "orders.Order", started: float = 0.0) -> bool:
@@ -1460,6 +1968,12 @@ class MainWindow(QWidget):
             # 적어 놓고 안 쌓이면 그 칸은 거짓말을 하는 것이다.
             self._log_deed(what, said, started)
             return True
+
+        if what == "더미":
+            return done(self.더미보기(name or ""))
+
+        if what == "창열기":
+            return done(self.창열기(name or ""))
 
         if what == "무르기":
             # **잘못 시킨 것을 되돌린다.** 되묻기까지 거쳐 「지워」를 다시 치게 하면
@@ -1633,7 +2147,8 @@ class MainWindow(QWidget):
                 return done(f"'{hit}' 못 지웠어 — 지난 판을 못 남겨서 멈췄어(기록 폴더가 잠겼거나 읽기 전용).", [hit])
             self.clear_detail()
             self.refresh()
-            return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어.")
+            return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어."
+                        + self.사본이면한마디())
         if what == "되돌리기":
             past = self.notes.history(hit) if hit else []
             if not past:
@@ -1713,6 +2228,443 @@ class MainWindow(QWidget):
         else:
             self.report(f"#{tag} 붙은 게 없어.", [ROOT])
 
+    _사진꼴 = notes_module.IMAGE_EXT | {".heic", ".heif"}
+
+    def _최근채우기(self) -> None:
+        """오른쪽 「최근 글」 — 고른 칩(최근 · 사진 · #태그)대로 채운다."""
+        갈래 = self._목록갈래
+        if 갈래 and 갈래 != "@사진":
+            rows = []
+            for t in self.notes.by_tag(갈래)[:12]:
+                g = self.notes.read(t)
+                rows.append((t, notes_module.카드미리보기(g.body) if g else ""))
+        else:
+            rows = []
+            for r in self.notes.search("", 80 if 갈래 else 13):
+                if r["title"] in (ROOT, OLD_ROOT):
+                    continue
+                몸 = r["body"] if "body" in r.keys() else ((self.notes.read(r["title"]) or Note(title="", body="")).body)
+                if 갈래 == "@사진" and not any(
+                        Path(a).suffix.lower() in self._사진꼴 for a in notes_module.parse_attachments(몸)):
+                    continue
+                # 기호(`- 제품명 :`·`![[…]]`·태그 줄)를 걷은 미리보기로 — 폰 카드와 같은 말
+                rows.append((r["title"], notes_module.카드미리보기(몸), r["path"], r["kind"]))
+            rows = rows[:12]
+        self.recent.show_hits(rows, "")
+        이름 = {"": "최근 글", "@사진": "사진 붙은 글"}.get(갈래, f"#{갈래}")
+        머리 = self.recent_head.findChild(QLabel)
+        if 머리 is not None and 머리.text() != 이름:
+            머리.setText(이름)
+        # 칩 — 많이 쓴 태그 넷. 바뀌었을 때만 다시 짓는다(누른 단추가 제 신호 안에서 지워지면 죽는다 — 미뤄서 부른다)
+        칩들 = ["", "@사진"] + [t for t, _ in self.notes.all_tags()[:4]]
+        if 칩들 != self._칩들 or any(
+                b.property("vc_chip") == 갈래 and not b.isChecked()
+                for b in self.recent_chips.findChildren(QPushButton)):
+            self._칩들 = 칩들
+            while self._칩줄.count():
+                w = self._칩줄.takeAt(0).widget()
+                if w is not None:
+                    w.setParent(None)
+                    w.deleteLater()
+            for 값 in 칩들:
+                말 = {"": "최근", "@사진": "사진"}.get(값, "#" + (값 if len(값) <= 8 else 값[:7] + "…"))
+                b = QPushButton(말)
+                b.setCheckable(True)
+                b.setChecked(값 == 갈래)
+                b.setProperty("vc_chip", 값)  # ★ Qt 속성 이름은 영문만 — 한글이면 UnicodeEncodeError
+                b.setCursor(Qt.PointingHandCursor)
+                b.setStyleSheet(
+                    "QPushButton{border:1px solid " + theme.css(theme.T.ACCENT, 0.25) + "; border-radius:10px;"
+                    f"padding:2px 9px; color:{theme.T.DIM.name()}; font-size:{theme.글자(11)};"
+                    "background:transparent;}"
+                    "QPushButton:checked{background:" + theme.css(theme.T.ACCENT, 0.28) + ";"
+                    f"color:{theme.T.TEXT.name()}; border-color:" + theme.css(theme.T.ACCENT, 0.8) + ";}")
+                b.clicked.connect(lambda _=False, v=값: self._later(lambda: self._칩골라(v)))
+                self._칩줄.addWidget(b)
+            self._칩줄.addStretch(1)
+        self._칩맞추기()      # 칸에 안 들어가는 칩은 접는다 — 안 그러면 칸이 창 밖으로 밀린다
+
+    def 앞머리그리기(self) -> None:
+        """앞머리 칸을 다시 짓는다. 이름 목록 → 누르면 값 목록 → 누르면 그 값으로 찾기."""
+        while self._앞머리줄.count():
+            w = self._앞머리줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+        def 줄(말: str, 눌렀을때, 흐리게: bool = False) -> None:
+            b = QPushButton(말)
+            b.setObjectName("quiet")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumWidth(1)
+            b.setStyleSheet(
+                "text-align:left; padding:1px 4px;"
+                + (f"color:{theme.T.DIM.name()};" if 흐리게 else ""))
+            b.clicked.connect(lambda _=False: self._later(눌렀을때))
+            self._앞머리줄.addWidget(b)
+
+        if self._앞머리연것:
+            이름 = self._앞머리연것
+            줄(f"← {이름}", lambda: self._앞머리열기(""), 흐리게=True)
+            값들 = self.notes.앞머리값들(이름)
+            if not 값들:
+                줄("(값이 없다)", lambda: None, 흐리게=True)
+            for 값, 수 in 값들:
+                줄(f"{값}  {수}", lambda v=값, k=이름: self._앞머리로찾기(k, v))
+            return
+        이름들 = self.notes.앞머리세기()
+        if not 이름들:
+            줄("아직 적힌 앞머리가 없어", lambda: None, 흐리게=True)
+            return
+        for 이름, 수 in 이름들:
+            줄(f"{이름}  {수}", lambda k=이름: self._앞머리열기(k))
+
+    def 살핌그리기(self) -> None:
+        """창고를 살펴 어긋난 것을 줄로 늘어놓는다. 누르면 그 글로 간다."""
+        import audit
+
+        while self._살핌줄.count():
+            w = self._살핌줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+        def 줄(말: str, 눌렀을때=None, 흐리게: bool = False) -> None:
+            b = QPushButton(말)
+            b.setObjectName("quiet")
+            b.setMinimumWidth(1)
+            b.setStyleSheet("text-align:left; padding:1px 4px;"
+                            + (f"color:{theme.T.DIM.name()};" if 흐리게 else ""))
+            if 눌렀을때 is not None:
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(lambda _=False: self._later(눌렀을때))
+            self._살핌줄.addWidget(b)
+
+        난것 = audit.살피기(self.notes)
+        self._살핀것 = 난것
+        if all(not v for v in 난것.values()):
+            줄("창고는 성하다 — 어긋난 데가 없어", 흐리게=True)
+            return
+        for 갈래, 것들 in 난것.items():
+            if not 것들:
+                continue
+            줄(f"{audit.제목들[갈래]}  {len(것들)}", 흐리게=True)
+            for 하나 in 것들[:6]:
+                제목 = 하나[0] if isinstance(하나, tuple) else 하나
+                꼬리 = f" → {하나[1]}" if isinstance(하나, tuple) else ""
+                줄(f"    {제목}{꼬리}", lambda t=제목: self.show_note(t))
+            if len(것들) > 6:
+                줄(f"    … {len(것들) - 6}개 더", 흐리게=True)
+        # 살핀 것도 일이다 — 일지에 한 줄 남긴다
+        wikilog.적기(self.notes, "살피기", audit.한줄(난것))
+
+    # --- 코드(헤르메스 IDE) -------------------------------------------------
+
+    def 코드그리기(self) -> None:
+        """프로젝트와 그 파일들을 곁 칸에 늘어놓는다. **접혀 있으면 세지도 않는다.**
+
+        ★ 파일 나무는 디스크를 훑는 일이라, 안 볼 때까지 훑으면 켤 때가 느려진다.
+        """
+        import codefiles
+
+        while self._코드줄.count():
+            것 = self._코드줄.takeAt(0).widget()
+            if 것 is not None:
+                것.hide()
+                것.setParent(None)
+                것.deleteLater()
+        프로젝트들 = codefiles.프로젝트들()
+        if not 프로젝트들:
+            self._코드줄.addWidget(QLabel("차린 프로젝트가 없다. VC 에게 「새 프로젝트 ‹이름›」 이라고 하면 차린다."))
+            return
+        for 이름 in 프로젝트들:
+            머리 = QPushButton(("▾ " if 이름 == self._연프로젝트 else "▸ ") + 이름)
+            머리.setObjectName("quiet")
+            # ★ **단추가 칸보다 넓어지면 칸이 통째로 밀린다.** 곁 칸은 폭이 정해져 있어서
+            #   긴 이름 하나가 목록 전체를 화면 밖으로 민다(오늘 결과 칸에서 본 그 병이다).
+            머리.setMinimumWidth(1)
+            머리.clicked.connect(lambda _=False, n=이름: self._프로젝트펼치기(n))
+            self._코드줄.addWidget(머리)
+            if 이름 != self._연프로젝트:
+                continue
+            # ★★ **맡기기 단추.** 찾기 칸에 친 말을 지시로 쓴다 — 창을 막는 물음 상자를
+            #   띄우지 않으려는 것이다(오늘 모달이 창을 멈춰 세운 적이 있다).
+            돌고있나 = self._맡김중 == 이름
+            맡단추 = QPushButton("   " + ("■ 멈추기" if 돌고있나 else "▶ 찾기 칸의 말을 맡기기"))
+            맡단추.setObjectName("quiet")
+            맡단추.setMinimumWidth(1)
+            맡단추.setToolTip("찾기 칸에 시킬 말을 치고 누른다. 클로드 코드·Codex 가 돈다")
+            맡단추.clicked.connect(
+                lambda _=False, n=이름: (self.맡기기멈추기() if self._맡김중 == n
+                                       else self.맡기기시작(n, self.ask_box.text())))
+            self._코드줄.addWidget(맡단추)
+            # ★★ **협업 단추.** 하나가 고치고 다른 하나가 그 차이를 본다. 창에서 못
+            #   쓰면 만든 것이 아니다 — 문만 있고 길이 없던 자리다.
+            둘단추 = QPushButton("   " + ("■ 멈추기" if 돌고있나 else "▶▶ 둘이 함께 (짓고·보고)"))
+            둘단추.setObjectName("quiet")
+            둘단추.setMinimumWidth(1)
+            둘단추.setToolTip("클로드가 고치고 Codex 가 그 차이를 검토해. 보는 쪽은 읽기만 한다")
+            둘단추.clicked.connect(
+                lambda _=False, n=이름: (self.맡기기멈추기() if self._맡김중 == n
+                                       else self.맡기기시작(n, self.ask_box.text(),
+                                                        보는손="codex")))
+            self._코드줄.addWidget(둘단추)
+            난것 = codefiles.나무(이름)
+            for 상대 in 난것["파일"][:120]:
+                단추 = QPushButton("   " + 상대)
+                단추.setObjectName("quiet")
+                단추.setMinimumWidth(1)
+                # ★ 긴 경로는 **앞을 줄인다** — 뒤쪽(파일 이름)이 알아보는 데 쓸모 있다.
+                단추.vc_코드경로 = 상대
+                단추.setToolTip(상대)
+                단추.clicked.connect(lambda _=False, n=이름, r=상대: self.코드열기(n, r))
+                self._코드줄.addWidget(단추)
+            if 난것["잘림"]:
+                self._코드줄.addWidget(QLabel("   … 파일이 많아 잘렸다"))
+        self._later(self.코드줄임)
+
+    def 코드줄임(self) -> None:
+        """코드 칸 단추 글을 **칸 폭에 맞춰** 줄인다. 안 줄이면 목록이 화면 밖으로 밀린다."""
+        for i in range(self._코드줄.count()):
+            것 = self._코드줄.itemAt(i).widget()
+            경로 = getattr(것, "vc_코드경로", None)
+            if 경로 is None:
+                continue
+            폭 = max(것.width() - 26, 40)
+            것.setText("   " + 것.fontMetrics().elidedText(경로, Qt.ElideLeft, 폭))
+
+    def _프로젝트펼치기(self, 이름: str) -> None:
+        self._연프로젝트 = None if self._연프로젝트 == 이름 else 이름
+        self._엔진말하기()          # 채팅 칸이 어디를 고칠지 바로 보여 준다
+        self._later(self.코드그리기)
+
+    def 맡기기시작(self, 프로젝트: str, 지시: str, 손: str = "", 손물건=None,
+              보는손: str = "", 보는물건=None, 이어서: str = "", 뿌리=None) -> None:
+        """에이전트 CLI 에게 맡긴다. **느린 부름은 딴 실에서** — 창이 굳으면 안 된다.
+
+        `보는손` 을 주면 **협업**이다 — 하나가 고치고 다른 하나가 그 차이를 본다.
+        길은 하나로 둔다(타이머·멈춤·끝맺음이 똑같으니 갈라 놓으면 한쪽만 고쳐진다).
+        """
+        지시 = (지시 or "").strip()
+        if self._맡김중:
+            self.report(f"이미 「{self._맡김중}」 에 하나 돌고 있어. 멈추고 다시 해.", [])
+            return
+        if not 지시:
+            self.report("찾기 칸에 시킬 말을 먼저 치고 눌러.", [])
+            return
+        import agentcli
+
+        손 = 손 or "claude"
+        그손 = 손물건 or agentcli.손고르기(손)
+        if 손물건 is None and (그손 is None or not 그손.있나()):
+            # ★ **까닭을 말한다.** 조용히 실패하면 왜 안 되는지 아무도 모른다.
+            self.report(f"「{손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
+            return
+        # ★ 보는 손도 **없으면 미리 말한다** — 반쯤 돌다 실패하면 값만 쓴다
+        if 보는손 and 보는물건 is None:
+            본손 = agentcli.손고르기(보는손)
+            if 본손 is None or not 본손.있나():
+                self.report(f"보는 손 「{보는손}」 이 이 기계에 없어 — 먼저 깔아야 해.", [])
+                return
+        self._맡김중, self._맡김멈춤 = 프로젝트, False
+        self._맡김손 = 보는손 and f"{손}+{보는손}" or 손
+        self._맡김시작 = time.monotonic()
+        self._채팅도는중(f"● {self._맡김손} 가 생각 중…")
+        self._맡김타이머.start()
+        self._later(self.코드그리기)          # 단추가 「멈추기」로 바뀐다
+        누가 = f"{손} → {보는손}" if 보는손 else 손
+        # ★ 일터 이름(`workbench`)은 **우리끼리 쓰는 말**이다 — 오너에게 보이면
+        #   「그게 뭐지」가 된다. 프로젝트를 안 열었으면 「창고」라고 말한다.
+        # ★ 영문 이름 뒤에는 한 칸 띄우고, 한글 뒤에는 붙인다 — 「창고 에」는 말이 안 된다
+        어디 = "창고에" if 뿌리 is not None else f"{프로젝트} 에"
+        self.report(f"{어디} 맡겼어 ({누가}) — {지시[:60]}", [])
+
+        def 일() -> None:
+            # ★★ **창고는 안 만진다.** 끝난 뒤 창 실에서 적는다(같은 색인을 두 실이
+            #   만지면 엉킨다). 그래서 협업도 「돌리기」와 「적기」가 갈려 있다.
+            if 보는손:
+                난것 = hermes.협업돌리기(프로젝트, 지시, 손, 보는손, 뿌리=뿌리,
+                                  멈춤=lambda: self._맡김멈춤,
+                                  짓는물건=손물건, 보는물건=보는물건, 이어서=이어서)
+            else:
+                난것 = {"지음": agentcli.돌리기(프로젝트, 지시, 손, 이어서=이어서, 뿌리=뿌리,
+                                          멈춤=lambda: self._맡김멈춤, 손물건=손물건)}
+            난것["지시"], 난것["협업"] = 지시, bool(보는손)
+            self.handoff_done.emit(프로젝트, 난것)
+
+        report.딴실로("맡기기", 일)
+
+    def 맡기기멈추기(self) -> None:
+        if not self._맡김중:
+            return
+        self._맡김멈춤 = True
+        self.report("멈추라고 했어. 돌던 것이 끊기면 바뀐 것만 보여 줄게.", [])
+
+    def _맡김째깍(self) -> None:
+        if not self._맡김중:
+            self._맡김타이머.stop()
+            return
+        초 = int(time.monotonic() - self._맡김시작)
+        self.footer.setText(f"  /  ▶ {self._맡김중} 에 맡긴 지 {초}초 — 코드 칸에서 멈출 수 있어")
+        self._채팅도는중(f"● {self._맡김손 or '에이전트'} 가 {초}초째 생각 중…")
+
+    def _맡김끝(self, 프로젝트: str, 돌림: dict) -> None:
+        """딴 실이 끝났다. **창고 쓰기는 여기서** 한다 — 같은 색인을 두 실이 만지면 안 된다."""
+        import agentcli
+
+        self._맡김중, self._맡김멈춤 = "", False
+        self._맡김타이머.stop()
+        self.footer.setText("")
+        self._채팅도는중("")
+        지시 = 돌림.get("지시") or ""
+        지음 = 돌림.get("지음") or {}
+        # ★★ **줄기를 챙긴다.** 안 챙기면 다음 마디가 처음 보는 사이로 돌아가
+        #   「채팅」이 아니라 한 마디씩 던지는 것이 된다.
+        줄기 = 지음.get("세션") or ""
+        if 줄기 and 지음.get("손"):
+            self._채팅줄기[(프로젝트, 지음["손"])] = 줄기
+        if 돌림.get("협업"):
+            난것 = hermes.협업뒤(self.notes, 프로젝트, 지시, 돌림)
+        else:
+            난것 = hermes.돌린뒤(self.notes, 프로젝트, 지시, 지음)
+        바뀐 = 지음.get("바뀐파일") or []
+        self.refresh()
+        self._later(self.코드그리기)
+        self.report(난것.get("사람말") or agentcli.사람말(지음),
+                    (난것.get("적립") or {}).get("만든것") or [])
+        if 바뀐:
+            self.show_results([(f"{프로젝트}/{f}", "") for f in 바뀐])
+        제안 = 난것.get("스킬제안") or {}
+        if 제안.get("스킬") is not None:
+            self._스킬물어보기(제안)
+
+    def _스킬물어보기(self, 제안: dict) -> None:
+        """「스킬로 남길까」 — **창을 막지 않는** 상자로 묻는다."""
+        box = QMessageBox(self)
+        box.setWindowTitle("스킬로 남길까")
+        box.setText(제안.get("사람말") or "스킬로 남길까?")
+        남기기단추 = box.addButton("스킬로 남기기", QMessageBox.AcceptRole)
+        box.addButton("그냥 두기", QMessageBox.RejectRole)
+        box.setModal(False)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.buttonClicked.connect(
+            lambda 눌린, b=box, 스=제안.get("스킬"), 예=남기기단추:
+            self._스킬남기기(스, 눌린 is 예, b))
+        self._스킬상자 = box
+        box.show()
+
+    def _스킬남기기(self, 스킬, 남길까: bool, 상자) -> None:
+        self._스킬상자 = None
+        상자.close()
+        if not 남길까 or 스킬 is None:
+            return
+        import skillgen
+
+        이름 = skillgen.남기기(self.notes, 스킬)
+        if not 이름:
+            return
+        wikilog.적기(self.notes, "적립", f"스킬 남김 — {이름}", [이름])
+        self.refresh()
+        self.show_note(이름)
+        self.report(f"스킬로 남겼어 — 「{이름}」.", [이름])
+
+    def 코드열기(self, 프로젝트: str, 상대: str) -> None:
+        """코드 파일을 본문 칸에 연다. **창고 글이 아니다** — 저장은 그 파일로 간다."""
+        import codefiles
+
+        난것 = codefiles.읽기(프로젝트, 상대)
+        if 난것["왜"]:
+            self.report(f"못 열었어 — {난것['왜']}", [])
+            return
+        self._연코드 = (프로젝트, 상대)
+        self.editing = None                    # 창고 글은 안 열려 있다
+        self.editing_at = None
+        self.detail_title.setText(f"{프로젝트}/{상대}")
+        self.detail_title.setReadOnly(True)
+        self.detail_kind.hide()
+        self.detail_body.setPlainText(난것["글"])
+        self._opened_body = 난것["글"]
+        self.detail_stack.setCurrentIndex(1)   # 코드는 처음부터 고치는 모습
+        self.detail_card.show()
+        self.report(f"{프로젝트}/{상대} 열었어. 고치면 그 파일에 바로 저장돼.", [])
+
+    def 코드저장(self) -> bool:
+        """연 코드 파일을 저장한다. 연 것이 없으면 거짓.
+
+        ★★ **창고로 새면 안 된다.** 코드가 창고 글로 저장되면 창고가 코드 창고가 되고,
+           갈래·링크·그래프가 통째로 흐려진다. 그래서 `save_note` 보다 **먼저** 가른다.
+        """
+        if not self._연코드:
+            return False
+        import codefiles
+
+        프로젝트, 상대 = self._연코드
+        글 = self.detail_body.toPlainText()
+        if 글 == self._opened_body:
+            return True                        # 바뀐 게 없으면 파일을 안 건드린다
+        난것 = codefiles.쓰기(프로젝트, 상대, 글)
+        if not 난것["됐나"]:
+            self.report(f"못 저장했어 — {난것['왜']}", [])
+            return True
+        self._opened_body = 글
+        return True
+
+    def 코드닫기(self) -> None:
+        """코드 모드를 푼다. 창고 글을 열 때마다 부른다."""
+        if not self._연코드:
+            return
+        self._연코드 = None
+        self.detail_title.setReadOnly(False)
+
+    def 폴더그리기(self) -> None:
+        """폴더 나무를 다시 짓는다. 누르면 그 안의 글만 모은다."""
+        while self._폴더줄.count():
+            w = self._폴더줄.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        나무 = self.notes.폴더나무()
+        if not 나무:
+            빈줄 = QPushButton("아직 폴더가 없어")
+            빈줄.setObjectName("quiet")
+            빈줄.setMinimumWidth(1)
+            빈줄.setStyleSheet(f"text-align:left; padding:1px 4px; color:{theme.T.DIM.name()};")
+            self._폴더줄.addWidget(빈줄)
+            return
+        길: list[str] = []
+        for 이름, 깊이, 수 in 나무:
+            del 길[깊이:]
+            길.append(이름)
+            안 = "/".join(길)
+            b = QPushButton("    " * 깊이 + f"{이름}  {수}")
+            b.setObjectName("quiet")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumWidth(1)
+            b.setStyleSheet("text-align:left; padding:1px 4px;")
+            b.clicked.connect(lambda _=False, a=안: self._later(lambda: self._폴더로찾기(a)))
+            self._폴더줄.addWidget(b)
+
+    def _폴더로찾기(self, 안: str) -> None:
+        """그 폴더 글만 모은다. 앞머리 칸과 같이 **친 말을 찾기 칸에도 적는다.**"""
+        말 = f"path:{안}"
+        self.ask_box.setText(말)
+        self.ask(말)
+
+    def _앞머리로찾기(self, 이름: str, 값: str) -> None:
+        """그 값으로 찾는다. **친 말을 찾기 칸에도 적는다** — 왜 이것이 나왔는지 보이고,
+        거기서 쉼표로 더 좁힐 수 있다(칸이 비어 있으면 둘 다 못 한다)."""
+        말 = f"{이름}:{값}"
+        self.ask_box.setText(말)
+        self.ask(말)
+
+    def _앞머리열기(self, 이름: str) -> None:
+        self._앞머리연것 = 이름
+        self.앞머리그리기()
+
+    def _칩골라(self, 값: str) -> None:
+        self._목록갈래 = "" if self._목록갈래 == 값 else 값
+        self._최근채우기()
+
     def show_results(self, hits: list[tuple[str, str]], query: str = "") -> None:
         """찾은 것을 옆에 늘어놓는다. 없으면 칸 자체를 접는다 — 빈 상자는 자리만 먹는다."""
         self.results.show_hits(hits, query)
@@ -1779,6 +2731,7 @@ class MainWindow(QWidget):
         self.side_btn.show()
         self._show_trail_buttons()
         self._show_twin(note.title, where)
+        self.코드닫기()                            # 코드 모드였으면 푼다 — 창고 글이 우선이다
         self.detail_stack.setCurrentIndex(0)      # 열 때는 읽는 모습
         self.edit_btn.setText("고치기")
         self.edit_btn.show()
@@ -1854,6 +2807,8 @@ class MainWindow(QWidget):
         self.mentions.show_hits(언급)
         self.mentions_head.setVisible(bool(언급))
         self.mentions.setVisible(bool(언급))
+        # ★ 아랫단 길이가 글마다 다르다 — 채운 뒤에 다시 맞춘다
+        self._아랫단가두기(self.detail_card.height())
 
     def _indexed(self, changed: int) -> None:
         """훑기가 끝났다. 바뀐 게 있을 때만 다시 그린다 — 없으면 화면을 건드릴 이유가 없다."""
@@ -1909,6 +2864,12 @@ class MainWindow(QWidget):
         갈아 끼우면 방금 쓴 문장이 소리 없이 사라진다 — 그건 되돌릴 수도 없다.
         대신 알려만 주고, 손을 뗀 뒤에 눌러서 받게 한다.
         """
+        # ★★ **그물이 살아 있으면 훑기를 늦춘다.** 이웃이 바꾸면 신호가 바로 오니
+        #   3초마다 창고를 통째로 훑을 까닭이 없다 — 창고가 NAS 에 있고 글이 수만
+        #   장이면 그 훑기가 곧 값이다(오너 2026-09-24: 「감시 하지 말고 신호 전송」).
+        #   ★ 아주 끄지는 않는다. 그물 열쇠를 안 넣었거나 테일스케일이 꺼져 있으면
+        #     신호가 아예 없는데, 그때 훑기까지 없으면 **밖에서 고친 것을 영영 모른다.**
+        self._훑기늦추기()
         if time.monotonic() - self._wrote_at < 1.5:
             return                       # 방금 우리가 쓴 것이다
         self.indexer.ask()               # 훑기는 딴 실에서. 끝나면 _indexed가 받는다
@@ -1979,6 +2940,9 @@ class MainWindow(QWidget):
 
     def save_note(self) -> None:
         """치는 대로 저장한다. 열린 항목이 없으면 아무 일도 안 한다."""
+        # ★★ **코드 파일이 열려 있으면 그쪽으로 간다.** 창고로 새면 창고가 코드 창고가 된다.
+        if self.코드저장():
+            return
         if self.editing is None:
             return
         # 읽고-견주고-쓰기를 잠금 안에서 — 그 사이 AI 가 덧붙인 줄을 「밖에서 온 것」으로 못 보고 덮지 않게.
@@ -2211,7 +3175,7 @@ class MainWindow(QWidget):
         except OSError as err:
             self.report(f"진단 묶음을 못 만들었어: {err}", [ROOT])
             return
-        self.report(f"진단 묶음을 만들었어 → {made.name}  (기록 폴더에 있어)", [ROOT])
+        self.report(f"진단 묶음을 만들었어 → {made.name}  (앱 자리에 있어)", [ROOT])
         # `QMessageBox.information` 은 **손도 안 댄 윈도우 기본 대화상자**로 뜬다 —
         # 파란 i 아이콘·기본 고딕·「OK」. VC 안에서 제일 이질적이라는 지적을 받았다.
         # 확인창과 같은 길로 보낸다.
@@ -2222,8 +3186,15 @@ class MainWindow(QWidget):
     def _build_more(self) -> None:
         """`⋯` 차림표. 열 때마다 새로 짓는다 — 서식이 늘거나 줄 수 있다."""
         self.more_menu.clear()
-        self.more_menu.addAction("새 항목  (Ctrl+N)", self.new_note)
-        self.more_menu.addAction("오늘 일지  (Ctrl+D)", self.open_daily)
+        self.more_menu.addAction(f"새 항목  ({_키글('Ctrl+N')})", self.new_note)
+        self.more_menu.addAction(f"오늘 일지  ({_키글('Ctrl+D')})", self.open_daily)
+        # ★ 둘레 보기(로컬 그래프)는 **단추를 안 늘리고** 여기와 단축키로 넣는다(결정 26).
+        지금글 = self.detail_title.text().strip()
+        if 지금글 or self.graph.둘레중:
+            말 = ("둘레 보기 그만" if self.graph.둘레중 else "이 글 둘레만 보기")
+            # ★ 한글 메서드를 신호에 **직접** 걸면 Qt 가 이름을 ascii 로 바꾸려다 터진다
+            #   (UnicodeEncodeError) — 전에도 밟은 자리다. lambda 로 감싼다.
+            self.more_menu.addAction(f"{말}  ({_키글('Ctrl+L')})", lambda: self.둘레보기())
         # ★ **접힌 목차를 여기로 옮긴다.** 카드가 좁으면 위 줄에서 목차를 숨기는데,
         # 여기에도 안 넣어서 **소제목으로 갈 길이 통째로 사라졌다**(시험 쪽 라-③ —
         # 「목차 UI 가 안 보이고 ⋯ 메뉴에도 없다」). 접는 것은 자리를 아끼려는
@@ -2245,10 +3216,172 @@ class MainWindow(QWidget):
             gone = self.more_menu.addAction("지우기", self.drop_note)
             gone.setToolTip("이 항목을 지운다. 파일이 사라진다")
         self.more_menu.addSeparator()
-        self.more_menu.addAction("설정 · 내 정보  (Ctrl+,)",
+        self.more_menu.addAction(f"설정 · 내 정보  ({_키글('Ctrl+,')})",
                                  lambda: self._later(lambda: settings.open_dialog(self, self.notes)))
         self.more_menu.addAction("전체화면  (F11)", lambda: settings.toggle_full(self))
+        if self.editing is not None:
+            # 드물게 쓰는 AI 는 ⋯ 안에(결정 26)
+            ai = self.more_menu.addMenu("AI")
+            ai.addAction("요약", lambda: self._later(lambda: self._도움("summary")))
+            옮김 = ai.addMenu("번역")
+            for 말 in ("영어", "일본어", "중국어", "한국어"):
+                옮김.addAction(말, lambda _=False, l=말: self._later(lambda: self._도움("translate", l)))
         self.more_menu.addAction("문제 알리기 (진단 묶기)", self.make_report)
+
+    def _도움(self, what: str, lang: str = "영어") -> None:
+        """AI 요약·번역(편의 기능 1·3번) — 딴 실에서 서버에 묻고, 끝나면 `assist_done`."""
+        title = self.editing
+        if not title:
+            return
+        머리 = "AI 요약" if what == "summary" else f"AI 번역 ({lang})"
+        self.report(f"{머리} 하는 중… (몇 초 걸린다)", [title])
+        link = self.link
+
+        def 일() -> None:
+            import urllib.error
+            import urllib.request
+
+            요청 = urllib.request.Request(
+                f"{link.base}/eb/v1/assist", method="POST",
+                data=json.dumps({"action": what, "title": title, "lang": lang}, ensure_ascii=False).encode(),
+                headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
+            try:
+                # ★ 서버 부르기의 기본 기다림(0.35초)으로는 AI 답을 못 받는다 — 넉넉히
+                with urllib.request.urlopen(요청, timeout=180) as r:
+                    글 = json.loads(r.read().decode()).get("text", "")
+            except urllib.error.HTTPError as e:
+                try:
+                    글 = "⚠ " + json.loads(e.read().decode()).get("error", str(e))
+                except Exception:
+                    글 = f"⚠ {e}"
+            except Exception as e:
+                글 = f"⚠ 컴퓨터 VC 서버에 못 물었다 — {type(e).__name__}"
+            self.assist_done.emit(title, 머리, 글)
+
+        report.딴실로("AI 도움(요약·번역)", 일)
+
+    def 창고에묻기(self, 물음: str, 앞말: list | None = None, 대화: bool = False) -> None:
+        """묻기(Query) — 서버에 **창고를 뒤져 답해 달라**고 한다. 딴 실에서 돈다.
+
+        ★ 모델 답은 실측 15초쯤이라 창에서 곧장 부르면 **그동안 창이 굳는다.**
+          요약·번역(`_도움`)이 쓰는 길을 그대로 따랐다.
+        """
+        # ★ 대화일 때는 「창고를 뒤진다」고 안 한다 — 인사에도 그 말이 뜨면 이상하다
+        self.report("…" if 대화 else f"창고를 뒤지는 중 — 「{물음}」", [], aloud=not 대화)
+        link = self.link
+
+        def 일() -> None:
+            import urllib.error
+            import urllib.request
+
+            답, 근거 = "", []
+            요청 = urllib.request.Request(
+                f"{link.base}/eb/v1/wiki/" + ("chat" if 대화 else "ask"), method="POST",
+                data=json.dumps({"text": 물음, "history": list(앞말 or [])},
+                                ensure_ascii=False).encode(),
+                headers={"Authorization": f"Bearer {link.token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(요청, timeout=180) as r:
+                    난것 = json.loads(r.read().decode())
+                답 = 난것.get("answer") or ""
+                근거 = 난것.get("sources") or 난것.get("looked") or []
+                if not 답:
+                    답 = "⚠ " + (난것.get("why") or "답을 못 냈다")
+            except urllib.error.HTTPError as e:
+                try:
+                    답 = "⚠ " + json.loads(e.read().decode()).get("error", str(e))
+                except Exception:
+                    답 = f"⚠ {e}"
+            except Exception as e:
+                답 = f"⚠ 서버에 못 물었다 — {type(e).__name__}"
+            self.query_done.emit(물음, 답, list(근거), bool(대화))
+
+        report.딴실로("묻기", 일)
+
+    def _묻기보이기(self, 물음: str, 답: str, 근거: list, 대화: bool = False) -> None:
+        """답을 말하고, 근거 글들을 결과 칸에 세운다 — **눌러서 확인할 수 있게.**
+
+        ★★ 답을 창고에 남길지는 **물어본다.** 물을 때마다 글이 쌓이면 창고가 물음으로
+           덮이고, 기계가 지은 글과 사람이 정한 글이 섞인다. 이 프로그램의 결
+           (제안 → 승인 → 기록)이 여기에도 그대로 간다.
+        ★★ **대화일 때는 안 묻는다.** 말 한 마디마다 상자가 뜨면 대화가 안 된다 —
+           남기고 싶으면 찾기 칸으로 묻는다(그쪽이 「재는」 길이다).
+        """
+        self.report(답, list(근거))
+        if 근거:
+            # `show_results` 는 **(제목, 요약) 짝**을 받는다 — 제목 글자만 주면
+            # 글자 하나하나로 찢어져 엉뚱한 줄이 선다(재서 잡았다).
+            self.show_results([(t, "") for t in 근거])
+            if not 대화:
+                # ★ 대화 중에 글이 저절로 열리면 하던 말이 가려진다
+                self.show_note(근거[0])
+        if 대화 or 답.startswith("⚠") or not 근거:
+            return          # 대화·못 낸 답·근거 없는 답은 남길 것이 아니다
+        # ★★ **창을 막지 않는다.** 처음에 `exec_()` 로 모달을 띄웠더니 답이 올 때마다
+        #   창이 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(재서 잡았다 · 2026-09-21).
+        #   물어보되 막지는 않는다 — 답은 이미 화면에 있고, 남길지는 천천히 정해도 된다.
+        box = QMessageBox(self)
+        box.setWindowTitle("창고에 남길까")
+        box.setText(f"「{물음}」\n\n{답}")
+        남기기단추 = box.addButton("창고에 남기기", QMessageBox.AcceptRole)
+        box.addButton("그냥 두기", QMessageBox.RejectRole)
+        box.setModal(False)
+        box.setAttribute(Qt.WA_DeleteOnClose)      # 닫히면 스스로 지워진다
+        box.buttonClicked.connect(
+            lambda 눌린, b=box, 물=물음, 근=list(근거), 예=남기기단추:
+            self._묻기남기기(물, 근, 눌린 is 예, b))
+        self._묻기상자 = box          # 참조를 들고 있어야 안 사라진다
+        box.show()
+
+    def _묻기남기기(self, 물음: str, 근거: list, 남길까: bool, 상자) -> None:
+        """「창고에 남기기」를 눌렀을 때. 안 누르면 아무것도 안 한다."""
+        self._묻기상자 = None
+        답 = 상자.text().split("\n\n", 1)[-1]
+        상자.close()
+        if not 남길까:
+            return
+        import query as _묻기
+
+        제목 = _묻기.남기기(self.notes, 물음, {"답": 답, "근거": list(근거)})
+        if not 제목:
+            return
+        wikilog.적기(self.notes, "묻기", f"남김 — {물음}", [제목])
+        self.refresh()
+        self.show_note(제목)
+        self.report(f"남겼어 — 「{제목}」 (갈래는 {wiki.기본갈래}, 보고 옮겨도 돼).", [제목])
+
+    def _도움보이기(self, title: str, 머리: str, 글: str) -> None:
+        """AI 답을 창으로 — 복사 · 글 끝에 붙이기."""
+        if 글.startswith("⚠"):
+            self.report(글, [title])
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle(머리)
+        box.setText(f"{title} — {머리}")
+        box.setInformativeText(글)
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        붙이기 = box.addButton("글 끝에 붙이기", QMessageBox.AcceptRole)
+        복사 = box.addButton("복사", QMessageBox.ActionRole)
+        box.addButton("닫기", QMessageBox.RejectRole)
+
+        def 골랐다(b) -> None:
+            if b is 붙이기:
+                self._later(lambda: self._도움붙이기(title, 머리, 글))
+            elif b is 복사:
+                QApplication.clipboard().setText(글)
+        box.buttonClicked.connect(lambda b: 골랐다(b))
+        box.open()          # 창을 붙들지 않는다
+        self._도움창 = box
+
+    def _도움붙이기(self, title: str, 머리: str, 글: str) -> None:
+        try:
+            self.notes.append(title, f"## {머리}\n\n{글}")
+        except WriteBlocked:
+            self.report("못 붙였어 — 기록 폴더가 잠겼거나 읽기 전용이야.", [title])
+            return
+        self.report(f"글 끝에 붙였어 — {머리}", [title])
+        if self.editing == title:
+            self.show_note(title)
 
     def _put_template(self, name: str) -> None:
         # 차림표에서 불린다. 여기서 글을 갈아 끼우면 차림표가 제 밑을 파므로 미룬다.
@@ -2424,7 +3557,7 @@ class MainWindow(QWidget):
             with self.notes._글잠금(title):
                 if self.notes.read(title) is None:
                     try:
-                        self.notes.write(Note(title=title, body="", kind="note"))
+                        self.notes.write(Note(title=title, body="", kind=wiki.기본갈래))
                     except WriteBlocked:
                         self.report("못 썼어 — 기록 폴더가 읽기 전용이거나 딴 프로그램이 잡고 있어.", [ROOT])
                         return
@@ -2451,7 +3584,7 @@ class MainWindow(QWidget):
             있음 = self.notes.read(title) is not None
             if not 있음:
                 self._wrote_at = time.monotonic()
-                self.notes.write(Note(title=title, body="", kind="note"))
+                self.notes.write(Note(title=title, body="", kind=wiki.기본갈래))
         if 있음:
             self.show_note(title)
             return
@@ -2478,9 +3611,156 @@ class MainWindow(QWidget):
         self.notes.delete(gone)
         self.clear_detail()
         self.refresh()
-        self.report(f"{gone} 지웠어.", [ROOT])
+        self.report(f"{gone} 지웠어." + self.사본이면한마디(), [ROOT])
+
+    def 사본이면한마디(self) -> str:
+        """이 VC 가 손님이면 **지워도 메인엔 남는다**고 말한다.
+
+        ★★ 실기로 쟀다(2026-09-24): 손님에서 지운 글이 메인엔 그대로 남아 있었고,
+           **메인에서 그 글이 바뀌자 손님에 다시 내려왔다.** 지움은 메인→손님 한
+           방향뿐이다. 아무도 말해 주지 않으면 「문제돼서 지웠는데 왜 또 있지」가 된다.
+        ★ 말만 한다 — 지움을 양방향으로 바꾸면 **뒤처진 손님이 메인 글을 날릴 수** 있다.
+          어느 쪽이 나은지는 오너가 정할 일이라 여기서 정하지 않는다.
+        """
+        것 = (self.link.config_dict() or {}).get("사본") if hasattr(self.link, "config_dict") else None
+        if 것 is None:
+            try:
+                import json as _제이
+
+                import paths as _자리
+
+                것 = (_제이.loads(_자리.config_path().read_text(encoding="utf-8"))
+                     .get("사본") or {})
+            except Exception:
+                것 = {}
+        if not isinstance(것, dict) or 것.get("역할") != "손님":
+            return ""
+        return "  (여긴 사본이야 — 메인엔 그대로 남아. 아주 지우려면 메인에서 지워라.)"
+
+    # 그물이 붙어 있을 때의 훑기 간격(ms). 신호가 오니 뜸해도 된다.
+    느긋훑기MS = 30000
+
+    def _훑기늦추기(self) -> None:
+        """이웃과 붙어 있으면 훑기를 늦추고, 끊기면 도로 촘촘히 본다."""
+        재깍 = getattr(self, "_poll_timer", None)
+        if 재깍 is None:
+            return
+        붙었나 = False
+        try:
+            import server as _서버
+
+            돌것 = getattr(_서버, "RUNNING", None)
+            그물 = getattr(돌것, "그물", None) if 돌것 is not None else None
+            붙었나 = bool(그물 is not None and 그물.붙은수)
+        except Exception:
+            붙었나 = False
+        바라는 = self.느긋훑기MS if 붙었나 else OUTSIDE_POLL_MS
+        if 재깍.interval() != 바라는:
+            재깍.setInterval(바라는)
+
+    def 모델없으면알리기(self) -> bool:
+        """모델이 하나도 없으면 **말하고 그 칸을 펴 준다.** 돌려주는 값은 「없더라」.
+
+        ★★ 처음 쓰는 사람에게 VC 가 「준비됐어」라고 했다 — 모델이 하나도 없는데.
+           받는 길은 있는데(모델 칸 → 받기) **그 칸이 접혀 있어** 아무도 못 찾는다.
+           기록도 모델도 없이 시작하는 것이 목표라면(오너 2026-09-24),
+           **처음 켠 사람이 다음에 뭘 눌러야 하는지**를 VC 가 말해야 한다.
+        ★ 조용히 실패하지 않는다 — 이 프로그램이 내내 지켜 온 결이다.
+        """
+        try:
+            import models_config
+            import paths as _자리
+
+            자리 = str(_자리.models_dir())
+            난것 = models_config.resolve({"backend": {"kind": "local", "model_dir": 자리}},
+                                      자리)
+            쓸것 = (난것.get("using") or {}).get("chat") or ""
+        except Exception:
+            return False          # 못 재면 아무 말도 안 한다 — 헛경보가 더 나쁘다
+        if 쓸것:
+            return False
+        칸 = getattr(self, "models_fold", None)
+        if 칸 is not None:
+            칸.set_open(True)      # 접혀 있으면 아무도 못 찾는다
+        self.report("아직 AI 모델이 없어. 오른쪽 «모델» 칸에서 «받기» 를 누르면 "
+                    "여기서 바로 받아 — 글자·사진·목소리·뜻 검색 다 있어.", [])
+        return True
+
+    def 새판찾기(self) -> None:
+        """켤 때 깃허브에 새 판이 있는지 **딴 실에서** 물어본다.
+
+        ★★ 창 실에서 물어보면 인터넷이 느릴 때 창이 그만큼 굳는다. 그리고
+           **못 물어봐도 켜는 것을 막지 않는다** — 업데이트 확인이 프로그램보다
+           중해지면 안 된다.
+        """
+        def 일() -> None:
+            import paths as _자리
+            import update as _새판
+
+            난것 = _새판.물어보기(_자리.VERSION)
+            if 난것.get("있나"):
+                self.update_found.emit(난것)
+
+        report.딴실로("새 판 보기", 일)
+
+    def _새판보이기(self, 난것: dict) -> None:
+        """새 판이 있다고 **말하고 묻는다.** 조용히 갈아 끼우지 않는다."""
+        if 난것.get("탈"):
+            return self.report(f"새 판을 못 받았어 — {난것['탈']}", [])
+        if 난것.get("열었다"):
+            return self.report("받았어. 뜬 창에서 깔면 돼 — 기록은 그대로야.", [])
+        판 = 난것.get("판") or ""
+        if not 난것.get("받을곳"):
+            self.report(f"새 판 {판} 이 나왔어 — 이 기계에 맞는 파일이 아직 없네. "
+                        f"{난것.get('쪽') or ''}", [])
+            return
+        self._새판 = 난것
+        box = QMessageBox(self)
+        box.setWindowTitle("새 판이 있어")
+        box.setText(f"새 판 {판} 이 나왔어. 받아서 깔까?\n\n"
+                    "기록·설정·모델은 그대로 남아 — 프로그램만 갈린다.")
+        받기단추 = box.addButton("받아서 깔기", QMessageBox.AcceptRole)
+        box.addButton("나중에", QMessageBox.RejectRole)
+        box.setModal(False)          # 창을 막지 않는다
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.buttonClicked.connect(
+            lambda 누른것: self.새판받기() if 누른것 is 받기단추 else None)
+        self._새판상자 = box
+        box.show()
+
+    def 새판받기(self) -> None:
+        """받아서 **연다.** 우리가 직접 덮어쓰지 않는다 — 돌던 제 몸을 갈면 위험하다."""
+        난것 = getattr(self, "_새판", None) or {}
+        if not 난것.get("받을곳"):
+            return
+        import paths as _자리
+
+        낼자리 = _자리.state_dir() / "받은판" / (난것.get("이름") or "VC-새판")
+        self.report(f"새 판 {난것.get('판')} 받는 중…", [])
+
+        def 일() -> None:
+            import subprocess as _돌림
+
+            import update as _새판
+
+            잰것 = _새판.받기(난것["받을곳"], 낼자리, 난것.get("셈곳") or "",
+                          알림=lambda 온것, 전체: self.update_found.emit(
+                              {"진행": (온것, 전체)}) if False else None)
+            if not 잰것.get("됐나"):
+                self.update_found.emit({"탈": 잰것.get("왜") or "못 받았다"})
+                return
+            try:
+                _돌림.Popen(_새판.깔기명령(잰것["자리"]))
+                self.update_found.emit({"열었다": 잰것["자리"]})
+            except Exception as e:
+                self.update_found.emit({"탈": f"못 열었다: {type(e).__name__}"})
+
+        report.딴실로("새 판 받기", 일)
 
     def open_reader(self) -> None:
+        """본문 판을 그래프 위에 띄운다."""
+        self._place_reader()
+
         """본문 판을 그래프 위에 띄운다."""
         self._place_reader()
         self.detail_card.show()
@@ -2511,6 +3791,46 @@ class MainWindow(QWidget):
             # 좌표는 부모(left) 기준이다 — graph.geometry()가 그 기준이라 그대로 쓴다.
             self.detail_card.setGeometry(g.x() + (g.width() - w) // 2, top, w, h)
             self._trim_tools(w)
+        self._아랫단가두기(h)
+
+    # ★ 아랫단이 카드에서 차지해도 되는 몫. 나머지는 본문 것이다.
+    아랫단몫 = 0.34
+    # ★★ **몫만으로는 모자란다.** 카드가 작으면 비율로 잡은 천장도 안 들어가서
+    #   아랫단이 카드 **밖으로 밀려 나간다**(검사가 422짜리 카드에서 재현했다:
+    #   아랫단 바닥 523 > 카드 422). 그래서 **남은 자리**로도 한 번 더 깎는다.
+    본문최소 = 180      # 이만큼은 읽을 자리로 남긴다
+    위쪽자리 = 120      # 위 줄·제목·여백이 먹는 몫(넉넉히 잡는다)
+
+    def _아랫단가두기(self, 높이: int) -> None:
+        """아랫단에 **제 몫만큼** 준다 — 넘치면 굴리고, 모자라면 본문에 돌려준다.
+
+        ★★ 카드 높이는 고정인데 아랫단은 글마다 제멋대로 길다.
+           - 안 가두면 본문이 최소 높이까지 눌리고(재 보니 620 중 150), 더 길면
+             **카드를 넘어 본문과 겹친다**(오너가 짚은 그 꼴이다 · 2026-09-24).
+           - 그렇다고 천장만 씌우면 이번엔 **본문이 다 가져가** 아랫단이 두 줄로
+             찌그러진다(늘어나는 몫이 본문에만 있다). 그래서 **필요한 만큼 딱** 준다.
+        """
+        칸 = getattr(self, "detail_foot", None)
+        속 = 칸.widget() if 칸 is not None else None
+        if 칸 is None or 속 is None:
+            return
+        # 비율로 한 번, **남은 자리**로 한 번 더 깎는다 — 둘 중 작은 쪽이 천장이다
+        천장 = min(max(80, int(높이 * self.아랫단몫)),
+                max(0, 높이 - self.본문최소 - self.위쪽자리))
+        보일것 = [것 for 것 in (self.detail_links, self.embeds, self.backs, self.mentions)
+               if 것.isVisibleTo(속)]
+        if not 보일것 and not (self.detail_links.text() or "").strip():
+            칸.setFixedHeight(0)
+            return
+        속.adjustSize()
+        칸.setFixedHeight(min(속.sizeHint().height(), 천장))
+        # ★★ **바꿨으면 그 자리에서 다시 재게 한다.** `setFixedHeight` 는 「다시 재
+        #   달라」고 표를 낼 뿐이라 바로 안 먹는다 — 그 사이에 자리를 읽으면 옛 값이
+        #   나오고, 아랫단이 카드 밖에 걸린 채로 그려진다(검사가 그 꼴을 잡았다:
+        #   카드 422 인데 아랫단 바닥 526 · 2026-09-24).
+        판 = self.detail_card.layout()
+        if 판 is not None:
+            판.activate()
 
     def _trim_tools(self, width: int) -> None:
         """카드가 좁으면 위 줄에서 덜 급한 것부터 접는다.
@@ -2529,6 +3849,29 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         if self.detail_card.isVisible() or self.side_open:
             self._place_reader()
+        self._칩맞추기()
+
+    def _칩맞추기(self) -> None:
+        """칸에 안 들어가는 칩은 **숨긴다.**
+
+        ★★ 칩은 가로로 늘어서므로 개수만큼 최소폭을 요구한다. 옵시디언 볼트를 들이자
+          태그가 생겨 칩이 다섯으로 늘었고, 그 요구가 오른쪽 칸(348)을 넘겨
+          **칸 전체가 112px 씩 창 밖으로 밀려 글자가 잘렸다.** 글자를 뭉개는 대신
+          안 들어가는 칩을 접는다 — 남은 칩은 온전히 읽힌다(태그는 검색으로도 닿는다).
+        """
+        칸 = self.recent_chips.width() or self.recent.width()
+        if 칸 <= 0:
+            return
+        쓴폭 = 0
+        for i in range(self._칩줄.count()):
+            w = self._칩줄.itemAt(i).widget()
+            if w is None:
+                continue
+            필요 = w.sizeHint().width() + self._칩줄.spacing()
+            들어감 = 쓴폭 + 필요 <= 칸
+            w.setVisible(들어감)
+            if 들어감:
+                쓴폭 += 필요
 
     def clear_detail(self) -> None:
         self.detail_card.hide()
@@ -2564,7 +3907,23 @@ class MainWindow(QWidget):
         self.mentions.hide()
 
     def _paint_say(self) -> None:
-        self.say.setText(self._say_text + ("  ▍" if self._caret_on else "   "))
+        """말하는 칸을 다시 그린다. **커서는 색만 껐다 켠다.**
+
+        ★★ 전에는 꼬리를 켜짐 `"  ▍"` · 꺼짐 `"   "` 로 **바꿔 찍었다.** 두 꼬리의
+        폭이 11.3px 다르다 — 줄바꿈이 켜진 칸이라 그 차이가 **높이 40 ↔ 46px** 로
+        번지고, 이 칸이 세로로 쌓여 있어 **0.6초마다 위의 그래프까지 통째로 밀렸다.**
+        오너가 창을 보고 「깜박일 때마다 움찔거린다」고 두 번 짚은 자리다.
+
+        같은 폭의 안 보이는 글자를 찾아봤지만 없다(정확히 같은 폭은 블록 글자뿐인데
+        그건 보인다). 그래서 **글자는 늘 그 자리에 두고 색만 바꾼다** — 폭이 안 변하니
+        높이도 안 변하고, 아무것도 안 흔들린다.
+
+        ※ 서식 글이라 `<`·`&` 는 감싸 주고, 줄바꿈은 `<br>` 로 바꾼다. 빈칸 둘은
+          서식 글에서 하나로 줄어들어 `&nbsp;` 로 적는다.
+        """
+        빛 = theme.T.TEXT.name() if self._caret_on else "transparent"
+        몸 = html.escape(self._say_text).replace("\n", "<br>")
+        self.say.setText(f'{몸}&nbsp;&nbsp;<span style="color:{빛}">▍</span>')
 
     def _blink(self) -> None:
         self._caret_on = not self._caret_on
@@ -2613,6 +3972,232 @@ class MainWindow(QWidget):
         if self.voice is not None:
             self.voice._last = {}
 
+    # ★★ **엔진만 갈아 낀다.** 「누구에게 말하나」가 아니라 「무엇으로 답하나」다 —
+    #   오너가 「엔진이 로컬·클로드·코덱스로 바뀔 뿐 전부 VC 다」라고 못 박았다.
+    채팅엔진들 = (
+        ("로컬", "로컬", "VC 제 엔진이 창고를 뒤져 답한다. 빠르고 값이 안 든다"),
+        ("claude", "claude", "클로드 코드가 지금 연 프로젝트의 코드를 고친다"),
+        ("codex", "codex", "Codex 가 지금 연 프로젝트의 코드를 고친다"),
+    )
+
+    def _채팅칸만들기(self) -> QWidget:
+        """말 주고받는 칸. **접혀 있다가 올라온다.**"""
+        self._채팅엔진 = "로컬"
+        # ★★ **대화는 이어진다.** 엔진·프로젝트마다 제 줄기를 들고 있다 — 섞으면
+        #   claude 에게 하던 말이 codex 대화로 새 들어간다.
+        self._채팅줄기: dict[tuple, str] = {}
+        self._채팅앞말: list[dict] = []
+        칸 = QFrame()
+        칸.setObjectName("chat")
+        줄 = QVBoxLayout(칸)
+        줄.setContentsMargins(0, 8, 0, 0)
+        줄.setSpacing(6)
+
+        self.chat_log = QTextEdit()
+        self.chat_log.setReadOnly(True)
+        self.chat_log.setObjectName("chatlog")
+        self.chat_log.setMinimumHeight(90)
+        self.chat_log.setMaximumHeight(220)
+        # ★ 넓어지는 것을 막는다 — 곁 칸이 밀려 목록이 화면 밖으로 나간 적이 있다
+        self.chat_log.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.chat_log.setMinimumWidth(1)
+        줄.addWidget(self.chat_log)
+
+        고름 = QHBoxLayout()
+        고름.setSpacing(6)
+        고름.addWidget(QLabel("엔진"))
+        self._엔진단추 = {}
+        for 이름, 글, 도움 in self.채팅엔진들:
+            단추 = QPushButton(글)
+            단추.setObjectName("quiet")
+            단추.setCheckable(True)
+            단추.setChecked(이름 == self._채팅엔진)
+            단추.setToolTip(도움)
+            단추.setMinimumWidth(1)
+            단추.clicked.connect(lambda _=False, n=이름: self.채팅엔진고르기(n))
+            self._엔진칠하기(단추, 이름 == self._채팅엔진)
+            self._엔진단추[이름] = 단추
+            고름.addWidget(단추)
+        고름.addStretch(1)
+        # ★ 이어 말하다 **줄기를 끊는** 자리. 없으면 지난 말이 영영 따라다닌다.
+        새것 = QPushButton("새 대화")
+        새것.setObjectName("quiet")
+        새것.setMinimumWidth(1)
+        새것.setToolTip("여태 한 말을 잊고 처음부터 — 엉뚱한 데로 흘렀을 때 누른다")
+        새것.clicked.connect(lambda: self.채팅새로())
+        self._새대화단추 = 새것
+        고름.addWidget(새것)
+        줄.addLayout(고름)
+
+        # ★★ **도는 중인 것이 보여야 한다.** 에이전트는 십몇 초씩 걸리는데 아무 표시도
+        #   없으면 「먹통인가」 싶어 또 보낸다 — 값비싼 손이 둘 돌면 같은 폴더가 엉킨다.
+        self.chat_status = QLabel("")
+        self.chat_status.setObjectName("chatstatus")
+        self.chat_status.setStyleSheet(theme.small(theme.T.ACCENT, 0.85, 10))
+        self.chat_status.setMinimumWidth(1)
+        self.chat_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.chat_status.setVisible(False)
+        줄.addWidget(self.chat_status)
+
+        self.chat_box = QLineEdit()
+        self.chat_box.setObjectName("ask")
+        self.chat_box.setMinimumWidth(1)
+        self.chat_box.setPlaceholderText("VC 에게 말하기 — Enter 로 보낸다")
+        # ★★ **한글 이름 메서드를 신호에 바로 걸면 안 된다.** PyQt 가 슬롯 이름을
+        #   ASCII 로 바꾸려다 `UnicodeEncodeError` 로 죽고, 창이 아예 안 뜬다.
+        #   이 덫에 세 번 걸렸다 — 람다로 감싸면 이름을 안 본다.
+        self.chat_box.returnPressed.connect(lambda: self.채팅보내기())
+        줄.addWidget(self.chat_box)
+
+        칸.setVisible(False)
+        self.chat = 칸
+        self._엔진말하기()
+        return 칸
+
+    @staticmethod
+    def _글칸인가(것) -> bool:
+        """글을 치는 칸인가. **여기 걸리면 엔터를 안 가로챈다.**
+
+        ★ 칸 자체가 아니라 **그 안의 부품**에 키가 떨어질 수 있다(`QTextEdit` 의
+          뷰포트 따위). 그래서 위로 거슬러 올라가며 본다 — 안 그러면 「글 치는
+          중인데 엔터가 먹혔다」가 난다.
+        """
+        for _ in range(6):
+            if 것 is None:
+                return False
+            if isinstance(것, (QLineEdit, QTextEdit)):
+                return True
+            것 = 것.parent() if hasattr(것, "parent") else None
+        return False
+
+    def 채팅열기(self, 열까: bool | None = None) -> None:
+        """말하는 자리를 누르면 올라오고, 또 누르면 내려간다."""
+        칸 = getattr(self, "chat", None)
+        if 칸 is None:
+            return
+        열까 = (not 칸.isVisible()) if 열까 is None else bool(열까)
+        칸.setVisible(열까)
+        if 열까:
+            self.chat_box.setFocus()
+
+    def 채팅엔진고르기(self, 이름: str) -> None:
+        """엔진을 바꾼다. **고른 하나만 눌린 채로 둔다** — 둘이 눌려 있으면 무엇이
+        도는지 알 수 없다."""
+        if 이름 not in dict((n, 1) for n, _, _ in self.채팅엔진들):
+            return
+        self._채팅엔진 = 이름
+        for n, 단추 in getattr(self, "_엔진단추", {}).items():
+            단추.setChecked(n == 이름)
+            self._엔진칠하기(단추, n == 이름)
+        self._엔진말하기()
+
+    @staticmethod
+    def _엔진칠하기(단추, 골랐나: bool) -> None:
+        """고른 엔진을 **눈에 띄게** 칠한다.
+
+        ★★ `quiet` 단추에는 눌린 꼴이 없다 — 찍어 보니 claude 를 골랐는데 로컬이
+           더 밝아 보였다. **무엇이 도는지 모르고 값비싼 손을 부르면 안 된다.**
+        """
+        if 골랐나:
+            단추.setStyleSheet(
+                f"QPushButton {{ color: {theme.css(theme.T.ACCENT)}; font-weight: 700;"
+                f" border: 1px solid {theme.css(theme.T.ACCENT, 0.55)};"
+                f" border-radius: 9px; padding: 1px 9px; }}")
+        else:
+            단추.setStyleSheet(
+                f"QPushButton {{ color: {theme.css(theme.T.DIM, 0.65)};"
+                f" border: 1px solid transparent; padding: 1px 9px; }}")
+
+    def _엔진말하기(self) -> None:
+        """지금 무엇이 답하는지 칸에 적어 둔다 — 모르고 값비싼 손을 부르면 안 된다."""
+        상자 = getattr(self, "chat_box", None)
+        if 상자 is None:
+            return
+        if self._채팅엔진 == "로컬":
+            상자.setPlaceholderText("VC 에게 묻기 — 창고를 뒤져 답한다")
+        else:
+            어디 = self._연프로젝트
+            상자.setPlaceholderText(
+                f"{self._채팅엔진} 에게 시키기 — {어디} 의 코드와 창고를 만진다" if 어디
+                else f"{self._채팅엔진} 에게 시키기 — 창고 일을 한다(프로젝트를 열면 코드도)")
+
+    def 채팅보내기(self) -> None:
+        """친 말을 보낸다. **엔진만 다르고 창구는 하나다.**"""
+        말 = (self.chat_box.text() or "").strip()
+        if not 말:
+            return
+        self.chat_box.clear()
+        self._채팅적기("나", 말)
+        if self._채팅엔진 == "로컬":
+            # ★ 로컬은 세션이 없다 — **오간 말을 들고 가서** 이어 답하게 한다.
+            # ★★ **대화 문으로 간다.** 묻기 문으로 보냈더니 「안녕」에도 창고를 뒤지고
+            #   「창고에 없다」고 답했다(오너가 짚었다 · 2026-09-24).
+            self.창고에묻기(말, 앞말=list(self._채팅앞말), 대화=True)
+            return
+        # ★★ **프로젝트를 안 열었어도 일은 시킨다.** 전에는 여기서 돌려보냈는데,
+        #   「창고에 적어 둬」처럼 프로젝트와 상관없는 일까지 막혔다 — 오너가
+        #   「내가 시킨 일을 하지 못한다」고 짚은 자리다(2026-09-24).
+        #   그때는 **빈 일터**에 세우고 창고 도구로 일하게 한다.
+        프로젝트 = getattr(self, "_연프로젝트", "") or ""
+        뿌리 = None
+        if not 프로젝트:
+            프로젝트, 뿌리 = paths.일터().name, paths.일터().parent
+        self.맡기기시작(프로젝트, 말, 손=self._채팅엔진, 뿌리=뿌리,
+                    이어서=self._채팅줄기.get((프로젝트, self._채팅엔진), ""))
+
+    def _채팅도는중(self, 말: str) -> None:
+        """도는 중임을 채팅 칸에 보인다. 빈 말이면 감춘다."""
+        칸 = getattr(self, "chat_status", None)
+        if 칸 is None:
+            return
+        칸.setText(말)
+        칸.setVisible(bool(말))
+
+    def 채팅새로(self) -> None:
+        """줄기를 끊는다 — 여태 한 말을 잊고 처음부터."""
+        self._채팅줄기.clear()
+        self._채팅앞말.clear()
+        기록 = getattr(self, "chat_log", None)
+        if 기록 is not None:
+            기록.clear()
+        self._채팅적기("VC", "새 대화로 시작할게. 여태 한 말은 잊었어.")
+
+    def _채팅적기(self, 누가: str, 말: str) -> None:
+        """오간 말을 칸에 쌓는다. **VC 가 하는 말은 여기로도 흐른다** — 말하는 자리는
+        한 줄이라 앞말이 곧 지워지는데, 채팅은 되돌아볼 수 있어야 한다."""
+        기록 = getattr(self, "chat_log", None)
+        말 = (말 or "").strip()
+        if 기록 is None or not 말:
+            return
+        앞말 = getattr(self, "_채팅앞말", None)
+        if 앞말 is not None:
+            앞말.append({"role": "user" if 누가 == "나" else "assistant", "content": 말})
+            del 앞말[:-20]          # 멀리 간 말은 놓는다 — 다 이고 가면 느려진다
+        # ★ 한 줄에 이름과 말을 붙여 놓으니 어디까지가 누구 말인지 안 읽혔다.
+        #   이름을 위에 얹고 말은 들여 쓴다 — 여러 줄짜리 답이 오면 그 차이가 크다.
+        나인가 = 누가 == "나"
+        빛 = theme.css(theme.T.DIM if 나인가 else theme.T.ACCENT, 0.95)
+        글빛 = theme.css(theme.T.TEXT, 0.92)
+        몸 = html.escape(말).replace("\n", "<br>")
+        # ★★ **마디 사이는 블록 여백으로 벌린다.** `div`·`p` 에 `margin-top` 을 주고
+        #   `setDefaultStyleSheet` 까지 써 봤는데 **둘 다 Qt 가 안 먹어서** 말이 한
+        #   덩이로 붙어 보였다(찍어서 두 번 잡았다). 커서로 주는 것은 먹는다.
+        커서 = 기록.textCursor()
+        커서.movePosition(QTextCursor.End)
+        빈문서 = 기록.document().isEmpty()
+        이름칸 = QTextBlockFormat()
+        이름칸.setTopMargin(0 if 빈문서 else 11)
+        if not 빈문서:
+            커서.insertBlock(이름칸)
+        else:
+            커서.setBlockFormat(이름칸)
+        커서.insertHtml(f'<span style="color:{빛};font-weight:700">'
+                      f'{html.escape(누가)}</span>')
+        커서.insertBlock(QTextBlockFormat())
+        커서.insertHtml(f'<span style="color:{글빛}">{몸}</span>')
+        막대 = 기록.verticalScrollBar()
+        막대.setValue(막대.maximum())
+
     def report(self, text: str, touching: list[str], aloud: bool = True) -> None:
         """VC가 말한다. 딛고 있는 항목들이 순서대로 밝아진다.
 
@@ -2622,6 +4207,8 @@ class MainWindow(QWidget):
         self._say_text = text
         self._caret_on = True
         self._paint_say()
+        # ★ VC 가 하는 말은 채팅에도 흐른다 — 말하는 자리는 한 줄이라 앞말이 지워진다
+        self._채팅적기("VC", text)
         self.graph.speak(touching)
 
         # 말하는 동안만 달아오른다. 글자 길이로 시간을 어림한다 — 실제 말이 끝나는

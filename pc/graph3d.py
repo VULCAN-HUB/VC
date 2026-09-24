@@ -23,9 +23,11 @@ import random
 import time
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen, QRadialGradient
+from PyQt5.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen,
+                         QRadialGradient)
 from PyQt5.QtWidgets import (
     QFrame,
+    QWidget,
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -41,8 +43,31 @@ ROOT = "VC"       # 가운데 항목의 이름. 부서는 불칸, 이 AI는 VC
 OLD_ROOT = "이비"  # 옛 이름. 켤 때 한 번 옮긴다
 
 # 크기 = 층위. 가운데가 제일 크고, 모듈이 그다음, 지시·자료가 제일 작다.
-RADIUS = {"agent": 28, "skill": 16}
-RADIUS_OTHER = 7
+# 오너 2026-09-20: 항목·로고를 20% 키우고 항목 사이를 조금 벌린다.
+# 정수로 두면 7 → 8(14%)이나 9(29%)밖에 못 가 20% 가 안 된다 — 실수로 둔다.
+# 손 얹은 항목에 닿은 선. **한 자리에 둔다** — 장면과 덮개 두 곳에서 그리므로
+# 값이 흩어지면 언젠가 갈라진다(같은 판단을 두 군데서 하면 갈라진다: `태그인가` 의 교훈).
+# 오너 2026-09-20: 「활성화됐을 때 선 두께와 밝기만 줄여줘」 — 굵은 깔개(5px)를 빼고
+# 가는 선 하나로. 이어진 것이 112개인 항목이 있어 굵게 밝히면 화면이 통째로 붉어졌다.
+손선굵기 = 0.8
+손선밝기 = 105
+
+RADIUS = {"agent": 33.6, "skill": 19.2}
+RADIUS_OTHER = 8.4
+
+
+def 껍질(글수: int) -> float:
+    """항목이 쌓일수록 커지는 구의 반지름. 세제곱근이라 밀도가 일정하게 유지된다.
+
+    ★ 2026-09-20 오너 지시로 20% 벌렸다(95/46 → 114/55.2). 항목도 같이 20% 커졌으므로
+      **빈 틈이 실제로 넓어진다** — 껍질만 키우면 커진 항목이 그만큼 도로 메운다.
+    """
+    return 114.0 + 55.2 * max(글수 - 1, 1) ** (1 / 3)
+
+
+# 로고 크기를 재는 **기준 창고 크기**. 이만큼일 때 보이는 로고가 「지금 크기」다.
+기준글수 = 150
+기준껍질 = 껍질(기준글수)
 
 # 내용을 펼쳐 볼 때의 배율. 고정값이라 언제 봐도 같은 거리에서 보게 된다.
 FOCUS_ZOOM = 1.4
@@ -55,7 +80,41 @@ def _spread(title: str) -> str:
     return hashlib.blake2b(title.encode("utf-8"), digest_size=8).hexdigest()
 
 
-def node_radius(title: str, kind: str) -> int:
+class _선위층(QWidget):
+    """표식(로고) **위에** 얹는 얇은 덮개. 손 얹은 항목의 선만 여기에 다시 그린다.
+
+    장면에 그리는 선은 뷰포트 자식 위젯인 표식보다 늘 아래에 깔린다. 평소에는 그게
+    맞지만(선이 글자를 가로지르면 안 된다), 손을 얹었을 때는 **그 선이 어디로 가는지가
+    알고 싶은 것**이라 표식에 끊기면 안 된다. 같은 선을 한 층 위에서 한 번 더 그린다.
+    """
+
+    def __init__(self, view) -> None:
+        super().__init__()
+        self._view = view
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)   # 누름은 그대로 아래로 간다
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event) -> None:
+        v = self._view
+        손 = v.hover
+        if not 손 or 손 not in v.nodes:
+            return
+        q = QPainter(self)
+        q.setRenderHint(QPainter.Antialiasing)
+        for src, dst in v.edges:
+            if 손 not in (src, dst):
+                continue
+            a, b = v.nodes.get(src), v.nodes.get(dst)
+            if not (a and b) or not (a.isVisible() and b.isVisible()):
+                continue
+            pa, pb = v.mapFromScene(a.pos()), v.mapFromScene(b.pos())
+            q.setPen(QPen(theme.rgba(theme.T.ACCENT, 손선밝기), 손선굵기))
+            q.drawLine(pa, pb)
+        q.end()
+
+
+def node_radius(title: str, kind: str) -> float:
     if title == ROOT:
         return RADIUS["agent"]
     return RADIUS.get(kind, RADIUS_OTHER)
@@ -269,7 +328,7 @@ class 멈칫셈:
 
             import paths
 
-            (paths.data_dir() / "vc-자전.json").write_text(
+            (paths.기계자리("vc-자전.json")).write_text(
                 json.dumps({"판": self.판, "두배": self.두배, "다섯배": self.다섯배,
                             "제일느린": self.제일느린, "자는중": 자는중,
                             "말": ("[자는 중 — 아무도 안 봐서 안 그린다] " if 자는중 else "")
@@ -286,7 +345,7 @@ class 멈칫셈:
 
             import paths
 
-            글 = (paths.data_dir() / "vc-자전.json").read_text(encoding="utf-8")
+            글 = (paths.기계자리("vc-자전.json")).read_text(encoding="utf-8")
             return str(json.loads(글).get("말") or "안 돌았다")
         except Exception:
             return "안 돌았다"
@@ -309,6 +368,18 @@ class GraphView(QGraphicsView):
     KEEP_HIDDEN = 300   # 안 보이는 채로 붙들어 둘 노드 수. 다시 나타나면 그대로 되산다
     # 맨 앞줄 이름표 수. 전부 보이면 글자가 화면을 덮고, 하나도 없으면 얼굴이 빈다.
     LABEL_FRONT = 24
+    # 이미 보이던 이름표가 막혔을 때 **몇 프레임까지 버티는가.** 도는 동안 남의 원이
+    # 스쳐 가는 것만으로 이름표가 사라지는 깜박임을 막는다. 60프레임이 1초쯤이니
+    # 열둘이면 0.2초 — 잠깐 겹쳐 보이지만 떴다 사라지는 것보다 훨씬 덜 거슬린다.
+    # 맥에서 300프레임을 재서 고른 값이다(짧은 깜박임 횟수):
+    #   0 → 59번 · 6 → 31번 · 12 → 17번 · 그 위는 겹쳐 보이는 시간만 길어진다.
+    LABEL_GRACE = 12
+    # 자리를 옮길 때 한 프레임에 목표까지 가는 비율. 1.0 이면 순간이동(옛 방식).
+    # 맥에서 300프레임을 재서 골랐다 — **한 프레임에 20px 넘게 튀는 걸음의 수**:
+    #   1.0 → 69번(가장 큰 걸음 68px) · 0.25 → 6번(30px) · 0.15 → **0번(19px)**
+    # 더 낮추면(0.08 → 10px) 더 부드럽지만 이름표가 제 점을 늦게 따라간다.
+    # 0.15 면 0.25초쯤에 자리를 잡는다.
+    LABEL_GLIDE = 0.15
     # 손을 얹고 이만큼 가만히 있으면 멈춘다. 읽으려는 자세로 본다.
     STILL_SEC = 0.35
     # 이만큼 안에서 노는 것은 손 떨림으로 본다. 사람 손은 완전히 안 멈춘다.
@@ -319,6 +390,12 @@ class GraphView(QGraphicsView):
     잠들때까지 = 90.0
     # 잠들었을 때의 재깍이 간격(ms). 멈추는 대신 늦춘다 — 깨어날 자리가 그대로 남는다.
     잠든간격 = 1000
+    # ★★ **앞에 떠 있는 동안은 멈추지 않는다.** 예전엔 90초 손을 안 대면 곧장
+    #   `잠든간격` 으로 떨어뜨렸는데, 초당 한 장은 사람 눈에 **멈춘 화면**이다 —
+    #   오너가 「시간 지나면 항목 움직임이 멈춘다」고 본 것이 이 자리다(2026-09-24).
+    #   자는 것은 **가려졌을 때만** 두고, 보이는 동안은 이 간격으로 느긋하게 돈다.
+    #   초당 열 장이면 도는 것이 보이면서 값은 1/3 이다.
+    느긋간격 = 100
 
     def __init__(self) -> None:
         super().__init__()
@@ -338,6 +415,12 @@ class GraphView(QGraphicsView):
         # 「이것과 저것은 이어진다」고 말한 것이고, 다른 하나는 우리가 짐작한 것이다.
         self.soft: set[tuple[str, str]] = set()
         self.rng = random.Random(7)  # 같은 그래프가 같은 모양으로 뜨게
+        # 바로 앞 정리에서 실제로 보이던 이름표. 자리다툼에서 이쪽을 먼저 앉힌다
+        # (`_resolve_labels` 참조). 비어 있으면 첫 프레임이라 평소 차례대로 간다.
+        self._전에보임: set[str] = set()
+        self._마지막자리: dict[str, tuple[float, float]] = {}   # 마지막으로 잘 앉았던 자리
+        self._막힌횟수: dict[str, int] = {}                     # 몇 프레임째 막혀 있는가
+        self._그린자리: dict[str, tuple[float, float]] = {}     # 화면에 실제로 그린 자리(미끄러지는 중일 수 있다)
         self.yaw = 0.0
         self.tilt = 0.26
         self._drag: QPointF | None = None
@@ -345,6 +428,13 @@ class GraphView(QGraphicsView):
         self._zoom_target = 1.0
         self._center = QPointF(0, 0)
         self._center_target = QPointF(0, 0)
+        # 표식을 두 번 눌러 「제자리로」를 했는가. 그동안은 가운데가 원점에 붙는다.
+        self._원점에두기 = False
+        # 손을 안 댄 채 이만큼 지나면 표식을 저절로 제자리로 되돌린다(초). **0이면 끔.**
+        # 값은 설정에서 정하고 `ui` 가 넣어 준다 — 여기 기본은 「아무것도 안 함」이다.
+        self.자동제자리초 = 0.0
+        # 키보드로도 그래프를 돌 수 있어야 한다(오너 2026-09-20) — 초점을 받게 둔다
+        self.setFocusPolicy(Qt.StrongFocus)
         self.focus: set[str] = set()
         # 장면에서 뺀 노드를 한 판 동안 붙들어 두는 자리(위 `load` 설명 참고).
         self._retired: list = []
@@ -358,11 +448,24 @@ class GraphView(QGraphicsView):
         self.mark.setParent(self.viewport())
         self.mark.show()
 
+        # ★★ **손 얹은 항목의 선만 표식 위로 지나간다**(오너 2026-09-20).
+        #   평소 선은 표식을 피해 간다 — 표식은 뒤가 비치는 위젯이라 선이 획 사이로
+        #   보여 글자를 가로지르는 것처럼 읽혔다. 그런데 손을 얹었을 때는 그 선이
+        #   **어디로 가는지가 알고 싶은 것**이므로 표식이 가리면 안 된다.
+        #   장면(선)과 위젯(표식)은 층이 달라 `setZValue` 로는 못 올린다 — 표식 위에
+        #   얇은 덮개를 하나 더 얹고 그 선만 여기 다시 그린다.
+        self._선위층 = _선위층(self)
+        self._선위층.setParent(self.viewport())
+        self._선위층.raise_()
+        self._선위층.show()
+
+        self.둘레중 = ""      # 이 항목 둘레만 보는 중(로컬 그래프)
         self._settling = 0
         self._last_spin = time.perf_counter()
         self._slow = 0        # 연달아 밀린 프레임 수
         self._깬때 = time.perf_counter()   # 마지막으로 사람 손이 닿은 때
         self._잠듦 = False                 # 자는 중이라고 파일에 적어 뒀나
+        self._느긋했나 = False             # 손을 한참 안 대 늦춰 둔 상태인가
         # 뒤에서 파일을 훑는 동안은 연출을 쉰다. 그리는 값이 훑기를 굶긴다.
         self._indexing = False
         self._release = QTimer(self)
@@ -387,7 +490,17 @@ class GraphView(QGraphicsView):
     def indexing(self, on: bool) -> None:
         """훑는 동안은 그래프도 표식도 쉰다. 그리기가 훑기를 굶기면 안 된다."""
         self._indexing = on
-        self.mark.set_paused(on)
+        self._표식고르기()
+
+    def _표식고르기(self) -> None:
+        """표식이 쉴지 **한 군데서** 정한다.
+
+        ★★ 여기가 갈려 있어서 새 나갔다. 훑기 설정자가 `set_paused(False)` 를 부르면
+           느긋해서 재워 둔 표식이 도로 깨어나, **느긋한데도 불티 1800개를 33ms마다
+           그리고 있었다**(재 보니 28% 였다 · 2026-09-24). 쉴 까닭이 셋이니
+           **셋을 한자리에서 더한다** — 다음에 하나 더 늘어도 여기만 본다.
+        """
+        self.mark.set_paused(self._잠듦 or self._느긋했나 or self._indexing)
 
     def _spin(self) -> None:
         """천천히 도는 연출. **그리는 값이 여기 다 실린다.**
@@ -401,6 +514,15 @@ class GraphView(QGraphicsView):
         """
         if self.indexing:
             return
+
+        # ★★ **한동안 손을 안 대면 표식이 저절로 제자리로 온다.** 표식을 두 번 누르는
+        #   길만 두면 「가운데가 아닌 줄도 모르고」 그냥 쓰게 된다 — 오너가 그래서
+        #   시간을 정할 수 있게 해 달라고 했다. 시간은 설정에서 정한다(0이면 끔).
+        #   **재우기보다 앞에 둔다.** 뒤에 두면 잠드는 90초보다 긴 값을 고른 순간
+        #   영영 안 돌아온다 — 자는 동안에도 재깍이는 1초에 한 번 여기까지 온다.
+        if (self.자동제자리초 > 0 and not self._원점에두기
+                and time.perf_counter() - self._깬때 >= self.자동제자리초):
+            self.제자리로()          # 제자리로 오면 붙들리므로 다시 안 불린다
 
         # ★★ **보는 사람이 없으면 그리지 않는다.**
         # 네 시간을 아무도 안 만졌는데 **코어 하나를 91% 태우고 있었다.** 자전은
@@ -417,11 +539,16 @@ class GraphView(QGraphicsView):
         if not self.isVisible() or self.window().isMinimized():
             self._재우기(True)
             return
-        if time.perf_counter() - self._깬때 > self.잠들때까지:
-            self._재우기(True)
-            return
-        if self.spin.interval() >= self.잠든간격:
-            self._재우기(False)            # 깨어났다. 처음 빠르기로 되돌린다
+
+        # ★★ **보이는 동안은 안 잔다 — 늦출 뿐이다.** 여기서 `return` 하고 재우던 것이
+        #   「멈췄다」로 보였다. 값이 큰 것은 자전이 아니라 **표식의 불티 1800개**라,
+        #   표식은 그대로 재우고 항목만 느긋하게 돌린다(그 둘을 가른 것이 이 고침이다).
+        느긋 = time.perf_counter() - self._깬때 > self.잠들때까지
+        바닥 = self.느긋간격 if 느긋 else 33
+        # ★ **바뀔 때만 손댄다.** 판마다 넣으면 위에서 늘려 둔 간격을 도로 눌러
+        #   버려서, 밀릴 때 늦추는 장치가 아예 안 듣는다.
+        if self.spin.interval() >= self.잠든간격 or 느긋 != self._느긋했나:
+            self._재우기(False, 느긋)
 
         now = time.perf_counter()
         gap = now - self._last_spin
@@ -443,8 +570,10 @@ class GraphView(QGraphicsView):
             # 200ms 는 초당 다섯 장이라 그 자체가 멈칫으로 보인다. 훑는 동안은
             # 위에서 통째로 쉬므로 여기까지 늦출 일이 없다.
             self.spin.setInterval(min(120, int(want * 1.6)))
-        elif want > 33 and gap < want / 1000.0 * 1.25:
-            self.spin.setInterval(max(33, int(want * 0.8)))
+        elif want > 바닥 and gap < want / 1000.0 * 1.25:
+            # ★ **바닥을 지킨다.** 33 으로 도로 당기면 느긋한 동안에도 제 빠르기로
+            #   돌아가 버려서, 늦춰 둔 뜻이 없어진다.
+            self.spin.setInterval(max(바닥, int(want * 0.8)))
 
         # **손을 얹으면 멈춘다.** 도는 동안에는 겨냥한 점이 이미 옮겨가 있어서 누르면
         # 빗나간다 — 낯선 PC 에서 「큰 원을 겨냥해 누르기도 빗나갔다」로 걸렸고,
@@ -458,7 +587,10 @@ class GraphView(QGraphicsView):
         멈출 = (self.hover is not None
                 and self.STILL_SEC < 섰던지 < self.AWAY_SEC)
         if self._drag is None and not 멈출:
-            self.yaw += 0.0032  # 아주 느리게. 빠르면 읽는 걸 방해한다
+            # ★★ **흐른 시간으로 잰다.** 판마다 같은 값을 더하면 간격을 늦추는 순간
+            #   도는 것도 그만큼 느려진다 — 느긋하게 돌리려다 「거의 안 돈다」가 된다.
+            #   한 판이 오래 걸린 때는 잘라 낸다(멈췄다 튀는 것을 막는다).
+            self.yaw += 0.0032 * min(max(gap, 0.0), 0.25) / 0.033
         self.tick = (self.tick + 1) % 10000
         root = self.nodes.get(ROOT)
         if root is not None:
@@ -569,7 +701,7 @@ class GraphView(QGraphicsView):
         가운데 구멍은 여기서 만들지 않는다. 하한을 두면 항목이 90개를 넘을 때까지
         구가 안 자라 "쌓일수록 공 모양"이 사라진다 — 구멍은 투영에서 뚫는다.
         """
-        return 95.0 + 46.0 * max(len(self.nodes) - 1, 1) ** (1 / 3)
+        return 껍질(len(self.nodes))
 
     def step_layout(self) -> None:
         """3차원 힘 배치. 붙은 것끼리 당기고, 가까운 것끼리 밀어내고, 구 껍질로 모은다.
@@ -640,6 +772,20 @@ class GraphView(QGraphicsView):
                 node.p[i] += node.v[i]
             moved = max(moved, abs(node.v[0]) + abs(node.v[1]) + abs(node.v[2]))
 
+        # ★★ **무리를 한가운데로 되돌린다**(오너 2026-09-20: 「치우침은 없이」).
+        #   VC 는 원점에 못 박혀 있는데 나머지는 그렇지 않아, 격자로 자른 반발력의
+        #   작은 비대칭과 처음 뿌린 자리의 쏠림이 **씻겨 나가지 못하고 쌓였다.**
+        #   재 보니 무게중심이 (182, -114, -55) 에서 **치우친 채로 안정**됐다 —
+        #   그래서 표식이 늘 무리 한쪽에 붙어 보였다. 걸음마다 평균을 빼면
+        #   모양은 그대로 두고 자리만 가운데로 온다.
+        흐른것 = [n for n in items if n.title != ROOT]
+        if 흐른것:
+            가운데 = [sum(n.p[i] for n in 흐른것) / len(흐른것) for i in range(3)]
+            if abs(가운데[0]) + abs(가운데[1]) + abs(가운데[2]) > 0.5:
+                for n in 흐른것:
+                    for i in range(3):
+                        n.p[i] -= 가운데[i]
+
         # 거의 안 움직이면 그만둔다. 켜 두는 내내 도는 계산이라 멈추는 게 곧 성능이다.
         self._settling = self._settling + 1 if moved < 0.8 else 0
         if self._settling >= 3:
@@ -673,6 +819,9 @@ class GraphView(QGraphicsView):
         if not wanted:
             return self.clear_focus()
 
+        # 딴 것을 보겠다는 뜻이니 「표식 제자리」 붙들기는 푼다 — 안 풀면 초점을
+        # 잡아도 화면이 원점에 붙어 있어, 고른 것이 구석에 뜬다.
+        self._원점에두기 = False
         self.focus = wanted
         self._focus_zoom = zoom
         for node in self.nodes.values():
@@ -685,6 +834,62 @@ class GraphView(QGraphicsView):
         if hold_ms:
             self._release.start(hold_ms)
         self.project()
+
+    def 제자리로(self) -> None:
+        """**VC 표식을 화면 한가운데로 되돌린다.** 표식을 두 번 누르면 여기로 온다.
+
+        가운데는 평소 항목들을 감싸는 네모의 중심이라, 항목이 한쪽으로 몰리면 표식이
+        구석으로 밀려난다 — 기록이 한두 장뿐인 첫날에 특히 그렇다. 되돌릴 길이 없으면
+        **화면을 바로잡을 방법이 아예 없다**(이 그래프는 밀어서 옮기는 것이 없고
+        돌리기만 된다). 표식이 곧 VC 이므로 그것을 눌러 제자리로 오게 한다.
+
+        초점도 같이 푼다. 안 풀면 초점 쪽이 가운데를 계속 끌어당겨 **눌러도 아무 일도
+        안 일어난 것처럼 보인다.**
+        """
+        self._원점에두기 = True
+        self.clear_focus()
+        self._fit()
+
+    def 둘레만(self, title: str, 깊이: int = 1) -> int:
+        """**그 항목과 이어진 것만** 남기고 나머지는 감춘다. 남긴 수를 돌려준다.
+
+        옵시디언의 「로컬 그래프」다. 전체 그래프는 139개가 한꺼번에 떠 있어
+        「이 글이 무엇과 묶였나」를 눈으로 골라야 한다 — 그 판을 갈아 끼운다.
+        ★ 가라앉히는(`focus_on`) 것과 다르다. 흐리게 남겨 두면 여전히 화면을 채운다.
+        """
+        if title not in self.nodes:
+            return 0
+        남길 = {title} | set(self.이웃들(title))
+        for _ in range(max(깊이 - 1, 0)):
+            남길 |= {y for x in list(남길) for y in self.이웃들(x)}
+        self.둘레중 = title
+        for t, node in self.nodes.items():
+            보임 = t in 남길 and t != ROOT
+            node.setVisible(보임)
+            node.dim = False
+            if not 보임:
+                node.label.setVisible(False)
+            node._paint_label()
+        self._키기준 = title
+        self.set_hover(title)
+        # ★ 남은 것들로 **다시 자리를 잡게** 한다. 안 그러면 139개 틈에 뿌려진 그대로라
+        #   구석에 몰려 보인다 — 좁혀 놓은 뜻이 없다(찍어 보고 알았다).
+        self._settling = 0
+        self.physics.start()
+        self.project()
+        return len(남길)
+
+    def 둘레풀기(self) -> bool:
+        """둘레 보기를 그만두고 전부 되돌린다. 보고 있지 않았으면 거짓."""
+        if not getattr(self, "둘레중", ""):
+            return False
+        self.둘레중 = ""
+        for t, node in self.nodes.items():
+            node.setVisible(t != ROOT)
+            node._paint_label()
+        self.project()
+        self.physics.start()        # 감춰 둔 동안 멈춰 있던 배치를 다시 돌린다
+        return True
 
     def clear_focus(self) -> None:
         """초점을 풀고 전체가 보이는 기본 모습으로 돌아간다."""
@@ -730,7 +935,14 @@ class GraphView(QGraphicsView):
             )
 
         # 전체 모습의 배율은 초점과 무관하게 늘 계산해 둔다. 초점을 풀면 여기로 돌아온다.
-        center, half_w, half_h = bounds(list(self.nodes.values()))
+        # ★ **둘레 보기 중에만 「보이는 것」으로 잰다.** 감춘 항목까지 세면 34개만 띄워
+        #   놓고도 139개짜리 배율로 물러나 있어 좁힌 뜻이 없다. 다만 평소에도 이러면
+        #   항목이 떴다 잠겼다 할 때마다 배율이 흔들린다 — 검사가 바로 잡아냈다
+        #   (「검색인데 배율이 움직였다 0.90 → 0.94」). 그래서 그때만 한다.
+        잴것 = list(self.nodes.values())
+        if getattr(self, "둘레중", ""):
+            잴것 = [n for n in 잴것 if n.isVisible()] or 잴것
+        center, half_w, half_h = bounds(잴것)
         overview = min(
             self.viewport().width() / (2 * half_w),
             self.viewport().height() / (2 * half_h),
@@ -745,9 +957,25 @@ class GraphView(QGraphicsView):
             self._zoom_target = self._focus_zoom
         else:
             # 검색만으로는 배율을 건드리지 않는다.
-            self._zoom_target = overview
+            # ★★ **배치가 꿈틀댄다고 배율까지 따라 흔들리면 안 된다**(2026-09-20).
+            #   전체 배율은 항목들의 **화면 범위**로 잡는데, 그 범위는 힘 배치가 자리를
+            #   잡는 동안 조금씩 변한다. 항목과 껍질을 20% 키우자 그 흔들림이 커져
+            #   **검색 전후로 배율이 0.86 → 0.88 로 움직였다**(검사가 잡았다).
+            #   사람 눈에는 「좁혔더니 화면이 들썩」으로 보인다. 눈에 띌 만큼
+            #   달라질 때만 따라간다 — 항목이 크게 늘거나 창이 바뀌는 때다.
+            옛것 = self._zoom_target
+            if 옛것 <= 0 or abs(overview - 옛것) > max(옛것, overview) * 0.05:
+                self._zoom_target = overview
 
         self._center_target = center
+
+        # ★★ **표식이 화면 가운데에 없을 수 있다.** 가운데는 위에서 항목들을 감싸는
+        #   네모의 중심으로 잡는데, VC 표식은 원점(0,0)에 못 박혀 있다 — 항목이
+        #   한쪽으로 치우치면 그만큼 표식이 밀려난다(오너가 보고 짚었다).
+        #   표식을 두 번 누르면(`제자리로`) 다시 원점을 가운데로 삼는다.
+        #   초점이 걸려 있을 때는 그쪽을 따라가는 것이 맞으므로 건드리지 않는다.
+        if self._원점에두기 and not self.focus:
+            self._center_target = QPointF(0.0, 0.0)
 
     def _apply_view(self) -> None:
         """목표 배율·중심으로 조금씩 다가간다. 한 번에 튀면 어디를 보던 중인지 놓친다."""
@@ -756,8 +984,31 @@ class GraphView(QGraphicsView):
         self._center += (self._center_target - self._center) * ease
         self.resetTransform()
         self.scale(self._zoom, self._zoom)
+        # ★★ **장면 네모를 손수 잡아 준다.** 안 잡으면 Qt 가 「항목들을 감싸는 네모」로
+        #   잡는데, 그것이 화면보다 작으면 **스크롤할 데가 없어 `centerOn` 이 아무 일도
+        #   안 한다** — 화면 가운데가 우리가 정한 `_center` 가 아니라 **항목 네모의
+        #   중심**으로 멋대로 정해진다. 기록이 몇 장뿐이면 늘 이 경우다.
+        #   그래서 원점에 못 박힌 VC 표식이 가운데가 아니라 구석에 있었다
+        #   (실측: 스크롤 범위 0~0, 표식이 화면 가운데에서 48x84px 빗나감).
+        #   초점을 잡아도 그쪽으로 안 가던 것도 같은 뿌리다.
+        #   **보이는 만큼의 네모를, 보고 싶은 자리를 한가운데 두고** 잡아 준다.
+        보임 = QRectF(0.0, 0.0,
+                     self.viewport().width() / self._zoom,
+                     self.viewport().height() / self._zoom)
+        보임.moveCenter(self._center)
+        self.setSceneRect(보임)
         self.centerOn(self._center)
         self._place_mark()
+
+    def _덮개고침(self) -> None:
+        """선 덮개를 표식 위에 맞춰 두고 다시 그리게 한다."""
+        층 = getattr(self, "_선위층", None)
+        if 층 is None:
+            return
+        if 층.geometry() != self.viewport().rect():
+            층.setGeometry(self.viewport().rect())
+        층.raise_()
+        층.update()
 
     def _place_mark(self) -> None:
         """표식을 원점 위에 놓고 구멍 크기에 맞춘다.
@@ -767,8 +1018,16 @@ class GraphView(QGraphicsView):
         """
         pos = self.mapFromScene(QPointF(0.0, 0.0))
         # 2.5면 불티 링이 항목이 밀려난 자리에 딱 앉는데, 그러면 표식이
-        # 화면에서 커 보인다. 24% 줄여 항목 쪽에 자리를 내준다.
-        size = max(140, int(1.913 * self.RING * self._zoom))
+        # 화면에서 커 보인다. 24% 줄여 항목 쪽에 자리를 내줬다.
+        # 2026-09-20 오너 지시로 20% 키웠다가(1.913 → 2.296), **다음 날 로고만 도로
+        # 줄였다** — 항목 크기와 간격은 키운 채로 둔다(오너 2026-09-21 「로고만」).
+        #
+        # ★★ **자람**: 글이 쌓이면 구가 커지고 `_fit` 이 그만큼 물러나, 로고가 화면에서
+        #   작아 보였다(150장 8.3% → 1000장 5.0%). 로고는 「여기가 가운데다」를 알리는
+        #   표지라 창고가 클수록 오히려 또렷해야 한다. 구가 커진 만큼 곱해 되돌린다 —
+        #   배율이 구 크기에 반비례하므로 상쇄되어 **글 수와 무관하게 같은 크기로 보인다.**
+        #   `RING` 은 안 건드린다 — 그것은 항목을 밀어내는 **자리**라 layout 이 바뀐다.
+        size = max(140, int(1.913 * self.RING * (self.shell / 기준껍질) * self._zoom))
         섰던자리 = self.mark.geometry()
         self.mark.setFixedSize(size, size)
         self.mark.move(pos.x() - size // 2, pos.y() - size // 2)
@@ -789,6 +1048,7 @@ class GraphView(QGraphicsView):
         super().resizeEvent(event)
         self._fit()
         self._place_mark()
+        self._선위층.setGeometry(self.viewport().rect())
 
     def project(self) -> None:
         """3차원 좌표를 화면으로 옮긴다. 가까울수록 크고 진하게, 앞에 그린다."""
@@ -833,6 +1093,7 @@ class GraphView(QGraphicsView):
         self._name_front()
         self._resolve_labels()
         self.viewport().update()
+        self._덮개고침()
 
     def _name_front(self) -> None:
         """**맨 앞줄 몇 개는 이름표를 늘 보인다.**
@@ -884,7 +1145,14 @@ class GraphView(QGraphicsView):
             # **자리 다툼 차례도 안 흔들려야 한다.** 깊이로만 줄을 세우면 그래프가
             # 도는 동안 이기는 쪽이 매번 바뀌어 이름표가 깜박인다. 같은 등급 안에서는
             # **안 바뀌는 잣대**(크기 = 층위, 그다음 이름)로 가른다.
-            return (rank, -node.r, node.title)
+            #
+            # ★★ **그것만으로는 모자랐다.** 뽑는 차례는 안 흔들리는데 **겹침 정리가
+            #   매 프레임 자리를 처음부터 다시 잡아서**, 조금 도는 것만으로 이름표
+            #   열댓 개 중 아홉이 떴다 사라졌다(맥에서 잼). 그래서 같은 등급 안에서는
+            #   **바로 앞에 보이던 것을 먼저 앉힌다** — 한번 자리를 잡은 이름은
+            #   웬만해선 계속 그 자리에 있고, 새 이름은 남는 틈에만 들어온다.
+            #   개수보다 깜박이는 것이 더 나쁘다는 판단은 위와 같다.
+            return (rank, 0 if node.title in self._전에보임 else 1, -node.r, node.title)
 
         # 원은 순서와 무관하게 전부 피해야 한다. 처리하면서 모으면 뒤에 올 원을 놓친다.
         circles = [
@@ -899,17 +1167,85 @@ class GraphView(QGraphicsView):
 
             size = node.label.boundingRect()
             # 아래가 막히면 위로 올려 본다. 한쪽만 보면 멀쩡한 이름표가 자꾸 사라진다.
-            for dy in (node.r + 7, -node.r - 7 - size.height()):
-                node.label.setPos(-size.width() / 2, dy)
-                box = node.label.sceneBoundingRect().adjusted(-3, -1, 3, 1)
-                blocked = any(o is not node and box.intersects(r) for o, r in circles) or any(
-                    box.intersects(other) for other in placed
+            # ★★ **위아래 둘만으로는 모자랐다.** 그래프가 도는 동안 남의 원이 이름표
+            #   자리로 들어오는데, 비켜설 데가 두 곳뿐이라 **멀쩡히 앞에 있는 이름표가
+            #   그냥 사라졌다** — 열댓 개 중 아홉이 떴다 사라지는 깜박임의 대부분이
+            #   여기였다(맥에서 잼: 아홉 중 일곱). 좌우도 대 본다. 비켜설 데가 늘면
+            #   지우는 대신 옆으로 물러난다.
+            자리들 = [
+                (-size.width() / 2, node.r + 7),                          # 아래
+                (-size.width() / 2, -node.r - 7 - size.height()),          # 위
+                (node.r + 7, -size.height() / 2),                          # 오른쪽
+                (-node.r - 7 - size.width(), -size.height() / 2),          # 왼쪽
+            ]
+            def 앉혀보기(dx: float, dy: float) -> QRectF | None:
+                """그 자리에 놓아 보고, 아무것도 안 덮으면 차지한 칸을 돌려준다."""
+                node.label.setPos(dx, dy)
+                칸 = node.label.sceneBoundingRect().adjusted(-3, -1, 3, 1)
+                막힘 = any(o is not node and 칸.intersects(r) for o, r in circles) or any(
+                    칸.intersects(other) for other in placed
                 )
-                if not blocked:
-                    placed.append(box)
-                    break
-            else:
-                node.label.setVisible(False)  # 양쪽 다 남의 것을 덮는다
+                return None if 막힘 else 칸
+
+            # ★★ **차례가 「있던 자리 → 버티기 → 옮기기 → 지우기」다.** 이 차례가
+            #   핵심이다. 처음엔 매 프레임 「아래부터」 다시 골랐는데, 아래가 잠깐
+            #   비는 순간 오른쪽에 있던 글자가 아래로 **툭** 내려왔다 — 깜박임을
+            #   줄이려고 비켜설 자리를 넷으로 늘리자 이번엔 **움찔거림**이 생겼다
+            #   (300프레임에 210번, 전부 20px 넘게 튐. 오너가 창을 보고 바로 잡아냈다).
+            #   있던 자리를 먼저 대는 것만으로 84번까지 줄었지만, **지금 자리가 잠깐
+            #   막히기만 해도 곧바로 옆으로 옮기는 것**이 남아 있었다. 그래서 버티기를
+            #   「네 자리 다 막혔을 때」가 아니라 **옮기기 바로 앞**에 둔다 —
+            #   스쳐 지나가는 원 때문에 자리를 옮기지 않는다.
+            옛자리 = self._마지막자리.get(node.title)
+            앉았다 = False
+            if 옛자리 is not None:
+                칸 = 앉혀보기(*옛자리)
+                if 칸 is not None:                       # ① 있던 자리가 그대로 비었다
+                    placed.append(칸)
+                    self._막힌횟수.pop(node.title, None)
+                    앉았다 = True
+                elif (self._막힌횟수.get(node.title, 0) < self.LABEL_GRACE
+                        and node.title in self._전에보임):
+                    # ② 잠깐 막힌 것일 수 있다 — 옮기기 전에 그 자리에서 버틴다.
+                    #    잠깐 겹쳐 보이는 쪽이 튀거나 사라지는 쪽보다 낫다(줄곧 지켜 온 판단).
+                    self._막힌횟수[node.title] = self._막힌횟수.get(node.title, 0) + 1
+                    node.label.setPos(*옛자리)
+                    # 남이 그 자리를 또 차지하면 진짜로 겹친다 — 자리는 잡아 둔다.
+                    placed.append(node.label.sceneBoundingRect().adjusted(-3, -1, 3, 1))
+                    앉았다 = True
+            if not 앉았다:                                # ③ 버틸 만큼 버텼다. 옮긴다
+                for dx, dy in 자리들:
+                    칸 = 앉혀보기(dx, dy)
+                    if 칸 is not None:
+                        placed.append(칸)
+                        self._마지막자리[node.title] = (dx, dy)
+                        self._막힌횟수.pop(node.title, None)
+                        앉았다 = True
+                        break
+            if not 앉았다:                                # ④ 네 자리 다 남의 것을 덮는다
+                self._막힌횟수.pop(node.title, None)
+                self._마지막자리.pop(node.title, None)
+                node.label.setVisible(False)
+                continue
+
+            # ★★ **자리를 옮길 때는 미끄러져 간다.** 위 차례로 옮기는 횟수는 줄였지만
+            #   옮길 때마다 20~60px 를 **한 프레임에 순간이동**했다 — 횟수가 적어도
+            #   눈은 그 튐을 먼저 쫓는다. 남은 「움찔거림」이 그것이었다.
+            #   가야 할 자리는 그대로 두고, 화면에 그리는 자리만 몇 프레임에 걸쳐
+            #   따라가게 한다. 겹침을 재는 것은 **가야 할 자리**로 재므로 판단은 안 바뀐다.
+            #   새로 뜨는 이름표는 미끄러뜨리지 않는다 — 옛 자리에서 날아오면 더 이상하다.
+            목표 = node.label.pos()
+            앞선자리 = self._그린자리.get(node.title)
+            if 앞선자리 is not None and node.title in self._전에보임:
+                nx = 앞선자리[0] + (목표.x() - 앞선자리[0]) * self.LABEL_GLIDE
+                ny = 앞선자리[1] + (목표.y() - 앞선자리[1]) * self.LABEL_GLIDE
+                if abs(목표.x() - nx) + abs(목표.y() - ny) < 0.5:
+                    nx, ny = 목표.x(), 목표.y()
+                node.label.setPos(nx, ny)
+            self._그린자리[node.title] = (node.label.pos().x(), node.label.pos().y())
+
+        # 다음 정리 때 「먼저 앉힐 것」으로 쓴다. 이 줄이 없으면 위 규칙이 아무 일도 안 한다.
+        self._전에보임 = {n.title for n in self.nodes.values() if n.label.isVisible()}
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
@@ -931,6 +1267,14 @@ class GraphView(QGraphicsView):
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
 
         # 연결선. 말하는 항목에 닿은 선은 함께 밝아진다 — 말이 어디로 흐르는지 보이게.
+        # ★★ **표식에 가려지는 것은 표식 스스로 한다**(오너 2026-09-20).
+        #   처음엔 표식 자리를 둥글게 잘라내 선을 피하게 했는데, **잘린 자리가 그대로
+        #   둥근 테두리로 보였다** — 오너가 「로고 주변에 원이 생긴다」고 짚었다.
+        #   표식은 뷰포트 자식 위젯이라 장면의 선보다 늘 위에 그려진다. 그냥 두면
+        #   **획이 있는 자리에서만** 선이 가려진다 — 그것이 바라는 모습이다.
+        #   (손 얹은 선만 `_선위층` 이 표식 위에 다시 그려 끊기지 않게 한다.)
+        painter.save()
+
         for src, dst in self.edges:
             a, b = self.nodes.get(src), self.nodes.get(dst)
             if not (a and b):
@@ -971,11 +1315,9 @@ class GraphView(QGraphicsView):
                 painter.drawLine(pa, pb)
                 continue
             if lit:
-                # 손 얹힌 항목에 닿은 선. 굵은 흐린 선을 깔고 그 위에 밝은 선을 얹어
-                # 빛나 보이게 한다 — 그냥 굵게만 하면 굵어졌다고만 읽힌다.
-                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 40), 5.0))
-                painter.drawLine(pa, pb)
-                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 225), 1.6))
+                # 손 얹힌 항목에 닿은 선. 굵은 깔개를 덧대 빛나게 했었는데, 이어진 것이
+                # 백 개가 넘는 항목에서는 화면이 통째로 붉어졌다 — 가는 선 하나로 줄였다.
+                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 손선밝기), 손선굵기))
                 painter.drawLine(pa, pb)
                 continue
             if heat > 0.05:
@@ -995,6 +1337,8 @@ class GraphView(QGraphicsView):
                 painter.setPen(QPen(Qt.NoPen))
                 painter.setBrush(QBrush(theme.rgba(theme.T.ACCENT, int(230 * heat * (1 - t * 0.5)))))
                 painter.drawEllipse(spot, 2.2, 2.2)
+
+        painter.restore()      # 표식 자리를 비워 둔 잘라내기를 여기서 푼다
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         """뷰 자체에 걸리는 계기 장식. 화면에 고정돼야 하므로 화면 좌표로 되돌려 그린다."""
@@ -1030,11 +1374,96 @@ class GraphView(QGraphicsView):
         self.empty_clicked.emit()
         self._drag = event.pos()
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        """**표식을 두 번 누르면 제자리로.** 표식 자리가 곧 「가운데로」 단추다.
+
+        표식은 마우스를 안 받는 위젯(`WA_TransparentForMouseEvents`)이라 누름이
+        여기까지 그냥 내려온다 — 그 자리인지만 보면 된다. 항목 위를 두 번 눌렀을
+        때는 원래 하던 일(한 번 누름)이 이미 돌았으므로 여기서는 아무것도 안 한다.
+        """
+        if self.mark.isVisible() and self.mark.geometry().contains(event.pos()):
+            self.제자리로()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def _node_at(self, pos):
         item = self.itemAt(pos)
         while item is not None and not isinstance(item, NodeItem):
             item = item.parentItem()
         return item if isinstance(item, NodeItem) else None
+
+    # --- 키보드로 그래프 돌기(오너 2026-09-20: 마우스 없이도 써야 한다) ------------
+    def 이웃들(self, title: str) -> list[str]:
+        """그 항목과 **이어진 것들**(이름순). 없으면 빈 목록."""
+        got = set()
+        for src, dst in self.edges:
+            if src == title:
+                got.add(dst)
+            elif dst == title:
+                got.add(src)
+        return sorted(g for g in got if g in self.nodes)
+
+    def 키로시작(self, title: str | None = None) -> str | None:
+        """그래프에 손을 얹는다. 고른 것이 없으면 가운데(또는 첫 항목)부터.
+
+        여기서 **기준**을 잡는다 — 이제 ←→ 는 이 기준에 이어진 것들만 돈다.
+        """
+        if title and title in self.nodes:
+            머물 = title
+        elif self.hover and self.hover in self.nodes:
+            머물 = self.hover
+        else:
+            보이는 = [t for t, n in self.nodes.items() if not n.dim] or list(self.nodes)
+            if not 보이는:
+                return None
+            머물 = ROOT if ROOT in 보이는 else 보이는[0]
+        self._키기준 = 머물
+        self.set_hover(머물)
+        self.setFocus()
+        return 머물
+
+    def _키고리(self) -> list[str]:
+        """지금 도는 차례 — **기준과 거기 이어진 것들**. 이어진 게 없으면 온 항목."""
+        기준 = getattr(self, "_키기준", None)
+        if 기준 not in self.nodes:
+            return sorted(self.nodes)
+        이웃 = self.이웃들(기준)
+        return [기준] + 이웃 if 이웃 else sorted(self.nodes)
+
+    def 키로옮기기(self, 걸음: int) -> str | None:
+        """기준에 이어진 것들 사이를 한 칸 옮긴다.
+
+        ★ **차례를 기준에 붙박아 둔다.** 옮길 때마다 「지금 것의 이웃」으로 차례를 다시
+          짜면 → 다음 ← 가 **온 자리로 안 돌아온다**(실기에서 잡혔다). 앞뒤가 안 맞는
+          움직임은 사람이 길을 잃는다. 이어진 것을 더 파고들려면 Enter 로 들어간다.
+        """
+        if not self.nodes:
+            return None
+        if getattr(self, "_키기준", None) not in self.nodes:
+            return self.키로시작()
+        돌목록 = self._키고리()
+        지금 = self.hover if self.hover in 돌목록 else self._키기준
+        자리 = 돌목록.index(지금) if 지금 in 돌목록 else 0
+        다음 = 돌목록[(자리 + 걸음) % len(돌목록)]
+        self.set_hover(다음)
+        return 다음
+
+    def keyPressEvent(self, event) -> None:
+        """↑↓←→ 로 옮기고 Enter 로 연다. **마우스가 없어도 그래프를 돈다.**"""
+        키 = event.key()
+        if 키 in (Qt.Key_Left, Qt.Key_Up):
+            self.키로옮기기(-1)
+            return
+        if 키 in (Qt.Key_Right, Qt.Key_Down):
+            self.키로옮기기(1)
+            return
+        if 키 in (Qt.Key_Return, Qt.Key_Enter) and self.hover:
+            # 들어간 자리를 **새 기준**으로 삼는다 — 이제 ←→ 는 그것의 이웃을 돈다
+            self._키기준 = self.hover
+            self.node_clicked.emit(self.hover)
+            return
+        super().keyPressEvent(event)
 
     def set_hover(self, title: str | None) -> None:
         """손 얹힌 항목과 **그에 이어진 것들**에 표시를 건다.
@@ -1065,7 +1494,7 @@ class GraphView(QGraphicsView):
         self.set_hover(None)
         super().leaveEvent(event)
 
-    def _재우기(self, 잘까: bool) -> None:
+    def _재우기(self, 잘까: bool, 느긋: bool = False) -> None:
         # ★ **자는 동안에도 「자는 중」이 파일에 찍혀야 한다.** 안 찍으면 마지막으로
         # 쓴 값(33ms)이 그대로 남아, 읽는 사람이 **「문턱이 안 걸렸나」로 헤맨다** —
         # 시험하는 쪽이 실제로 그 33ms 를 보고 그리 갈 뻔했고, 판 수를 두 번 세서
@@ -1081,8 +1510,11 @@ class GraphView(QGraphicsView):
         21% 까지만 내려갔는데, 최소화하면 1.8% 였다 — 그 차이가 표식이었다.
         재우는 자리를 한 함수로 묶어 **다음에 그리는 것이 하나 더 늘어도 여기만 본다.**
         """
-        self.spin.setInterval(self.잠든간격 if 잘까 else 33)
-        self.mark.set_paused(잘까 or self._indexing)
+        self._느긋했나 = 느긋 and not 잘까
+        self.spin.setInterval(self.잠든간격 if 잘까
+                              else (self.느긋간격 if 느긋 else 33))
+        # ★ 값이 큰 것은 자전이 아니라 **표식의 불티 1800개**다. 느긋할 때도 재운다.
+        self._표식고르기()
 
     def 깨우기(self) -> None:
         """사람 손이 닿았다. 잠들어 있었으면 다시 돈다.
@@ -1138,8 +1570,14 @@ class GraphView(QGraphicsView):
             node.set_speaking(False)
 
         def light(i: int) -> None:
+            # ★★ **그 사이 항목이 사라질 수 있다.** 말하는 동안 글이 지워지거나 그래프가
+            #   다시 그려지면 이름이 없어진다 — 그대로 집으면 `KeyError` 로 **창이 죽는다**
+            #   (2026-09-21 검사에서 늦게 도는 타이머가 실제로 그랬다).
+            #   말하는 표시가 하나 안 켜지는 것은 흠이 아니지만, 죽는 것은 흠이다.
             if i > 0:
-                self.nodes[order[i - 1]].set_speaking(True, 0.3)  # 여운
+                앞 = self.nodes.get(order[i - 1])
+                if 앞 is not None:
+                    앞.set_speaking(True, 0.3)  # 여운
             if i >= len(order):
                 QTimer.singleShot(
                     per_node_ms * 2,
@@ -1147,7 +1585,11 @@ class GraphView(QGraphicsView):
                 )
                 self.viewport().update()
                 return
-            self.nodes[order[i]].set_speaking(True, 1.0)
+            이번 = self.nodes.get(order[i])
+            if 이번 is None:
+                QTimer.singleShot(per_node_ms, lambda: light(i + 1))
+                return
+            이번.set_speaking(True, 1.0)
             self._name_front()
             self._resolve_labels()  # 밝아진 항목이 이름표를 되살리므로 다시 정리한다
             self.viewport().update()
@@ -1194,6 +1636,47 @@ def _self_check() -> None:
     assert abs(view._zoom - FOCUS_ZOOM) < 0.02, view._zoom
     view.clear_focus()
     assert not view.nodes["나"].dim
+
+    # ★★ **표식을 두 번 누르면 화면 한가운데로 온다.** 가운데는 평소 항목들을 감싸는
+    #   네모의 중심이라, 항목이 한쪽으로 몰리면 VC 표식이 구석으로 밀린다 —
+    #   기록이 한두 장뿐인 첫날에 실제로 그랬다(오너가 창을 보고 짚었다).
+    #   이 그래프는 밀어서 옮기는 것이 없고 돌리기만 되므로, **되돌릴 길이 여기뿐이다.**
+    view._원점에두기 = False
+    view._fit()
+    치우친가운데 = QPointF(view._center_target)
+    view.제자리로()
+    assert view._center_target == QPointF(0.0, 0.0), view._center_target
+    view.settle_view()
+    view._place_mark()
+    표식가운데 = view.mark.geometry().center()
+    화면가운데 = view.viewport().rect().center()
+    빗나감 = max(abs(표식가운데.x() - 화면가운데.x()), abs(표식가운데.y() - 화면가운데.y()))
+    assert 빗나감 <= 2, (
+        f"표식을 두 번 눌렀는데 가운데로 안 온다: {빗나감}px 빗나감 "
+        f"(누르기 전 가운데는 {치우친가운데})")
+    # 딴 항목을 고르면 그쪽을 따라가야 한다 — 원점에 붙어 있으면 고른 것이 구석에 뜬다.
+    view.focus_on(["가"], zoom=FOCUS_ZOOM)
+    assert not view._원점에두기, "초점을 잡았는데도 화면이 원점에 붙어 있다"
+    view.clear_focus()
+
+    # ★★ **손을 안 댄 채 정한 시간이 지나면 저절로 제자리로 온다**(설정 → 화면).
+    #   두 번 누르는 길만 두면 「가운데가 아닌 줄도 모르고」 그냥 쓴다는 것이 오너 지시다.
+    #   `_spin` 을 통째로 불러 **재깍이에 실제로 걸리는지**까지 본다 — 딴 데 넣으면
+    #   자는 동안(90초 뒤)에는 안 돌아, 긴 시간을 고른 사람에게만 조용히 안 먹는다.
+    view._원점에두기 = False
+    view.자동제자리초 = 0.05
+    view._깬때 = time.perf_counter()
+    view._spin()
+    assert not view._원점에두기, "손 댄 지 얼마 안 됐는데 벌써 되돌린다"
+    view._깬때 = time.perf_counter() - 1.0
+    view._spin()
+    assert view._원점에두기, "정한 시간이 지났는데 표식이 제자리로 안 온다"
+    view._원점에두기 = False
+    view.자동제자리초 = 0.0                      # 「끔」
+    view._깬때 = time.perf_counter() - 3600
+    view._spin()
+    assert not view._원점에두기, "「끔」인데도 저절로 되돌린다"
+    view._깬때 = time.perf_counter()
 
     # **맨 앞줄은 이름이 보이고, 전부는 안 보인다.** 예전에는 손 얹은 것만 보였는데,
     # 항목이 백 개가 되자 점만 남고 글자가 하나도 없는 화면이 됐다 — 그래프가 이
@@ -1254,6 +1737,53 @@ def _self_check() -> None:
         many.project()
     갈림 = len(보임 ^ {n.title for n in many.nodes.values() if n.label.isVisible()})
     assert 갈림 <= 6, f"보이는 이름표가 깜박인다: {갈림}개 갈림"
+
+    # ★★ **띄엄띄엄 견주는 것으로는 깜박임이 안 잡힌다.** 위 두 줄은 30프레임 전후를
+    #   한 번 견줄 뿐이라, **두어 프레임 꺼졌다 다시 켜지는 것**(눈에 제일 거슬리는
+    #   그것)은 그대로 지나간다. 실제로 위가 통과하는 판에서도 눈으로는 깜박였다.
+    #   매 프레임 켜짐/꺼짐을 세고, 그중 **10프레임 안에 다시 뒤집힌 것**만 센다.
+    #   맥에서 300프레임을 재서: 고치기 전 59번 → `LABEL_GRACE`·좌우 자리까지
+    #   넣은 뒤 17번. 되돌리면(예: `LABEL_GRACE = 0`) 이 줄이 터진다.
+    # ★★ 같은 고리에서 **움찔거림**도 같이 잰다. 오너가 창을 보고 「글자 알려주는 쪽이
+    #   깜박일 때 움찔거린다」고 잡아냈다 — 깜박임을 줄이려고 비켜설 자리를 넷으로
+    #   늘렸더니, 자리를 옮길 때 **한 프레임에 20~68px 를 순간이동**했던 것이다.
+    #   횟수가 적어도 눈은 그 튐을 먼저 쫓는다. `LABEL_GLIDE` 로 미끄러뜨려 없앴다.
+    #   되돌리면(`LABEL_GLIDE = 1.0`) 이 줄이 터진다: 그때 69번 · 가장 큰 걸음 68px.
+    def 지금모습재기():
+        모습, 자리 = set(), {}
+        for n in many.nodes.values():
+            if n.label.isVisible():
+                모습.add(n.title)
+                자리[n.title] = (n.label.pos().x(), n.label.pos().y())
+        return 모습, 자리
+
+    앞모습, 앞자리 = 지금모습재기()
+    마지막뒤집힘: dict[str, int] = {}
+    짧은깜박 = 큰걸음 = 0
+    가장큰걸음 = 0.0
+    for 프레임 in range(300):
+        many.yaw += 0.0032
+        many.step_layout()
+        many.project()
+        지금모습, 지금자리 = 지금모습재기()
+        for 이름 in 앞모습 ^ 지금모습:
+            전에 = 마지막뒤집힘.get(이름)
+            if 전에 is not None and 프레임 - 전에 <= 10:
+                짧은깜박 += 1
+            마지막뒤집힘[이름] = 프레임
+        for 이름, (x, y) in 지금자리.items():
+            옛 = 앞자리.get(이름)
+            if 옛 is None:
+                continue        # 막 뜬 것은 옮긴 것이 아니다
+            걸음 = math.hypot(x - 옛[0], y - 옛[1])
+            가장큰걸음 = max(가장큰걸음, 걸음)
+            if 걸음 > 20:
+                큰걸음 += 1
+        앞모습, 앞자리 = 지금모습, 지금자리
+    assert 짧은깜박 <= 30, f"이름표가 깜박인다: 300프레임에 짧은 뒤집힘 {짧은깜박}번"
+    assert 큰걸음 == 0, (
+        f"이름표가 움찔거린다: 한 프레임에 20px 넘게 튄 걸음 {큰걸음}번 · "
+        f"가장 큰 걸음 {가장큰걸음:.1f}px")
     many.close()
 
     # 손을 얹으면 그것과 **이어진 것**의 이름이 뜬다.
@@ -1399,10 +1929,12 @@ def _self_check() -> None:
 
     # ★ **자전이 파일에도 남겨야 한다.** 세기만 하고 안 남기면 `--report` 는
     # 영영 「안 돌았다」를 본다 — 174분을 켜 두고도 그랬다.
-    import os as _os
-    from pathlib import Path as _Path
+    import paths as _자리9
 
-    자전표 = _Path(_os.environ.get("VC_DATA") or ".") / "vc-자전.json"
+    # ★ 자리를 **짐작하지 않고 물어본다.** 여기서 `VC_DATA` 나 cwd 로 찍었더니,
+    #   `기록자리.txt` 로 창고를 못 박자 기계 파일이 앱 자리로 옮겨가 검사만 깨졌다
+    #   (코드는 멀쩡했다). 쓰는 쪽과 **같은 함수**로 묻는 것이 맞다.
+    자전표 = _자리9.기계자리("vc-자전.json")
     # **먼저 지운다.** 안 지우면 묵은 파일이 남아 있어, 안 남기게 고쳐 놔도
     # 검사가 통과한다 — 실제로 그렇게 한 번 헛통과했다.
     묵은 = 자전표.read_text(encoding="utf-8") if 자전표.exists() else None
@@ -1431,16 +1963,58 @@ def _self_check() -> None:
     view._spin()
     assert view.yaw != 돌기전, "손이 막 닿았는데 안 돈다"
 
-    # 한참 아무 일도 없으면 잠든다 — 멈추는 대신 늦춘다.
+    # ★★ **앞에 떠 있는 동안은 멈추지 않는다.** 한참 손을 안 대면 늦추기만 한다 —
+    #   초당 한 장은 사람 눈에 멈춘 화면이라, 오너가 「시간 지나면 항목 움직임이
+    #   멈춘다」고 짚었다(2026-09-24). 값이 큰 것은 자전이 아니라 표식이므로,
+    #   **표식만 재우고 항목은 돌린다.**
     view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
-    잠들기전 = view.yaw
+    느긋하기전 = view.yaw
     view._last_spin = time.perf_counter() - 0.5
     view._spin()
-    assert view.yaw == 잠들기전, "아무도 안 만지는데 계속 돈다"
-    assert view.spin.interval() == view.잠든간격, view.spin.interval()
+    assert view.yaw != 느긋하기전, "앞에 떠 있는데 항목이 멈췄다"
+    assert view.spin.interval() == view.느긋간격, view.spin.interval()
     # ★★ **그리는 것이 둘이다.** 그래프만 재웠더니 「앞에 있고 손 안 댐」이 21% 로만
-    # 내려갔다(최소화는 1.8%). 그 차이가 **표식의 불티 1800개**였다.
-    assert view.mark.paused, "그래프는 자는데 표식이 계속 그린다"
+    # 내려갔다(최소화는 1.8%). 그 차이가 **표식의 불티 1800개**였다 — 그래서 느긋할
+    # 때도 표식은 재운다. 항목이 도는 값은 표식에 대면 작다.
+    assert view.mark.paused, "느긋한데 표식이 계속 불티를 그린다"
+    # ★★ **표식을 재우는 자리는 하나뿐이다.** 훑기 설정자가 따로 `set_paused` 를
+    #   부르던 탓에, 느긋해서 재워 둔 표식이 도로 깨어나 28% 를 태우고 있었다.
+    view.indexing = True
+    view.indexing = False
+    assert view.mark.paused, "훑기가 끝나면서 느긋한 표식까지 깨웠다"
+    view.깨우기()
+    view._last_spin = time.perf_counter() - 0.5
+    view._spin()
+    assert not view.mark.paused, "손이 닿았는데 표식이 안 깬다"
+    # ★ **느긋해도 도는 빠르기는 같아야 한다.** 판마다 같은 값을 더하면 간격을 세 배
+    #   늦추는 순간 도는 것도 세 배 느려져 「거의 안 돈다」가 된다 — 흐른 시간으로 잰다.
+    view._깬때 = time.perf_counter()
+    view._재우기(False)
+    빠른전 = view.yaw
+    view._last_spin = time.perf_counter() - 0.099
+    view._spin()
+    빠를때 = view.yaw - 빠른전
+    view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
+    느린전 = view.yaw
+    view._last_spin = time.perf_counter() - 0.099
+    view._spin()
+    느릴때 = view.yaw - 느린전
+    # ★ 재는 사이에 μs 단위 흔들림이 있으니 **자릿수로** 본다. 흐른 시간을 안 쓰면
+    #   세 배 차이가 나므로, 1% 안이면 「같은 빠르기」가 맞다.
+    assert abs(빠를때 - 느릴때) < 빠를때 * 0.01, (빠를때, 느릴때)
+    # 되돌아가는 자리도 바닥을 지킨다 — 안 지키면 느긋한 동안 33 으로 도로 당겨진다
+    view._깬때 = time.perf_counter() - (view.잠들때까지 + 1)
+    for _ in range(12):
+        view._last_spin = time.perf_counter() - 0.001
+        view._spin()
+    assert view.spin.interval() >= view.느긋간격, view.spin.interval()
+
+    # 가려지면 그때는 **정말로 잔다** — 아무도 안 보는데 그릴 까닭이 없다
+    view.hide()
+    view._last_spin = time.perf_counter() - 0.5
+    view._spin()
+    assert view.spin.interval() == view.잠든간격, view.spin.interval()
+    view.show()
 
     # 손이 닿으면 곧바로 깬다. 안 깨면 사람이 만져도 화면이 굳어 보인다.
     view.깨우기()
@@ -1482,6 +2056,13 @@ def _self_check() -> None:
     view.viewport().update = lambda *a: 지운자리.append(a)
     view._place_mark()
     assert not 지운자리, "안 옮겼는데 다시 그린다"
+    # ★ 로고에는 **하한(140px)** 이 있다. 점 셋짜리 그래프는 거기 눌려 있어서 배율을
+    #   바꿔도 크기가 그대로다 — 하한 위로 올려놓고 재야 「옮겨갔는지」를 실제로 본다.
+    본배율 = view._zoom
+    view._zoom = 1.5
+    view._place_mark()
+    assert view.mark.width() > 140, f"아직 하한에 눌려 있다: {view.mark.width()}"
+    지운자리.clear()
     섰던 = view.mark.geometry()
     view._zoom *= 1.7
     view._place_mark()
@@ -1489,7 +2070,26 @@ def _self_check() -> None:
     덮은 = 지운자리[-1][0]
     assert 덮은.contains(섰던), f"비켜난 자리를 덜 지운다: {덮은} ⊅ {섰던}"
     del view.viewport().update
-    view._zoom /= 1.7
+    view._zoom = 본배율
+    view._place_mark()
+
+    # ★★ **글이 쌓여도 로고는 같은 크기로 보인다**(오너 2026-09-21).
+    #   전에는 구가 커진 만큼 `_fit` 이 물러나 로고가 같이 작아졌다 — 50장 296px 이
+    #   1000장에서 하한 168px 까지 내려갔다. 로고는 「여기가 가운데다」를 알리는
+    #   표지라 창고가 클수록 오히려 또렷해야 한다.
+    잰것 = {}
+    for 몇 in (50, 300, 1000):
+        재개 = GraphView()
+        재개.resize(1000, 700)
+        묶음 = {f"글{i}": [] for i in range(몇 - 1)}
+        재개.load(묶음, {t: "메모" for t in 묶음})
+        재개.settle_view(200)
+        잰것[몇] = 재개.mark.width()
+        재개.deleteLater()
+    assert min(잰것.values()) > 0.9 * max(잰것.values()), \
+        f"글이 쌓이니 로고가 작아진다: {잰것}"
+    # 하한에 눌려서 「같아 보이는」 것이 아니어야 한다 — 그러면 아무것도 안 잰 셈이다
+    assert min(잰것.values()) > 140, f"하한에 눌려 있다: {잰것}"
 
     # **1픽셀 떨림은 움직임이 아니다.** 사람 손은 완전히 안 멈춘다 — 거리 문턱이 없으면
     # 손을 얹은 채로는 영영 못 멈추고, 멈추려면 손을 떼야 한다. 그건 뜻이 뒤집힌다.
@@ -1559,6 +2159,98 @@ def _self_check() -> None:
         view.drawBackground(painter, QRectF(-400, -300, 800, 600))
     finally:
         painter.end()
+
+    # ★★ **무리가 한가운데 앉는다**(오너 2026-09-20: 「치우침은 없이」).
+    #   VC 만 원점에 못 박혀 있고 나머지는 그렇지 않아, 반발력의 작은 비대칭과 처음
+    #   뿌린 자리의 쏠림이 씻기지 않고 쌓였다 — 재 보니 무게중심이 (182,-114,-55) 에서
+    #   **치우친 채 안정**됐고, 표식이 늘 무리 한쪽에 붙어 보였다.
+    치우 = GraphView()
+    치우.resize(900, 700)
+    치우.show()
+    치우.load({f"글{i}": [f"글{(i * 7 + 3) % 40}"] for i in range(40)},
+             {f"글{i}": "note" for i in range(40)})
+    for 점 in 치우.nodes.values():        # 일부러 한쪽으로 몰아 놓는다
+        점.p = [점.p[0] + 400.0, 점.p[1] + 250.0, 점.p[2] - 180.0]
+    for _ in range(260):
+        치우.step_layout()
+    흐른 = [x for x in 치우.nodes.values() if x.title != ROOT]
+    무게 = [sum(x.p[i] for x in 흐른) / len(흐른) for i in range(3)]
+    assert max(abs(v) for v in 무게) < 12, f"무리가 한쪽으로 치우친 채 굳는다: {무게}"
+    # 가운데로 옮기면서 모양까지 뭉개면 안 된다 — 껍질 언저리에 남아 있어야 한다
+    거리 = sorted(math.sqrt(sum(c * c for c in x.p)) for x in 흐른)
+    assert 거리[len(거리) // 2] > 치우.shell * 0.5, f"가운데로 빨려 들어갔다: {거리[len(거리)//2]:.0f}"
+
+    # ★ 항목·표식을 20% 키웠다(오너 2026-09-20). 정수로 두면 7 → 8(14%) 밖에 못 간다.
+    assert abs(RADIUS_OTHER - 8.4) < 0.01, RADIUS_OTHER
+    assert isinstance(node_radius("아무거나", "note"), float), "정수로 돌아갔다 — 20% 가 안 된다"
+
+    # ★★ **평소 선은 표식을 피하고, 손 얹은 선은 표식 위로 간다**(오너 2026-09-20).
+    층 = 치우._선위층
+    assert 층.parent() is 치우.viewport(), "덮개가 뷰포트에 안 붙었다"
+    assert 층.testAttribute(Qt.WA_TransparentForMouseEvents), "덮개가 누름을 가로챈다"
+    자식들 = 치우.viewport().children()
+    assert 자식들.index(층) > 자식들.index(치우.mark), "덮개가 표식보다 아래다 — 선이 안 보인다"
+
+    def 그려본(뷰):
+        """덮개가 실제로 무엇을 그렸는지 **칠해진 점 수**로 잰다."""
+        from PyQt5.QtGui import QImage
+
+        층2 = 뷰._선위층
+        층2.setGeometry(뷰.viewport().rect())
+        w, h = max(층2.width(), 1), max(층2.height(), 1)
+        img = QImage(w, h, QImage.Format_ARGB32)
+        img.fill(0)
+        q = QPainter(img)
+        층2.render(q)
+        q.end()
+        return sum(1 for y in range(0, h, 3) for x in range(0, w, 3)
+                   if img.pixelColor(x, y).alpha() > 0)
+
+    치우.set_hover(None)
+    치우.project()
+    assert 그려본(치우) == 0, "손을 안 얹었는데 덮개가 뭔가 그린다"
+    이은것 = next((a for a, b in 치우.edges
+                 if a in 치우.nodes and b in 치우.nodes
+                 and 치우.nodes[a].isVisible() and 치우.nodes[b].isVisible()), None)
+    assert 이은것 is not None, "이어진 항목이 없어 덮개를 못 잰다"
+    치우.set_hover(이은것)
+    치우.project()
+    assert 그려본(치우) > 0, "손을 얹었는데 표식 위에 선이 안 그려진다"
+    # ★ 손 얹은 선의 굵기·밝기는 **한 자리에서** 나와야 한다(오너 2026-09-20 로 줄였다).
+    #   장면과 덮개 두 곳에서 그리므로, 값을 각자 적어 두면 한쪽만 고쳐져 갈라진다.
+    import pathlib as _길9
+
+    본문 = _길9.Path(__file__).read_text(encoding="utf-8")
+    # (검사 글 자체가 세어지지 않게 조각을 붙여 만든다)
+    꼴 = "theme.T.ACCENT, " + "손선밝기), " + "손선굵기"
+    assert 본문.count(꼴) == 2, f"손 얹은 선을 두 곳에서 따로 그린다: {본문.count(꼴)}군데"
+    assert 손선굵기 <= 1.0 and 손선밝기 <= 130, (손선굵기, 손선밝기)
+    # ★ **로고 둘레에 원을 그리지 않는다.** 표식 자리를 둥글게 잘라냈더니 그 자리가
+    #   테두리로 보였다(오너가 짚었다). 가리는 일은 표식 위젯이 제 모양대로 한다.
+    자름 = "set" + "ClipPath"
+    assert 자름 not in 본문, "표식 자리를 잘라낸다 — 로고 둘레에 원이 생긴다"
+
+    # ★★ **둘레만 보기**(로컬 그래프 · 오너 2026-09-20). 가라앉히는 것과 다르다 —
+    #   흐리게 남겨 두면 여전히 화면을 채운다. **감춰야** 좁힌 뜻이 산다.
+    가운데 = next(iter(치우.edges))[0]
+    이웃수 = len(치우.이웃들(가운데))
+    assert 이웃수 >= 1, 이웃수
+    남은 = 치우.둘레만(가운데)
+    assert 남은 == 이웃수 + 1, (남은, 이웃수)
+    보이는것 = {t for t, x in 치우.nodes.items() if x.isVisible()}
+    assert 가운데 in 보이는것, "가운데 항목이 안 보인다"
+    assert len(보이는것) <= 이웃수 + 1, f"감춰야 할 것이 남았다: {len(보이는것)}"
+    assert len(보이는것) < len(치우.nodes), "아무것도 안 감췄다"
+    assert 치우.둘레중 == 가운데, 치우.둘레중
+    # 풀면 전부 돌아온다(가운데 표식 자리만 빼고)
+    assert 치우.둘레풀기() is True
+    돌아온 = {t for t, x in 치우.nodes.items() if x.isVisible()}
+    assert len(돌아온) >= len(치우.nodes) - 1, (len(돌아온), len(치우.nodes))
+    assert 치우.둘레풀기() is False, "보고 있지도 않은데 풀었다고 한다"
+    assert 치우.둘레만("없는 항목ZZZ") == 0, "없는 항목에도 둘레를 연다"
+
+    치우.set_hover(None)
+    치우.deleteLater()
 
     print("graph3d self-check 통과")
 

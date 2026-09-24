@@ -60,7 +60,7 @@ def _hide_names(text: str) -> str:
 def trail(what: str) -> None:
     """한 줄 남긴다. **죽어도 여기까지는 갔다**를 알려 주는 자국이다."""
     try:
-        path = paths.data_dir() / TRAIL
+        path = paths.기계자리(TRAIL)
         if path.exists() and path.stat().st_size > KEEP_BYTES:
             # 앞을 버리고 뒤만 남긴다. 최근 것이 쓸모 있다.
             tail = path.read_bytes()[-KEEP_BYTES // 2:]
@@ -69,6 +69,28 @@ def trail(what: str) -> None:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {_hide_home(what)}\n")
     except OSError:
         pass          # 남기다 실패해도 프로그램이 멈추면 안 된다
+
+
+def 딴실로(이름: str, 함수, *것들) -> "threading.Thread":
+    """일을 딴 실에서 돌린다. **터지면 자국을 남긴다.**
+
+    ★★ 딴 실에서 난 예외는 `stderr` 로만 나간다 — **구운 판에서는 갈 데가 없어**
+       아무도 모른 채 그 기능만 조용히 죽는다. 실제로 그랬다(2026-09-21: 창에서
+       묻기가 `NameError` 로 죽었는데 화면에는 아무 말도 없었다. 창을 몰아 보고서야
+       알았다). 위험한 부름만 `try` 로 감싸는 것으로는 모자라다 — **몸 전체**를 감싼다.
+    """
+    import threading
+
+    def 감싼() -> None:
+        try:
+            함수(*것들)
+        except Exception as e:
+            trail(f"[{이름}] 딴 실이 죽었다 — {type(e).__name__}: {e}")
+            _note(f"[{이름}] 딴 실이 죽었다 — {type(e).__name__}: {e}")
+
+    실 = threading.Thread(target=감싼, daemon=True, name=이름)
+    실.start()
+    return 실
 
 
 def watch_deaths() -> None:
@@ -81,7 +103,7 @@ def watch_deaths() -> None:
     if _death_file is not None:
         return
     try:
-        _death_file = (paths.data_dir() / DEATH).open("a", encoding="utf-8")
+        _death_file = (paths.기계자리(DEATH)).open("a", encoding="utf-8")
         # ★ **켤 때는 여기에 아무것도 안 쓴다.** 예전에는 「=== 켬」을 여기 적었는데,
         # 그러면 **켤 때마다 죽음 기록이 자라서 크기로는 죽었는지 알 수가 없다.**
         # 시험하는 쪽이 31바이트씩 느는 것을 보고 「매번 죽는다」로 읽을 뻔했고,
@@ -159,7 +181,7 @@ def _now() -> str:
 
 def _note(line: str) -> None:
     """죽음 기록에 한 줄. 너무 커지면 앞을 버린다 — 자국이 무한정 자라면 안 된다."""
-    path = paths.data_dir() / DEATH
+    path = paths.기계자리(DEATH)
     if path.exists() and path.stat().st_size > KEEP_BYTES:
         path.write_bytes(("...(앞부분 버림)" + chr(10)).encode()
                          + path.read_bytes()[-KEEP_BYTES // 2:])
@@ -179,6 +201,8 @@ def 이프로세스메모리() -> tuple[int, int]:
     이건 자기 프로세스를 잰다. 그래서 facts() 는 이걸 직접 안 쓰고, 창이
     메모리찍기() 로 적어 둔 파일을 읽는다 — --report 는 창이 아니기 때문이다.
     """
+    if os.name != "nt":
+        return _유닉스메모리()
     import ctypes
     from ctypes import wintypes
 
@@ -220,6 +244,27 @@ def 이프로세스메모리() -> tuple[int, int]:
     return m.WorkingSetSize // 1048576, m.PeakWorkingSetSize // 1048576
 
 
+def _유닉스메모리() -> tuple[int, int]:
+    """맥·리눅스. 최고는 `getrusage`(맥은 바이트, 리눅스는 KB), 지금은 `ps` 의 RSS(KB).
+
+    ★ 전엔 `ctypes.windll` 을 바로 불러 맥에서는 늘 터졌다 — 창은 삼키고 넘어가 메모리가 한 번도 안 적혔다.
+    """
+    import resource
+    import subprocess
+    import sys
+
+    최고 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    최고 //= 1048576 if sys.platform == "darwin" else 1024
+    try:
+        지금 = int(subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
+                                text=True, timeout=5).stdout.strip()) // 1024
+    except (OSError, ValueError, subprocess.SubprocessError):
+        지금 = 최고
+    if not 최고:
+        raise OSError("메모리를 못 쟀다")
+    return 지금 or 최고, 최고
+
+
 def 메모리찍기() -> None:
     """창이 제 메모리를 파일에 적는다. 창 안 타이머가 4초마다 부른다.
 
@@ -232,7 +277,7 @@ def 메모리찍기() -> None:
     except OSError:
         return          # 못 재면 안 적는다. facts() 가 「창이 안 적었다」로 읽는다
     try:
-        (paths.data_dir() / _메모파일).write_text(
+        (paths.기계자리(_메모파일)).write_text(
             json.dumps({"잰때": time.time(), "켠지": time.time() - _시작한때,
                         "지금MB": 지금, "최고MB": 최고}), encoding="utf-8")
     except OSError:
@@ -252,6 +297,7 @@ def facts() -> dict:
         "설치본인가": paths.frozen(),
         "딸린 것 자리": _hide_home(str(paths.app_dir())),
         "기록 자리": _hide_home(str(paths.data_dir())),
+        "앱 자리": _hide_home(str(paths.state_dir())),
         "모델 자리": _hide_home(str(models)),
         "뜻 검색 모델 자리": _hide_home(str(paths.meaning_dir())),
         "모델 있나": (models / "model.onnx").exists(),
@@ -296,7 +342,7 @@ def facts() -> dict:
     # 45초를 기다려도 41MB · 0초 그대로고 「다시 봐라」가 영영 안 사라졌다.
     # 자전(vc-자전.json)과 같은 길이다 — 창이 적고, 딴 프로세스는 읽는다.
     try:
-        글 = json.loads((paths.data_dir() / _메모파일).read_text(encoding="utf-8"))
+        글 = json.loads((paths.기계자리(_메모파일)).read_text(encoding="utf-8"))
         몇초전 = time.time() - float(글["잰때"])
         켠지 = float(글["켠지"])          # 창이 파일에 적던 그 순간의 「켠 지」
         값 = (f"{int(글['지금MB'])}MB (최고 {int(글['최고MB'])}MB · "
@@ -330,7 +376,7 @@ def facts() -> dict:
     except Exception as err:
         out["onnxruntime 실패"] = f"{type(err).__name__}: {err}"
     try:
-        out["죽음 기록"] = _죽음갈라((paths.data_dir() / DEATH).read_text(
+        out["죽음 기록"] = _죽음갈라((paths.기계자리(DEATH)).read_text(
             encoding="utf-8", errors="replace"))
     except OSError:
         out["죽음 기록"] = "없음"
@@ -357,7 +403,7 @@ def bundle(out_dir: str | Path = "") -> Path:
     안 담는 것: 기록 내용, 파일 이름, 사용자 이름.
     """
     data = paths.data_dir()
-    where = Path(out_dir) if out_dir else data
+    where = Path(out_dir) if out_dir else paths.state_dir()
     where.mkdir(parents=True, exist_ok=True)
     zip_path = where / f"VC-진단-{time.strftime('%Y%m%d-%H%M%S')}.zip"
 
@@ -365,7 +411,7 @@ def bundle(out_dir: str | Path = "") -> Path:
         z.writestr("무엇이 어디.json",
                    json.dumps(facts(), ensure_ascii=False, indent=2))
         for name in (TRAIL, DEATH):
-            f = data / name
+            f = paths.기계자리(name)
             if f.exists():
                 z.writestr(name, _hide_names(_hide_home(f.read_text(encoding="utf-8", errors="replace"))))
         cfg = paths.config_path()
@@ -389,6 +435,46 @@ def bundle(out_dir: str | Path = "") -> Path:
     return zip_path
 
 
+def 상태요약(줄수: int = 30) -> dict:
+    """「상태·기록」에 보일 것(결정 17 ③ — 폰 ⋮ 메뉴 · 창 접힌 칸).
+
+    자국 끝줄과 죽음 기록 끝줄. **기록 내용·글 파일 이름·집 경로는 가린다** — 묶음과 같은 규칙이다.
+    """
+    def 끝줄(이름: str) -> list[str]:
+        try:
+            글 = paths.기계자리(이름).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        return [_hide_names(_hide_home(z)) for z in 글.splitlines() if z.strip()][-줄수:]
+
+    죽음 = 끝줄(DEATH)
+    return {"trail": 끝줄(TRAIL), "deaths": len(죽음), "death_tail": 죽음[-5:],
+            "uptime_s": int(time.time() - _시작한때)}
+
+
+def 요약쓰기(기록폴더: str | Path) -> Path | None:
+    """설정 「기계 기록 보기」가 「둘 다」일 때, 사람이 읽는 요약 한 장을 `_VC기록/상태.md` 에 적는다.
+
+    ★ 바뀐 게 없으면 안 쓴다 — 30초마다 덮으면 옵시디언·iCloud 가 매번 흔들린다. 그래서 「켠 지」처럼 늘 바뀌는 값은 안 싣는다.
+    """
+    요 = 상태요약(40)
+    줄 = ["# VC 상태", "",
+         "> VC 가 적는 기계 기록 요약이다. 고쳐도 다음에 덮인다. 설정 「기계 기록 보기」를 「한 곳」으로 두면 더 안 적는다.", ""]
+    if 요["deaths"]:
+        줄 += [f"⚠ 죽음 기록 {요['deaths']}줄 — VC 에서 「문제 알리기」로 묶어 보내 줘", ""]
+    줄 += ["## 최근 기록 (새것이 위)", ""] + [f"- {z}" for z in reversed(요["trail"])]
+    글 = chr(10).join(줄) + chr(10)
+    자리 = Path(기록폴더) / "_VC기록" / "상태.md"
+    try:
+        if 자리.exists() and 자리.read_text(encoding="utf-8") == 글:
+            return None
+        자리.parent.mkdir(parents=True, exist_ok=True)
+        자리.write_text(글, encoding="utf-8")
+        return 자리
+    except OSError:
+        return None         # 기록 폴더가 잠겨도 VC 는 멈추면 안 된다
+
+
 def _self_check() -> None:
     import tempfile
 
@@ -399,6 +485,16 @@ def _self_check() -> None:
             trail("두 번째 줄")
             said = (Path(tmp) / TRAIL).read_text(encoding="utf-8")
             assert "검사 시작" in said and "두 번째 줄" in said
+            # 「상태·기록」 요약은 글 제목·집 경로를 가린다(폰으로 나간다).
+            trail(f"열었다 {Path.home()}/문서/회의록.md")
+            요약글 = json.dumps(상태요약(), ensure_ascii=False)
+            assert "검사 시작" in 요약글, 요약글
+            assert "회의록" not in 요약글 and str(Path.home()) not in 요약글, 요약글
+            # 「둘 다」의 요약 한 장 — 가린 채로 쓰고, 안 바뀌었으면 다시 안 쓴다.
+            쓴 = 요약쓰기(Path(tmp) / "기록")
+            assert 쓴 is not None and 쓴.parent.name == "_VC기록", 쓴
+            assert "검사 시작" in 쓴.read_text(encoding="utf-8") and "회의록" not in 쓴.read_text(encoding="utf-8")
+            assert 요약쓰기(Path(tmp) / "기록") is None, "안 바뀌었는데 또 쓴다 — 옵시디언·iCloud 가 30초마다 흔들린다"
 
             # ★★ **메모리는 「켠 지」와 같이 적힌다.** 시험하는 쪽이 뜬 직후에 재서
             # 80MB·426MB 를 보고 두 번 「줄었다」로 읽을 뻔했다(모델이 아직 안
@@ -521,6 +617,42 @@ def _self_check() -> None:
                   "Windows fatal exception: access violation\n"
                   "Traceback (most recent call last):\n")
     assert 갈라 == "비치명 COM 예외 1줄 · 그 밖의 네이티브 예외 1줄 · 파이썬 traceback 1개", 갈라
+    # ★★ **딴 실이 죽으면 자국이 남아야 한다.** 딴 실 예외는 `stderr` 로만 나가고
+    #   구운 판에서는 갈 데가 없다 — 창에서 묻기가 `NameError` 로 죽었는데 화면에도
+    #   기록에도 아무 말이 없었다(2026-09-21 창을 몰아 보고서야 알았다).
+    import tempfile as _임시실
+    import time as _시간실
+
+    with _임시실.TemporaryDirectory() as _자리실:
+        import os as _os실
+
+        _옛실 = _os실.environ.get("VC_DATA")
+        _os실.environ["VC_DATA"] = _자리실
+        try:
+            난것 = {}
+            딴실로("시험 실", lambda: 난것.setdefault("돌았다", True)).join(2)
+            assert 난것.get("돌았다"), "딴 실이 일을 안 했다"
+
+            def 터지기():
+                raise RuntimeError("일부러 터뜨린다")
+
+            딴실로("터지는 실", 터지기).join(2)
+            _시간실.sleep(0.2)
+            글 = ""
+            for 자리 in Path(_자리실).rglob("*"):
+                if 자리.is_file():
+                    try:
+                        글 += 자리.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        pass
+            assert "터지는 실" in 글 and "일부러 터뜨린다" in 글, \
+                f"딴 실이 죽었는데 자국이 없다:\n{글[-400:]}"
+        finally:
+            if _옛실 is None:
+                _os실.environ.pop("VC_DATA", None)
+            else:
+                _os실.environ["VC_DATA"] = _옛실
+
     print("report self-check 통과")
 
 

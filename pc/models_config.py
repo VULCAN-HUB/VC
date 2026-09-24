@@ -50,21 +50,22 @@ def installed(model_dir: str | Path = "../models") -> dict[str, list[str]]:
             continue  # 모델이 아니라 비전 모델의 짝이다
         (vision if (p.parent / f"{p.stem}.mmproj.gguf").is_file() else chat).append(p.stem)
 
-    piper = root / "piper"
-    voices = sorted(p.stem for p in piper.glob("*.onnx")) if piper.is_dir() else []
+    # ★ 목소리·뜻 모델은 **딸려 온 자리와 받은 자리를 다 본다** — 받은 것은 exe 옆(`paths.fetched_dir`)에
+    #   들어가 판을 올려도 남고, 딸려 온 것은 프로그램 속에 있다. 한쪽만 보면 하나가 목록에서 사라진다.
+    import paths
+
+    뿌리들 = list(dict.fromkeys((root, paths.fetched_dir(), paths.models_dir())))
+    voices = sorted({p.stem for r in 뿌리들 if (r / "piper").is_dir() for p in (r / "piper").glob("*.onnx")})
     # 뜻 모델은 `model.onnx` + `tokenizer.json` 한 쌍이다. 딸려 온 것은 뿌리에,
     # 받은 큰 것은 이름 폴더(`e5-base`)에 들어간다 — `paths.MEANING_ORDER` 와 같은 규칙이다.
     # ★★ **차례가 곧 자동 추천이다**(`auto` 는 목록 첫 번째를 쓴다). 그래서 이 차례가
     #   `paths.MEANING_ORDER`(실제로 고르는 차례)와 **같아야 한다** — 안 그러면 화면이
     #   「지금 쓰는 것: 딸려 온 것」이라고 적는데 실제로는 큰 것을 쓴다. 실제로 그랬다.
     #   받은 큰 것이 먼저, 딸려 온 것이 나중이다.
-    뜻 = []
-    if root.is_dir():
-        for 곳 in sorted(p for p in root.iterdir() if p.is_dir()):
-            if (곳 / "model.onnx").is_file() and (곳 / "tokenizer.json").is_file():
-                뜻.append(곳.name)
-        if (root / "model.onnx").is_file() and (root / "tokenizer.json").is_file():
-            뜻.append("딸려 온 것 (e5-small)")
+    뜻 = sorted({곳.name for r in 뿌리들 if r.is_dir() for 곳 in r.iterdir()
+                if 곳.is_dir() and (곳 / "model.onnx").is_file() and (곳 / "tokenizer.json").is_file()})
+    if any((r / "model.onnx").is_file() and (r / "tokenizer.json").is_file() for r in 뿌리들):
+        뜻.append("딸려 온 것 (e5-small)")
     return {"chat": chat, "vision": vision, "stt": list(STT_CHOICES),
             "voice": voices, "meaning": 뜻}
 
@@ -115,9 +116,14 @@ def choose(cfg: dict[str, Any], role: str, name: str,
 
 
 def _self_check() -> None:
+    import os
     import tempfile
 
+    import paths
+
+    옛 = os.environ.get("VC_MODELS")
     with tempfile.TemporaryDirectory() as tmp:
+        os.environ["VC_MODELS"] = tmp          # 이 PC 에 깔린 진짜 모델이 목록에 섞이지 않게
         root = Path(tmp)
         (root / "piper").mkdir()
         for f in ("qwen2.5-1.5b.gguf", "qwen2.5-vl-3b.gguf",
@@ -164,6 +170,27 @@ def _self_check() -> None:
         empty.mkdir()
         bare = resolve({}, empty)
         assert bare["using"]["chat"] == "" and bare["using"]["stt"] in STT_CHOICES
+
+        # ★★ 받은 자리(exe 옆)와 딸려 온 자리(프로그램 속)를 **둘 다** 센다 — 한쪽만 보면 판을 올린 뒤 받은 것이 사라진다
+        받은곳 = Path(tmp) / "받은곳"
+        (받은곳 / "e5-base").mkdir(parents=True)
+        (받은곳 / "piper").mkdir()
+        for f in ("e5-base/model.onnx", "e5-base/tokenizer.json", "piper/ko-kss.onnx"):
+            (받은곳 / f).write_bytes(b"fake")
+        (root / "model.onnx").write_bytes(b"fake")
+        (root / "tokenizer.json").write_bytes(b"fake")
+        옛받은자리 = paths.fetched_dir
+        paths.fetched_dir = lambda: 받은곳
+        try:
+            둘 = installed(root)
+        finally:
+            paths.fetched_dir = 옛받은자리
+        assert 둘["meaning"] == ["e5-base", "딸려 온 것 (e5-small)"], 둘["meaning"]
+        assert 둘["voice"] == ["ko-kss", "ko_KR-kss-medium"], 둘["voice"]
+    if 옛 is None:
+        os.environ.pop("VC_MODELS", None)
+    else:
+        os.environ["VC_MODELS"] = 옛
 
     print("models_config self-check 통과")
 

@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS proposals (
     declaration TEXT NOT NULL DEFAULT '{}',
     decision    TEXT
 );
+
+-- 폰(전송 대기함)이 보낸 새 글. 같은 client_id 는 한 번만 쓴다 — 응답이 끊겨 다시 보내도 겹치지 않게.
+-- done=0 은 「쓰기 시작했다」: 글을 쓰는 사이 서버가 꺼졌을 수 있어, 다시 오면 글에 그 몸이 있는지 보고 가른다.
+CREATE TABLE IF NOT EXISTS client_writes (
+    client_id TEXT PRIMARY KEY,
+    title     TEXT NOT NULL,
+    ts        REAL NOT NULL,
+    done      INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -97,6 +106,23 @@ class Store:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self.conn.commit()
+
+    # --- 폰에서 온 새 글 한 번만 받기 ---------------------------------------
+    # ponytail: synchronous=NORMAL(WAL)이라 앱이 죽는 것은 견디지만 **전원 차단**이면 마지막 기록을 잃을 수 있다 —
+    #   그때는 같은 글이 한 번 더 붙을 수 있다. 막으려면 이 표만 따로 FULL 연결로 쓴다.
+
+    def client_write(self, client_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT client_id, title, done FROM client_writes WHERE client_id = ?", (client_id,)).fetchone()
+
+    def client_write_begin(self, client_id: str, title: str) -> None:
+        self.conn.execute("INSERT OR IGNORE INTO client_writes (client_id, title, ts) VALUES (?, ?, ?)",
+                          (client_id, title, time.time()))
+        self.conn.commit()
+
+    def client_write_done(self, client_id: str) -> None:
+        self.conn.execute("UPDATE client_writes SET done = 1 WHERE client_id = ?", (client_id,))
         self.conn.commit()
 
     # --- 학습 로그 -------------------------------------------------------
@@ -207,6 +233,19 @@ def _self_check() -> None:
         _가.decide("x1", "reject")
         assert _나.add_proposal_if_new({**_제안, "proposal_id": "x3"}) is True, "결정된 제안이 새 제안을 막는다"
         _가.conn.close(); _나.conn.close()
+
+    # ★ 폰 새 글 한 번만 받기 — 다시 열어도(서버 재시작) 남는다
+    with _tf.TemporaryDirectory() as _곳:
+        _가 = Store(str(Path(_곳) / "eb.db"))
+        assert _가.client_write("c-1234567") is None
+        _가.client_write_begin("c-1234567", "글")
+        _가.client_write_begin("c-1234567", "딴 제목")          # 두 번 시작해도 처음 것
+        assert dict(_가.client_write("c-1234567")) == {"client_id": "c-1234567", "title": "글", "done": 0}
+        _가.client_write_done("c-1234567")
+        _가.conn.close()
+        _나 = Store(str(Path(_곳) / "eb.db"))
+        assert _나.client_write("c-1234567")["done"] == 1, "다시 열었더니 받은 표시가 사라졌다"
+        _나.conn.close()
 
     s = Store(":memory:")
 

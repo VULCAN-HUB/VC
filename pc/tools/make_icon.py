@@ -6,6 +6,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QImage, QPainter, QColor
 from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
+import paths
+paths.pin_qt_plugins()      # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
 app = QApplication([])
 import logo, theme
 theme.use("vulcan")

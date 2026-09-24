@@ -29,7 +29,7 @@ import theme
 import ui
 from graph3d import FOCUS_ZOOM, OLD_ROOT, ROOT
 from notes import Note, Notes, flip_task, headings, section
-from panels import ServerLink
+from panels import ServerLink, 줄제목
 from store import Store
 from ui import GRAPH_LIMIT, MainWindow
 from ui import ModelPicker, QLabel, QPushButton, RemoteGateCard
@@ -261,6 +261,70 @@ def run() -> None:
         # **검색이 터져도 프로그램은 살아야 한다.** 신호 안에서 처리 안 된 예외가
         # 나면 PyQt5 는 프로세스를 죽인다 — 낯선 PC 에서 검색 엔터 한 번에 여섯 번
         # 죽었고, 죽음 기록에는 한 줄도 안 남았다.
+        # ★★ **찾기 칸이 세 갈래로 갈린다.** 주소면 모으기, 물음표로 끝나면 묻기,
+        #   나머지는 찾기다. 갈래를 하나 놓치면 그 문이 **화면에서 영영 안 열린다** —
+        #   오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 못 박는다(2026-09-21).
+        간것 = []
+        옛모으기, 옛묻기 = win.원본모으기, win.창고에묻기
+        win.원본모으기 = lambda 주소: 간것.append(("모으기", 주소))
+        win.창고에묻기 = lambda 물음: 간것.append(("묻기", 물음))
+        try:
+            win._ask("https://example.com/a")
+            win._ask("에이전트 기억은 어떻게 나누나?")
+            win._ask("그냥 찾는 말")
+            assert 간것 == [("모으기", "https://example.com/a"),
+                          ("묻기", "에이전트 기억은 어떻게 나누나?")], 간것
+        finally:
+            win.원본모으기, win.창고에묻기 = 옛모으기, 옛묻기
+
+        # ★★ **갈래만 재면 알맹이가 안 태워진다.** 위에서 `창고에묻기` 를 바꿔치기해
+        #   갈래는 쟀지만, 정작 그 함수 안에서 `urllib` 을 import 안 해 **딴 실에서
+        #   터지고 있었다** — 창에서 묻기가 아예 안 됐다(2026-09-21 창을 몰아 보고 알았다).
+        #   가짜 서버를 세워 **끝까지** 태운다.
+        import json as _json묻기
+        import threading as _실묻기
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class _가짜문(BaseHTTPRequestHandler):
+            def do_POST(self):
+                몸 = _json묻기.dumps({"answer": "짧은 답 [[회의록]]",
+                                    "sources": ["회의록"], "looked": ["회의록"],
+                                    "why": ""}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(몸)))
+                self.end_headers()
+                self.wfile.write(몸)
+
+            def log_message(self, *a):
+                pass
+
+        가짜 = HTTPServer(("127.0.0.1", 0), _가짜문)
+        _실묻기.Thread(target=가짜.serve_forever, daemon=True).start()
+        옛base, 옛token = win.link.base, win.link.token
+        win.link.base = f"http://127.0.0.1:{가짜.server_address[1]}"
+        win.link.token = "test-token"
+        난것묻기 = {}
+        본것 = []
+        옛보이기 = win._묻기보이기
+        win._묻기보이기 = lambda 물, 답, 근, 대화=False: 본것.append((물, 답, list(근)))
+        win.query_done.connect(lambda 물, 답, 근: 난것묻기.update(물음=물, 답=답, 근거=list(근)))
+        try:
+            win.창고에묻기("아무거나 물어본다?")
+            끝 = time.monotonic() + 15
+            while not 난것묻기 and time.monotonic() < 끝:
+                app.processEvents()
+                time.sleep(0.02)
+            assert 난것묻기, "묻기가 딴 실에서 죽었다 — 답이 안 왔다"
+            assert 난것묻기["답"].startswith("짧은 답"), 난것묻기
+            assert 난것묻기["근거"] == ["회의록"], 난것묻기
+            assert 본것 and 본것[0][1].startswith("짧은 답"), 본것
+        finally:
+            win._묻기보이기 = 옛보이기
+            win.link.base, win.link.token = 옛base, 옛token
+            가짜.shutdown()
+
+
         import report as report_module
         os.environ["VC_DATA"] = tmp
         try:
@@ -381,10 +445,24 @@ def run() -> None:
         first.settle()
         assert fresh.read("남의 종류").kind == "장소", fresh.read("남의 종류").kind
         # 다음 항목으로 넘어가면 그 자리는 치운다
-        fresh.write(Note(title="우리 종류", body="본문", kind="note"))
+        import wiki as _위키검사
+
+        fresh.write(Note(title="우리 종류", body="본문", kind=_위키검사.기본갈래))
         first.show_note("우리 종류")
         first.settle()
         assert first.detail_kind.count() == len(theme.KIND_LABEL), first.detail_kind.count()
+        # ★★ **옛 갈래를 단 글을 열면 그 갈래를 칸에 살려 둔다.** 안 그러면 여는 것만으로
+        #   갈래가 조용히 바뀐다 — 쓰던 글이 151장 있다(2026-09-21 갈래 표를 새로 세웠다).
+        fresh.write(Note(title="옛 종류 글", body="본문", kind="note"))
+        first.show_note("옛 종류 글")
+        first.settle()
+        assert first.detail_kind.count() == len(theme.KIND_LABEL) + 1, first.detail_kind.count()
+        assert first.detail_kind.currentData() == "note", first.detail_kind.currentData()
+        # 다시 아는 갈래로 넘어가면 덧붙은 자리는 치운다
+        first.show_note("우리 종류")
+        first.settle()
+        assert first.detail_kind.count() == len(theme.KIND_LABEL), first.detail_kind.count()
+        fresh.delete("옛 종류 글")
         fresh.delete("남의 종류")
         fresh.delete("우리 종류")
         first.refresh()
@@ -529,8 +607,23 @@ def run() -> None:
         # 헷갈렸다 — 둘이 다른 것을 세는데 이름이 같으면 사람이 못 가린다.
         win.refresh()
         win.settle()
-        적힘 = win.footer.text()
+        적힘 = win.상태글.text()
         assert "연결" in 적힘 and "적은 것" in 적힘, 적힘
+        # ★ 3단 틀(결정 17): 센 값은 「상태·기록」을 펴야 보이고, 늘 보이는 한 줄에는 없다.
+        assert "적은 것" not in win.footer.text(), "센 값이 늘 보이는 한 줄에 남았다"
+        # 밖에서 닿게 열렸는데 테일스케일이 꺼졌으면 한 줄이 말한다. 닫혀 있으면 아무 말도 안 한다.
+        win._테일 = None
+        win._그리띠()
+        assert "테일스케일" not in win.footer.text(), "안 열렸는데 폰 길 경고를 한다"
+        win.열린자리.show()
+        win._그리띠()
+        assert "테일스케일 꺼짐" in win.footer.text(), win.footer.text()
+        # 경고는 흐린 글자로 두면 안 보인다 — 경고색이어야 한다.
+        assert theme.T.WARN.name() in win.footer.styleSheet() or \
+            theme.css(theme.T.WARN, 0.8) in win.footer.styleSheet(), win.footer.styleSheet()
+        win.열린자리.hide()
+        win._테일 = "모름"
+        win._그리띠()
 
         # ★★ **밖에서 닿는 자리로 열렸으면 창이 그걸 말해야 한다.**
         # 자국과 `--doctor` 에만 적혀 있었는데, 오너는 아이콘을 눌러 켜고 창만 본다.
@@ -620,6 +713,15 @@ def run() -> None:
         eb_screen = screen_r(win.graph.nodes[ROOT])
         assert all(screen_r(n) < eb_screen for n in win.graph.nodes.values() if n.title != ROOT)
 
+        # ★★ **이름표가 자리를 옮길 때는 미끄러져 간다**(`graph3d.LABEL_GLIDE`) —
+        #   순간이동하면 눈에 움찔거림으로 보여서 그렇게 바꿨다. 그래서 **미끄러지는
+        #   동안에는 잠깐 서로를 지나간다.** 위에서 한 번에 0.9라디안(50도 넘게)을
+        #   돌려 놓고 한 프레임만 그린 뒤 재면, 아직 반도 못 간 자리를 재는 셈이다
+        #   (실제로 「2쌍 겹친다」로 터졌다). **겹치지 않는다는 것은 자리를 잡은 뒤의
+        #   약속**이다 — 다 갈 때까지 그려 놓고 잰다. 화면에서는 0.25초쯤이다.
+        for _ in range(40):
+            win.graph.project()
+
         # 이름표가 서로 겹치지 않고, 남의 원도 덮지 않는다.
         shown = [n for n in win.graph.nodes.values() if n.label.isVisible()]
         boxes = [n.label.sceneBoundingRect() for n in shown]
@@ -659,8 +761,71 @@ def run() -> None:
         win.ask("없는말")
         assert "어느 쪽이야" in win.say.text()
         win.link = real_link
+
+        # ★★ **커서가 깜빡여도 말하는 칸이 안 흔들려야 한다.** 꼬리를 켜짐 `"  ▍"` ·
+        #   꺼짐 `"   "` 로 바꿔 찍던 때는 두 꼬리의 폭이 11.3px 달라 칸 높이가
+        #   40 ↔ 46px 로 오갔다 — 이 칸이 세로로 쌓여 있어 **0.6초마다 위의 그래프까지
+        #   통째로 밀렸다**(오너가 창을 보고 짚었다). 색만 바꾸는 지금은 폭이 안 변한다.
+        #   되돌리면 이 줄이 터진다.
+        잰것 = set()
+        for _ in range(4):                      # 네 번 = 켜짐·꺼짐을 두 바퀴, 제자리로 돌아온다
+            win._blink()
+            잰것.add((win.say.sizeHint().height(), win.say.heightForWidth(420)))
+        assert len(잰것) == 1, f"커서가 깜빡일 때 말하는 칸 높이가 바뀐다: {sorted(잰것)}"
+
         win.graph.clear_focus()
         win.clear_detail()  # 다음 검사가 깨끗한 상태에서 시작하게
+
+        # --- 찾은 게 많으면 **좁히는 길**을 권한다(오너 2026-09-19) ---
+        # ★ 「관련 37개야」만 보고 사람이 `kind:`·`tag:` 문법을 떠올릴 길은 없다.
+        for i in range(6):
+            win.notes.write(Note(title=f"고기 이야기 {i}", body="#고기 구웠다",
+                                 kind="일" if i % 2 else "결정"))
+        win.ask("고기")
+        _말 = win._say_text
+        # ★ 쉼표로 겹쳐 좁히는 길을 **말로 알려 준다**(오너 2026-09-20) — 이미 되던 것인데 아무도 몰랐다
+        assert "쉼표로 더 좁혀" in _말 or "갈래·태그로는" in _말, _말
+        if "쉼표로 더 좁혀" in _말:
+            assert "「고기, " in _말, _말
+        # 찾기 칸 안내에도 적혀 있어야 한다 — 화면 어디에도 없으면 없는 길과 같다
+        assert "쉼표" in win.ask_box.placeholderText() or "쉼표" in win.ask_box.toolTip()
+        # 몇 개 안 되면 안 권한다 — 그냥 보는 게 빠르다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("고기 이야기 1")
+        assert "쉼표로 더 좁혀" not in win._say_text and "갈래·태그로는" not in win._say_text, win._say_text
+        # 다음 검사는 깨끗한 자리에서 — 초점이 남아 있으면 「첫 검색」이 「좁히기」가 된다
+        win.graph.clear_focus()
+        win.clear_detail()
+
+        # --- 더미로 모아 보기(오너 2026-09-19) ---
+        import orders as _orders창
+        # ★ 「무작위로 쓴 수많은 메모를 모아서 보여 달라」 — 벡터가 없으면 **그렇다고 말한다**.
+        _o더미 = _orders창.read_order("더미")
+        assert _o더미 is not None and _o더미.what == "더미", _o더미
+        _답 = win.더미보기("")
+        assert _답, "더미 물음에 아무 말도 안 한다"
+        # 시험 자리에는 뜻 벡터가 없다 — 「없다」고 말해야지 빈 화면이면 안 된다
+        assert ("뜻 벡터" in _답 or "더미" in _답 or "묶일 만한" in _답), _답
+        # 없는 더미를 불러도 **까닭이든 있는 목록이든 말은 한다** — 잠잠한 게 제일 나쁘다
+        _없 = win.더미보기("없는더미이름")
+        assert _없 and ("더미" in _없 or "벡터" in _없), _없
+
+        # --- 말로 화면 열기(오너 2026-09-19) ---
+        # ★ 「설정창 열어줘」가 **그런 제목의 글을 찾다** 실패했다. 사람은 글만 부르지 않는다.
+        import orders as _orders창
+
+        for 말, 있어야 in (("설정창 열어줘", "설정 창"), ("확장 열어줘", "확장"),
+                        ("폰 연결 보여줘", "폰 연결"), ("단축키", "단축키")):
+            _o = _orders창.read_order(말)
+            assert _o is not None and _o.what == "창열기", (말, _o)
+            _답 = win.창열기(_o.target or "")
+            assert 있어야 in _답, (말, _답)
+        # 모르는 창은 **무엇이 있는지 알려 준다** — 「몰라」로 끝나면 사람이 다음에 뭘 칠지 모른다
+        _몰라 = win.창열기("우주선")
+        assert "몰라" in _몰라 and "설정" in _몰라, _몰라
+        # 글 제목은 여전히 글로 연다 — 창 이름이 글 부르기를 잡아먹으면 안 된다
+        assert _orders창.read_order("카페 단골 열어줘").what == "열기"
 
         # --- 초점: 맞는 것만 남고 나머지는 가라앉는다 ---
         win.graph.clear_focus()
@@ -940,6 +1105,382 @@ def run() -> None:
         win.refresh()
         assert len(win.feed.rows) == 1 and win.feed.rows[0]["module"] == "제품 검색"
 
+        # --- **글도 보이고 창도 보인다 — 말로 가르지 않는다**(오너 2026-09-20) ---
+        # 「확장」은 창 이름이자 글 제목일 수 있고, 「상태창열어줘」라는 글도 있을 수 있다.
+        # 어떤 말로 갈라도 부딪히므로 **글을 보여 주고 창은 목록 맨 위 한 줄**로 얹는다.
+        win.notes.write(Note(title="확장 계획", body="확장 프로그램을 어떻게 만들지 적어 둔 글"))
+        win.notes.write(Note(title="상태창열어줘", body="이런 제목의 글도 찾을 수 있어야 한다"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        assert any("확장 계획" in t for t in 줄들), f"글이 안 보인다: {줄들}"
+        assert any(t.startswith("\u2699") and "창 열기" in t for t in 줄들), f"창 줄이 없다: {줄들}"
+        assert "설정 창" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
+
+        # 그 줄을 누르면 창이 열린다 — 「열어줘」를 일일이 칠 일이 없다
+        열린말 = []
+        옛창열기 = win.창열기
+        win.창열기 = lambda 이름: (열린말.append(이름), "설정 창의 칸이야.")[1]
+        win._목록에서열기("창:확장")
+        assert 열린말 == ["확장"], 열린말
+        win.창열기 = 옛창열기
+        # 글 자리를 누르면 그대로 글이 열린다(창 줄이 글 누르기를 잡아먹으면 안 된다)
+        본것 = []
+        옛보기 = win.show_note_at
+        win.show_note_at = lambda 자리: 본것.append(자리)
+        win._목록에서열기("/어딘가/확장 계획.md")
+        assert 본것 == ["/어딘가/확장 계획.md"], 본것
+        win.show_note_at = 옛보기
+
+        # 제목이 「상태창열어줘」인 글도 찾힌다 — 말끝이 붙은 제목이라고 사라지면 안 된다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창열어줘")
+        줄들2 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        assert any("상태창열어줘" in t for t in 줄들2), f"말끝이 붙은 제목의 글이 사라졌다: {줄들2}"
+
+        # ★★ **친 말 그대로가 글 제목이면 그 글이 이긴다**(오너 2026-09-20 실기에서 잡혔다).
+        #   「상태창열어줘」라는 제목의 글을 쳤더니 열기 규칙이 삼켜 「상태창」 글이 열렸다 —
+        #   내가 적은 글을 제목 그대로 쳤는데 딴 글이 열리면 그건 못 믿는 물건이다.
+        win.notes.write(Note(title="상태창", body="창 이름과 같은 제목의 글"))
+        win.notes.write(Note(title="상태창열어줘", body="말끝이 붙은 제목의 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창열어줘")
+        assert win.detail_title.text() != "상태창", f"딴 글이 열렸다: {win.detail_title.text()}"
+        assert "상태창열어줘" in win._say_text, win._say_text
+        # 그런 제목의 글이 없으면 예전처럼 시키는 말로 읽는다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("상태창 열어")
+        assert "상태창" in win._say_text, win._say_text
+
+        # ★★ **글이 이겨도 창 여는 길은 남는다**(오너 2026-09-20 실기). 「설정창」이라는 제목의 글이
+        #   있으면 글이 이기는데, 그때 ⚙ 줄까지 없애 버리면 **창을 열 길이 사라진다.**
+        win.notes.write(Note(title="설정창", body="설정창을 어떻게 바꿀지 적어 둔 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("설정창")
+        줄들3 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        assert any("설정창" == t for t in 줄들3), f"그 글이 안 보인다: {줄들3}"
+        assert any(t.startswith("\u2699") for t in 줄들3), f"창 여는 줄이 사라졌다: {줄들3}"
+        assert not any("창 창" in t for t in 줄들3), f"「창」이 두 번 적힌다: {줄들3}"
+        assert "설정 창이야" not in win._say_text, f"묻지도 않고 창이 열렸다: {win._say_text}"
+        # ★ **말끝이 붙은 제목**(「설정창열어줘」)도 같다 — 글이 이기되 ⚙ 줄은 남아야 한다.
+        #   이쪽은 딴 길을 지난다(말끝이 있어 「글이 있으면 찾기로」 가지가 안 걸린다).
+        win.notes.write(Note(title="설정창열어줘", body="말끝이 붙은 제목의 글"))
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("설정창열어줘")
+        줄들4 = [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        assert any("설정창열어줘" == t for t in 줄들4), f"그 글이 안 보인다: {줄들4}"
+        assert any(t.startswith("\u2699") for t in 줄들4), f"창 여는 줄이 사라졌다: {줄들4}"
+        assert "설정 창이야" not in win._say_text, f"글을 제목 그대로 쳤는데 창이 열렸다: {win._say_text}"
+
+        # ★★ **마우스 없이도 쓸 수 있어야 한다**(오너 2026-09-20).
+        #   찾기 칸에서 ↓ → 결과 첫 줄, ↑↓ 로 오르내리기, 맨 위에서 ↑ 면 찾기 칸으로.
+        #   전에는 결과로 가려면 탭을 여남은 번 눌러야 했다 — 검색→고르기→열기가 끊겨 있었다.
+        #   ※ 자체점검 자리에서는 창이 활성화되지 않아 `focusWidget()` 이 빈다 — 그래서
+        #     **어디로 가려 했는지**(돌려주는 위젯)로 잰다. 실제 창에서는 초점이 잡힌다.
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들5 = win._결과단추들()
+        assert len(줄들5) >= 2, f"결과가 모자라 키보드 시험을 못 한다: {len(줄들5)}"
+        assert win._결과줄로(0) is 줄들5[0], "↓ 로 결과 첫 줄에 못 간다"
+        assert win._결과줄(줄들5[1]) == 1, "결과 줄 번호를 못 센다"
+        assert win._결과줄로(1) is 줄들5[1], "다음 줄로 못 간다"
+        assert win._결과줄로(-1) is win.ask_box, "맨 위에서 ↑ 가 찾기 칸으로 안 간다"
+        assert win._결과줄로(len(줄들5)) is None, "맨 아래에서 더 내려간다"
+        assert win._결과줄(win.ask_box) is None, "찾기 칸을 결과 줄로 센다"
+        # ★ **거름망 배선까지 잰다.** 위 검사는 도우미만 보므로, ↓ 키가 실제로 걸리는지는
+        #   거름망을 직접 불러 확인한다(초점이 없어도 걸린다 — 잡으면 True 를 돌려준다).
+        from PyQt5.QtCore import QEvent as _이벤트9
+        from PyQt5.QtGui import QKeyEvent as _키9
+
+        _아래 = _키9(_이벤트9.KeyPress, Qt.Key_Down, Qt.NoModifier)
+        assert win.eventFilter(win.ask_box, _아래) is True, "찾기 칸에서 ↓ 가 안 걸린다"
+        assert win.eventFilter(줄들5[0], _아래) is True, "결과 줄에서 ↓ 가 안 걸린다"
+        _위 = _키9(_이벤트9.KeyPress, Qt.Key_Up, Qt.NoModifier)
+        assert win.eventFilter(줄들5[0], _위) is True, "맨 위에서 ↑ 가 안 걸린다(찾기 칸으로 가야 한다)"
+        # 글자 키는 그대로 지나가야 한다 — 거름망이 아무거나 먹으면 타자가 막힌다
+        _글자 = _키9(_이벤트9.KeyPress, Qt.Key_A, Qt.NoModifier)
+        assert win.eventFilter(win.ask_box, _글자) is not True, "거름망이 글자 키까지 먹는다"
+
+        # ★★ **숫자로 바로 고르기**(오너 2026-09-20). ↑↓ 로 여덟 번 내려가는 것과
+        #   `Ctrl+3` 한 번은 다른 물건이다. 번호가 **보여야** 쓸 수 있으므로 화면에
+        #   적히는 것까지 같이 잰다.
+        assert 줄들5[0].text().startswith("1. "), f"결과 줄에 번호가 안 보인다: {줄들5[0].text()!r}"
+        assert 줄제목(줄들5[1]) != 줄들5[1].text(), "둘째 줄에 번호가 없다"
+        assert not any(b.text().startswith(("1. ", "2. "))
+                       for b in win.recent.findChildren(QPushButton)), "최근 목록에 없는 숫자키를 적었다"
+        win.editing = None
+        둘째 = 줄제목(줄들5[1])
+        _둘 = _키9(_이벤트9.KeyPress, Qt.Key_2, Qt.ControlModifier)
+        assert win.eventFilter(win.ask_box, _둘) is True, "Ctrl+2 가 안 걸린다"
+        win.settle()
+        assert win.editing == 둘째, f"Ctrl+2 로 둘째 줄이 안 열렸다: {win.editing} ≠ {둘째}"
+        # 결과 줄에 손이 가 있으면 **맨숫자**로도 열린다(Ctrl 을 같이 누를 일이 없다)
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("확장")
+        줄들6 = win._결과단추들()
+        # ⚙(창 여는 줄)은 글이 아니라 창을 연다 — 글인 줄을 골라 잰다
+        글줄 = next(i for i, b in enumerate(줄들6) if not 줄제목(b).startswith("\u2699"))
+        그글 = 줄제목(줄들6[글줄])
+        win.editing = None
+        _맨n = _키9(_이벤트9.KeyPress, Qt.Key_1 + 글줄, Qt.NoModifier)
+        assert win.eventFilter(줄들6[글줄], _맨n) is True, "결과 줄에서 숫자키가 안 걸린다"
+        win.settle()
+        assert win.editing == 그글, f"숫자키로 그 줄이 안 열렸다: {win.editing} ≠ {그글}"
+        # ★ **찾기 칸에서 치는 숫자는 건드리지 않는다.** 이걸 먹으면 「2026」을 못 친다.
+        assert win.eventFilter(win.ask_box, _맨n) is not True, "찾기 칸의 숫자를 거름망이 먹는다"
+        # 없는 번호는 조용히 지나간다 — 세 줄뿐인데 Ctrl+9 로 엉뚱한 것이 열리면 안 된다
+        _아홉 = _키9(_이벤트9.KeyPress, Qt.Key_9, Qt.ControlModifier)
+        if len(줄들6) < 9:
+            assert win.eventFilter(win.ask_box, _아홉) is not True, "없는 번호를 먹는다"
+
+        # ★★ **그래프도 키보드로 돈다**(오너 2026-09-20). 전에는 끌어야만 옮겨졌다.
+        win.clear_detail()
+        간데 = win.graph.키로시작()
+        assert 간데, "그래프에 손을 못 얹는다"
+        assert win.graph.hover == 간데, f"손 얹은 자리가 안 잡힌다: {win.graph.hover}"
+        다음 = win.graph.키로옮기기(1)
+        assert 다음 and 다음 != 간데 or len(win.graph.nodes) == 1, f"옆으로 못 옮긴다: {간데} → {다음}"
+        assert win.graph.키로옮기기(-1) == 간데, "되돌아오지 못한다 — 앞뒤가 안 맞는다"
+        열린것 = []
+        win.graph.node_clicked.connect(lambda t: 열린것.append(t))
+        win.graph.keyPressEvent(_키9(_이벤트9.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        assert 열린것 == [win.graph.hover], f"그래프에서 Enter 가 안 먹는다: {열린것}"
+        win.graph.keyPressEvent(_키9(_이벤트9.KeyPress, Qt.Key_Right, Qt.NoModifier))
+        assert win.graph.hover != 간데 or len(win.graph.nodes) == 1, "→ 가 안 먹는다"
+        assert win.graph.focusPolicy() != Qt.NoFocus, "그래프가 초점을 못 받는다 — 키가 오지 않는다"
+        win.graph.clear_focus()
+
+        # ★★ **긴 제목이 오른쪽 칸을 창 밖으로 밀어내면 안 된다**(옵시디언 볼트를 들이고
+        #   드러났다 · 오너 2026-09-20). 단추는 줄바꿈을 못 해 **제목 전체 폭**을 최소폭으로
+        #   요구하고, 칩은 개수만큼 가로로 늘어선다. 둘이 겹쳐 칸(348)이 455 를 요구했고
+        #   **오른쪽 칸 글자가 112px 씩 잘려 나갔다.** 실기 화면을 찍어 보고서야 알았다.
+        #   ※ 줄이는 것 자체는 `panels` 에서 잰다 — 자체점검 창은 칸이 넓어 안 줄어든다.
+        긴제목 = "신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴링 진행 중, 미결) 그리고 더 긴 꼬리"
+        win.notes.write(Note(title=긴제목, body="긴 제목 시험 · 확장"))
+        for 태그 in ("#팀-회의실", "#긴급", "#작업-로그", "#오류-리포트", "#공지"):
+            win.notes.write(Note(title=f"태그글{태그[1:]}", body=f"칩을 늘리는 글 {태그}"))
+        win.refresh()
+        win.settle()
+        win.ask("확장")
+        win.settle()
+        # **실제 오른쪽 칸은 348px 이다.** 그보다 더 요구하면 칸이 창 밖으로 밀려 잘린다.
+        칸 = win.results.parent()
+        실제칸폭 = 348
+        assert 칸.minimumSizeHint().width() <= 실제칸폭, (
+            f"오른쪽 칸이 창 밖으로 밀린다: 최소 {칸.minimumSizeHint().width()} > 칸 {실제칸폭}")
+        # 누르면 열리는 제목은 **줄인 글자가 아니라 온전한 제목**이어야 한다
+        긴줄 = [b for b in win.results.findChildren(QPushButton) if 줄제목(b) == 긴제목]
+        assert 긴줄, [줄제목(b) for b in win.results.findChildren(QPushButton)]
+        # 칸에 안 들어가는 칩은 접힌다 — 안 접으면 칩 줄이 칸을 밀어낸다
+        칩들 = win.recent_chips.findChildren(QPushButton)
+        assert 칩들, "칩이 하나도 없다"
+        보인칩 = [c for c in 칩들 if not c.isHidden()]
+        쓴폭 = sum(c.sizeHint().width() + 4 for c in 보인칩)
+        assert 쓴폭 <= win.recent_chips.width() + 8, f"칩이 칸을 넘는다: {쓴폭} > {win.recent_chips.width()}"
+        win.notes.delete(긴제목)
+        for 태그 in ("팀-회의실", "긴급", "작업-로그", "오류-리포트", "공지"):
+            win.notes.delete(f"태그글{태그}")
+        win.refresh()
+        win.clear_detail()
+
+        # ★★ **모으기(Clip)** — 주소 하나만 치면 찾는 게 아니라 **모은다**(오너 2026-09-20).
+        #   카파시 LLM Wiki 의 첫 일이다. 오너는 크롬을 주로 쓰는데 크롬 공유는 주소만 준다.
+        import wiki as _위키8
+
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/2065297")
+        win.settle()
+        모은것 = win.notes.read("링크 · quasarzone.com")
+        assert 모은것 is not None, "주소를 쳤는데 안 모았다"
+        assert 모은것.kind == _위키8.원본갈래, 모은것.kind
+        # ★ 제목이 **주소가 아니어야** 한다 — 주소를 제목에 쓰면 파일 이름이 깨진다
+        #   (크롬에서 공유한 주소가 `https：／／…md` 로 저장된 적이 있다)
+        assert "://" not in 모은것.title and "／" not in 모은것.title, 모은것.title
+        자리 = win.notes.path_of(모은것.title).relative_to(win.notes.root).as_posix()
+        assert 자리.startswith(_위키8.RAW + "/"), f"원본이 raw 로 안 갔다: {자리}"
+        assert 모은것.extra.get("출처") == "공유", 모은것.extra
+        assert "모았어" in win._say_text, win._say_text
+        # ★ **일지에 한 줄 남아야 한다** — 무슨 일이 언제 있었는지는 거기서 본다
+        import wikilog as _일지8
+
+        일지 = (Path(win.notes.root) / _일지8.LOG).read_text(encoding="utf-8")
+        assert " | 모으기 | " in 일지 and "quasarzone" in 일지, 일지[-300:]
+        # 같은 집의 다른 주소는 **한 글에 붙는다** — 링크마다 글을 만들면 목록이 터진다
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/999")
+        win.settle()
+        assert win.notes.read("링크 · quasarzone.com").body.count("- http") == 2
+        # 같은 주소를 또 치면 **안 쌓고 알려 준다**
+        win.ask("https://quasarzone.com/bbs/qn_hardware/views/999")
+        win.settle()
+        assert win.notes.read("링크 · quasarzone.com").body.count("- http") == 2, "같은 주소가 두 번 쌓였다"
+        assert "이미 있어" in win._say_text, win._say_text
+        # ★ 주소가 아닌 말은 **그대로 찾기**여야 한다 — 모으기가 검색을 삼키면 안 된다
+        win.ask("확장")
+        win.settle()
+        assert win.notes.read("링크 · 확장") is None, "찾는 말을 모아 버렸다"
+        win.notes.delete("링크 · quasarzone.com")
+        win.refresh()
+        win.clear_detail()
+
+        # ★★ **둘레만 보기**(로컬 그래프 · 오너 2026-09-20). 오너가 옵시디언에서 쓰던
+        #   기능은 아니지만 「만들어 두고 필요하면 쓰게」 지시로 넣었다.
+        win.notes.write(Note(title="둘레 가운데", body="[[둘레 이웃1]] 과 [[둘레 이웃2]]"))
+        win.notes.write(Note(title="둘레 이웃1", body="몸"))
+        win.notes.write(Note(title="둘레 이웃2", body="몸"))
+        win.notes.write(Note(title="둘레 남", body="아무 상관 없는 글"))
+        win.refresh()
+        win.settle()
+        win.ensure_on_graph(["둘레 가운데", "둘레 이웃1", "둘레 이웃2", "둘레 남"])
+        win.show_note("둘레 가운데")
+        win.settle()
+        온통 = len([t for t, x in win.graph.nodes.items() if x.isVisible()])
+        win.둘레보기()
+        win.settle()
+        보임 = {t for t, x in win.graph.nodes.items() if x.isVisible()}
+        assert "둘레 가운데" in 보임 and "둘레 이웃1" in 보임, 보임
+        assert "둘레 남" not in 보임, "상관없는 글이 남았다"
+        assert len(보임) < 온통, (len(보임), 온통)
+        # ★ 글 카드는 비켜 준다 — 안 그러면 카드가 그래프를 덮어 **둘레가 안 보인다**
+        assert win.detail_card.isHidden(), "글 카드가 그래프를 덮은 채다"
+        assert "둘레" in win._say_text, win._say_text
+        # Esc 로 전체로 돌아온다 — 나올 길이 없으면 갇힌다
+        win.escape()
+        win.settle()
+        assert len([t for t, x in win.graph.nodes.items() if x.isVisible()]) >= 온통, "Esc 로 안 풀린다"
+        assert not win.graph.둘레중
+        # 글을 안 열고 부르면 **말해 준다** — 아무 일도 안 일어나면 고장인 줄 안다
+        win.clear_detail()
+        win.둘레보기()
+        assert "글을 하나 열어" in win._say_text, win._say_text
+        # 단축키 표에 매여 있어야 한다
+        assert any(k == "Ctrl+L" for k, _, _ in win.단축키표), [k for k, _, _ in win.단축키표]
+        for t in ("둘레 가운데", "둘레 이웃1", "둘레 이웃2", "둘레 남"):
+            win.notes.delete(t)
+        win.refresh()
+
+        # ★★ **살핌 칸**(오너 2026-09-20 · 카파시 LLM Wiki 의 넷째 일). 위키는 저절로
+        #   자라니 스스로 어긋난다 — 가리키는데 없는 글, 아무와도 안 이어진 쪽,
+        #   모아만 두고 안 합친 원본. **모델이 없어도 돈다**(기계가 확실히 아는 것만 본다).
+        import audit as _살핌8
+        import wikilog as _일지7
+
+        assert win.audit_fold.head.text().rstrip().endswith("+"), "살핌 칸이 펴진 채다"
+        win.notes.write(Note(title="살핌 개념", body="[[없는 글ZZZ]] 을 가리킨다", kind="개념"))
+        win.notes.write(Note(title="살핌 원본", body="- https://a.example/1", kind=_위키8.원본갈래))
+        win.refresh()
+        win.살핌그리기()
+        win.settle()
+        살핌줄 = [b.text() for b in win.audit.findChildren(QPushButton)]
+        붙인 = " ".join(살핌줄)
+        assert "살핌 개념" in 붙인 and "없는 글ZZZ" in 붙인, 살핌줄
+        assert "살핌 원본" in 붙인, 살핌줄
+        # ★ 줄을 누르면 그 글로 간다 — 보여 주기만 하고 못 가면 소용없다
+        갈줄 = [b for b in win.audit.findChildren(QPushButton) if b.text().strip().startswith("살핌 개념")]
+        assert 갈줄, 살핌줄
+        갈줄[0].click()
+        win.settle()
+        assert win.detail_title.text() == "살핌 개념", win.detail_title.text()
+        # ★ 살핀 것도 일이다 — 일지에 남는다
+        일지2 = (Path(win.notes.root) / _일지7.LOG).read_text(encoding="utf-8")
+        assert " | 살피기 | " in 일지2, 일지2[-200:]
+        # ★ **고치지 않는다** — 살피기는 보여 주기만 한다
+        전몸 = win.notes.read("살핌 개념").body
+        win.살핌그리기()
+        assert win.notes.read("살핌 개념").body == 전몸, "살피다가 글을 고쳤다"
+        for t in ("살핌 개념", "살핌 원본"):
+            win.notes.delete(t)
+        win.refresh()
+        win.clear_detail()
+
+        # ★ **폴더 칸**(오너 2026-09-20). 오너가 옵시디언 왼쪽에 늘 띄워 두던 자리다.
+        win.notes.write(Note(title="폴더칸 글", body="몸", created="2019-04-07T09:00:00Z"))
+        win.refresh()
+        win.settle()
+        assert win.folders_fold.head.text().rstrip().endswith("+"), "폴더 칸이 펴진 채다"
+        폴더줄 = [b.text() for b in win.folders.findChildren(QPushButton)]
+        assert any("2019" in t for t in 폴더줄), 폴더줄
+        assert any(t.startswith("    ") for t in 폴더줄), f"나무가 안 접혀 보인다: {폴더줄}"
+        누를 = [b for b in win.folders.findChildren(QPushButton) if b.text().strip().startswith("04")]
+        assert 누를, 폴더줄
+        누를[0].click()
+        win.settle()
+        # 층() 아래에 연/월이 서므로  가 된다(오너 결정 2026-09-20)
+        assert win.ask_box.text().startswith("path:") and "2019" in win.ask_box.text(), (
+            f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}")
+        assert "폴더칸 글" in {줄제목(b) for b in win.results.findChildren(QPushButton)}
+        win.notes.delete("폴더칸 글")
+        win.refresh()
+
+        # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 오른쪽에 늘 띄워 두던
+        #   칸이다(볼트 `workspace.json` 으로 확인). `status:` 로 찾는 것은 되는데
+        #   창고가 **무엇을 적어 왔는지 한눈에 보는** 길이 없었다.
+        win.notes.write(Note(title="앞머리칸 가", body="몸", extra={"status": "active"}))
+        win.notes.write(Note(title="앞머리칸 나", body="몸", extra={"status": "active"}))
+        win.notes.write(Note(title="앞머리칸 다", body="몸", extra={"status": "draft"}))
+        win.refresh()
+        win.settle()
+        # ※ `isVisible()` 로는 못 잰다 — 자체점검 창에서는 부모가 안 보여 **늘 거짓**이라
+        #   펴 두어도 통과한다(막이를 되돌려 보고 알았다). 머리글의 `+`/`−` 로 잰다.
+        assert win.props_fold.head.text().rstrip().endswith("+"), (
+            f"앞머리 칸이 펴진 채다 — 가끔 보는 것은 접어 둔다: {win.props_fold.head.text()!r}")
+        이름줄 = [b.text() for b in win.props.findChildren(QPushButton)]
+        assert any(t.startswith("status") and t.endswith("3") for t in 이름줄), 이름줄
+        # 이름을 누르면 값 목록으로
+        win._앞머리열기("status")
+        win.settle()
+        값줄 = [b.text() for b in win.props.findChildren(QPushButton)]
+        assert any(t.startswith("active") and t.endswith("2") for t in 값줄), 값줄
+        assert any(t.startswith("←") for t in 값줄), f"되돌아갈 길이 없다: {값줄}"
+        # 값을 누르면 그 값만 모인다 — **찾기 칸에도 적혀야** 왜 나왔는지 알고 더 좁힌다
+        고를 = [b for b in win.props.findChildren(QPushButton) if b.text().startswith("active")][0]
+        고를.click()
+        win.settle()
+        assert win.ask_box.text() == "status:active", f"친 말이 칸에 안 적힌다: {win.ask_box.text()!r}"
+        나온것 = {줄제목(b) for b in win.results.findChildren(QPushButton)}
+        assert "앞머리칸 가" in 나온것 and "앞머리칸 다" not in 나온것, 나온것
+        # ← 로 이름 목록에 돌아온다
+        [b for b in win.props.findChildren(QPushButton) if b.text().startswith("←")][0].click()
+        win.settle()
+        assert any(t.startswith("status") for t in
+                   [b.text() for b in win.props.findChildren(QPushButton)]), "돌아가지 못한다"
+        for t in ("앞머리칸 가", "앞머리칸 나", "앞머리칸 다"):
+            win.notes.delete(t)
+        win.refresh()
+        win.clear_detail()
+
+        # 단축키 목록(F1)에 이 길이 적혀 있어야 한다 — 되는데 안 적히면 없는 길이다
+        도움 = win.단축키글()
+        assert "결과" in 도움 and "↓" in 도움, 도움[-200:]
+        assert "Ctrl+1" in 도움, f"숫자키가 안 적혔다: {도움[-300:]}"
+        # ★ 글에 적힌 것만 보면 모자란다 — 「Ctrl+G 로 들어간다」는 안내문이 창안키 줄에
+        #   있어서, 단축키를 **떼어내도** 글에는 그대로 남았다(막이 되돌리기에서 잡혔다).
+        #   그러니 **표에 진짜 매여 있는지**, 그리고 눌렀을 때 그래프가 잡히는지를 잰다.
+        그키 = [f for k, f, _ in win.단축키표 if k == "Ctrl+G"]
+        assert 그키, f"Ctrl+G 가 단축키 표에 없다: {[k for k, _, _ in win.단축키표]}"
+        win.graph.clear_focus()
+        win.graph.hover = None
+        그키[0]()
+        assert win.graph.hover, "Ctrl+G 를 눌렀는데 그래프에 손이 안 얹힌다"
+        assert "그래프" in win._say_text, f"어디로 갔는지 말해 주지 않는다: {win._say_text}"
+        assert "Ctrl+G" in 도움 and "그래프" in 도움, f"그래프 키가 안 적혔다: {도움[-300:]}"
+
+        # 그런 글이 아예 없는 이름은 예전처럼 곧바로 창이 열린다
+        win.graph.clear_focus()
+        win.clear_detail()
+        win.ask("폰 연결")
+        assert "폰 연결" in win._say_text, win._say_text
+        win.feed.show_rows([])
+        win.graph.clear_focus()
+        win.clear_detail()
+
+
         # --- 쓰고 고칠 수 있어야 실무로 쓴다 ---
         win.new_note()
         assert win.editing == "새 항목" and notes.read("새 항목") is not None
@@ -978,6 +1519,38 @@ def run() -> None:
         win.ask("아이스")
         assert win.results.items, "찾은 것 목록이 비어 있다"
         assert not win.results.isHidden(), "찾았는데 목록 칸이 접혀 있다"
+        # ★ 최근 글은 옵시디언 파일 목록처럼 늘 보인다(2026-09-18) — 칩으로 태그만 골라 본다.
+        win.refresh(scan=False)
+        최근 = [w.text() for w in win.recent.items if isinstance(w, QPushButton)]
+        assert 최근 and ROOT not in 최근, 최근
+        assert not win.recent.isHidden(), "최근 글이 접혀 있다"
+        칩 = {b.text(): b for b in win.recent_chips.findChildren(QPushButton)}
+        assert "최근" in 칩 and "사진" in 칩, list(칩)
+        태그칩 = [k for k in 칩 if k.startswith("#")]
+        if 태그칩:
+            칩[태그칩[0]].click()
+            win.settle()
+            골라 = [w.text() for w in win.recent.items if isinstance(w, QPushButton)]
+            assert 골라 and set(골라) <= set(win.notes.by_tag(태그칩[0][1:].rstrip("…"))) | set(골라[:0]), 골라
+            win._칩골라(win._목록갈래)     # 다시 누르면 최근으로
+            win.settle()
+            assert win._목록갈래 == "", win._목록갈래
+        # AI 요약·번역(편의 기능 1·3번) — ⋯ 안에만 있다(결정 26). 답은 창으로, 붙이면 글 끝에.
+        win.notes.write(Note(title="AI 시험 글", body="긴 메모"))
+        win.show_note("AI 시험 글")
+        win.settle()
+        win._build_more()
+        ai = [a.menu() for a in win.more_menu.actions() if a.text() == "AI"]
+        assert ai and [x.text() for x in ai[0].actions()][:2] == ["요약", "번역"], "⋯ 에 AI 가 없다"
+        win.assist_done.emit("AI 시험 글", "AI 요약", "- 요점 하나")
+        win.settle()
+        assert win._도움창.isVisible() and "요점 하나" in win._도움창.informativeText()
+        win._도움창.close()
+        win._도움붙이기("AI 시험 글", "AI 요약", "- 요점 하나")
+        assert "## AI 요약" in win.notes.read("AI 시험 글").body, "붙이기가 안 됐다"
+        win.assist_done.emit("AI 시험 글", "AI 요약", "⚠ 대화 모델이 없다")
+        win.settle()
+        assert "모델이 없다" in win._say_text, win._say_text
         assert any("아이스" in w.text() for w in win.results.items if isinstance(w, QLabel)),             "걸린 자리가 안 보인다"
 
         # ★★ **찾은 것을 눌러 열 수 있어야 한다.** 사람이 제일 많이 하는 일인데
@@ -1014,6 +1587,80 @@ def run() -> None:
             assert "8월 정산" in win.detail_view.textCursor().block().text(),                 f"읽기 화면이 소제목으로 안 간다: {win.detail_view.textCursor().block().text()!r}"
         notes.delete("보고서")
 
+
+        # ★★ **모델이 없으면 처음 켠 사람에게 말한다.** 받는 길은 있는데 그 칸이
+        #   접혀 있어 아무도 못 찾았다 — 「준비됐어」라고만 하고 끝났다.
+        import models_config as _모델설정
+
+        _옛풀기 = _모델설정.resolve
+        try:
+            _모델설정.resolve = lambda *ㄱ, **ㄴ: {"using": {"chat": ""}, "available": {}}
+            win.models_fold.set_open(False)
+            assert win.모델없으면알리기() is True, "모델이 없는데 아무 말도 안 한다"
+            assert "모델" in win._say_text and "받기" in win._say_text, win._say_text
+            assert win.models_fold.body.isVisibleTo(win.models_fold), "말만 하고 그 칸을 안 펴 준다"
+            # 모델이 있으면 **아무 말도 안 한다** — 헛말은 그 자체가 병이다
+            _모델설정.resolve = lambda *ㄱ, **ㄴ: {"using": {"chat": "qwen3-8b"}}
+            _옛말 = win._say_text
+            assert win.모델없으면알리기() is False
+            assert win._say_text == _옛말, "모델이 있는데 없다고 한다"
+            # 재다 터져도 조용하다 — 헛경보가 더 나쁘다
+            def _터짐(*ㄱ, **ㄴ):
+                raise RuntimeError("못 잰다")
+            _모델설정.resolve = _터짐
+            assert win.모델없으면알리기() is False
+        finally:
+            _모델설정.resolve = _옛풀기
+
+        # ★★ **그물이 붙으면 훑기를 늦추고, 끊기면 도로 촘촘히 본다.**
+        #   신호가 오는데도 3초마다 창고를 통째로 훑으면 NAS 에서 그 값이 곧 병이다.
+        #   ★ 아주 끄지는 않는다 — 그물이 없으면 밖에서 고친 것을 영영 모른다.
+        import server as _서버그물
+
+        _옛돌것 = getattr(_서버그물, "RUNNING", None)
+
+        class _붙은그물:
+            붙은수 = 2
+
+        class _돌것흉내:
+            그물 = _붙은그물()
+
+        try:
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == ui.OUTSIDE_POLL_MS, win._poll_timer.interval()
+            _서버그물.RUNNING = _돌것흉내()
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == win.느긋훑기MS, win._poll_timer.interval()
+            _붙은그물.붙은수 = 0
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == ui.OUTSIDE_POLL_MS, "그물이 끊겼는데 계속 뜸하다"
+        finally:
+            _서버그물.RUNNING = _옛돌것
+            win._poll_timer.setInterval(ui.OUTSIDE_POLL_MS)
+
+        # ★★ **손님에서 지우면 메인엔 남는다** — 지움은 메인→손님 한 방향뿐이다.
+        #   실기로 쟀다(2026-09-24): 손님이 지운 글이 메인에 남아 있다가, 메인에서
+        #   그 글이 바뀌자 **다시 내려왔다.** 아무도 말해 주지 않으면
+        #   「문제돼서 지웠는데 왜 또 있지」가 된다.
+        assert win.사본이면한마디() == "", "메인인데 사본이라고 한다"
+        import json as _제이사본
+        import paths as _자리사본
+
+        _설정자리 = _자리사본.config_path()
+        _옛설정 = _설정자리.read_text(encoding="utf-8") if _설정자리.exists() else None
+        try:
+            _쓸것 = _제이사본.loads(_옛설정) if _옛설정 else {}
+            _쓸것["사본"] = {"역할": "손님", "main_url": "http://x", "main_token": "k"}
+            _설정자리.write_text(_제이사본.dumps(_쓸것, ensure_ascii=False), encoding="utf-8")
+            _말사본 = win.사본이면한마디()
+            assert "사본" in _말사본 and "메인에서 지워라" in _말사본, _말사본
+        finally:
+            if _옛설정 is None:
+                _설정자리.unlink(missing_ok=True)
+            else:
+                _설정자리.write_text(_옛설정, encoding="utf-8")
+        assert win.사본이면한마디() == "", "되돌렸는데 아직 손님이라고 한다"
+
         # 나가는 링크와 들어오는 링크는 따로 보인다.
         # "내가 적은 것"과 "나를 부른 것"은 다른 정보다.
         win.show_note("카페 단골")
@@ -1028,7 +1675,7 @@ def run() -> None:
         # 태그를 누르면 그 태그가 붙은 것끼리 모인다. 하위 태그는 상위로도 걸린다.
         win.show_tag("팔월")
         win.settle()
-        titles = [w.text() for w in win.results.items if isinstance(w, QPushButton)]
+        titles = [줄제목(w) for w in win.results.items if isinstance(w, QPushButton)]
         assert set(titles) == {"8월 계획", "주간 보고"}, titles
 
         # 없는 이름을 따라가면 그 자리에서 만든다 — 끊긴 채로 두지 않는다.
@@ -1052,7 +1699,7 @@ def run() -> None:
         shown = [n for n in win.graph.nodes.values() if n.isVisible()]
         assert len(shown) <= GRAPH_LIMIT, len(shown)
         assert win._total_notes > GRAPH_LIMIT
-        assert "보임" in win.footer.text(), win.footer.text()
+        assert "보임" in win.상태글.text(), win.상태글.text()
 
         # 잘려 나간 항목을 열면 그래프에 올라온다.
         far = "쌓인 것 0"
@@ -1139,7 +1786,7 @@ def run() -> None:
         win.refresh()
         assert "24" in [b.text() for b in win.years.buttons], [b.text() for b in win.years.buttons]
         win.show_year("2024")
-        found = [w.text() for w in win.results.items if isinstance(w, QPushButton)]
+        found = [줄제목(w) for w in win.results.items if isinstance(w, QPushButton)]
         assert found == ["재작년 견적"], found
         notes.delete("재작년 견적")
         win.show_results([])
@@ -1329,6 +1976,72 @@ def run() -> None:
         assert "37" not in win.footer.text()
         notes.use_embedder(None)
 
+        # ★★ **새 판이 있으면 말하고 묻는다** — 조용히 갈아 끼우지 않는다.
+        win._새판보이기({"판": "v9.9.9", "받을곳": "https://x/a.dmg",
+                     "이름": "a.dmg", "셈곳": "", "쪽": "https://x"})
+        app.processEvents()
+        _상자새판 = getattr(win, "_새판상자", None)
+        assert _상자새판 is not None, "새 판이 있는데 아무 말도 안 한다"
+        assert not _상자새판.isModal(), "새 판 상자가 창을 막는다"
+        assert "9.9.9" in _상자새판.text() and "기록" in _상자새판.text(), _상자새판.text()
+        _상자새판.close(); win._새판상자 = None
+        app.processEvents()
+        # 받을 것이 없으면 상자를 안 띄우고 말만 한다
+        win._새판보이기({"판": "v9.9.9", "받을곳": "", "쪽": "https://x"})
+        assert "9.9.9" in win._say_text, win._say_text
+        # 탈·끝남도 말로 나온다
+        win._새판보이기({"탈": "셈이 안 맞는다"})
+        assert "못 받았어" in win._say_text, win._say_text
+        win._새판보이기({"열었다": "/tmp/a.dmg"})
+        assert "받았어" in win._say_text and "기록은 그대로" in win._say_text, win._say_text
+
+        # ★★ **아랫단이 본문을 밀어내면 안 된다.** 카드 높이는 고정인데 링크·가리킨
+        #   곳은 글마다 제멋대로 길다. 안 가두던 때는 620짜리 카드에서 본문이 최소
+        #   높이(150)까지 눌렸고, 더 길면 카드를 넘어 **글자끼리 겹쳐 보였다**
+        #   (오너가 그 꼴을 짚었다 · 2026-09-24).
+        긴몸검 = "\n".join(f"- 줄 {i} 여기에 제법 긴 설명을 적는다. [[딴 것 {i}]]"
+                        for i in range(1, 26))
+        notes.write(Note(title="아랫단 시험", kind="메모", body=긴몸검))
+        for i in range(1, 13):
+            notes.write(Note(title=f"제법 이름이 긴 딴 것 {i}", kind="메모",
+                            body="[[아랫단 시험]] 을 가리킨다. 꽤 긴 줄을 적어 둔다."))
+        for i in range(1, 5):
+            notes.write(Note(title=f"이름만 적은 것 {i}", kind="메모",
+                            body="아랫단 시험 이라고 이름만 적었다."))
+        notes.reindex()
+        win.show_note("아랫단 시험")
+        app.processEvents()
+        카드검 = win.detail_card
+        아랫검 = win.detail_foot
+        assert not win.backs.isHidden(), "가리킨 곳이 있는데 안 보인다"
+        # ★ 읽을 자리를 지킨다 — 아랫단에 눌려 본문이 쪼그라들면 안 된다
+        assert win.detail_stack.height() >= win.본문최소 - 8, (
+            f"아랫단이 본문을 밀어냈다: 본문 {win.detail_stack.height()} · "
+            f"아랫단 {아랫검.height()} · 카드 {카드검.height()}")
+        # ★ **읽는 자리가 링크 자리보다 좁으면 안 된다** — 무엇이 주인지 뒤집힌다
+        assert win.detail_stack.height() >= 아랫검.height(), (
+            win.detail_stack.height(), 아랫검.height())
+        # ★ 아랫단은 제 몫을 넘지 않는다 — 넘치면 굴린다
+        assert 아랫검.height() <= int(카드검.height() * win.아랫단몫) + 2, (
+            아랫검.height(), 카드검.height())
+        # ★★ **카드 밖으로 나가지 않는다** — 나가면 그것이 겹쳐 보이던 그 꼴이다
+        assert 아랫검.geometry().bottom() <= 카드검.height(), (
+            아랫검.geometry(), 카드검.height())
+        assert win.detail_stack.geometry().bottom() <= 아랫검.geometry().top(), (
+            "본문과 아랫단이 겹친다", win.detail_stack.geometry(), 아랫검.geometry())
+        # ★ 본문과 아랫단 사이에 **금이 있다** — 잘린 마지막 줄이 링크와 붙어 보이지 않게
+        assert win.detail_rule.isVisibleTo(카드검), "본문과 아랫단 사이에 금이 없다"
+        # ★ 아랫단이 짧은 글에서는 **자리를 안 차지한다** — 늘 같은 높이로 잡아 두면
+        #   가리킨 곳이 없는 글까지 읽을 자리를 빼앗긴다
+        notes.write(Note(title="외톨이 글", kind="메모", body="아무도 안 가리키고 아무도 안 가리킨다."))
+        notes.reindex()
+        win.show_note("외톨이 글")
+        app.processEvents()
+        assert 아랫검.height() <= 60, 아랫검.height()
+        assert win.detail_stack.height() > 아랫검.height() * 3, (
+            win.detail_stack.height(), 아랫검.height())
+
+
 
     app.quit()
 
@@ -1374,9 +2087,10 @@ def run() -> None:
              if "글자(" in w.styleSheet()]
     assert not 남은것, f"스타일시트에 치환 안 된 글자 크기가 남았다: {남은것[:5]}"
     앞 = _theme.글자(12)
+    앞배율 = _theme.배율()      # 맥은 기본 1.2 로 켜진다
     _theme.배율바꾸기(1.5)
     assert _theme.글자(12) == "18px", _theme.글자(12)
-    _theme.배율바꾸기(1.0)
+    _theme.배율바꾸기(앞배율)
     assert _theme.글자(12) == 앞, "배율을 되돌려도 안 돌아온다"
     # ★ **키운 글자가 다음에 켤 때 그대로여야 한다.** 켤 때마다 다시 키워야 하면 있으나 마나다.
     import paths as _paths
@@ -1389,9 +2103,9 @@ def run() -> None:
         os.environ["VC_DATA"] = _잠깐
         try:
             win.글자키우기(0.2)
-            assert abs(_paths.load_config().get("글자배율", 0) - 1.2) < 0.001,                 f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
+            assert abs(_paths.load_config().get("글자배율", 0) - round(앞배율 + 0.2, 2)) < 0.001,                 f"키운 글자를 안 남긴다: {_paths.load_config().get('글자배율')}"
             win.글자키우기(0)                     # 제자리로
-            assert abs(_theme.배율() - 1.0) < 0.001, _theme.배율()
+            assert abs(_theme.배율() - _theme.기본배율) < 0.001, _theme.배율()
         finally:
             if _옛 is None:
                 os.environ.pop("VC_DATA", None)
@@ -1427,13 +2141,27 @@ def run() -> None:
 
     notes.write(Note(title="잠긴 글 시험", body="몸"))
     _잠긴 = notes.path_of("잠긴 글 시험")
+    # ★ **막는 방법이 운영체제마다 다르다.** 윈도우는 읽기 전용 파일이면 바꿔치기가
+    #   막히지만, **맥·리눅스는 안 막힌다** — 원자적 쓰기는 `os.replace` 라 파일이 아니라
+    #   **폴더** 쓰기 권한만 본다. 맥에서 파일만 잠그고 재니 글이 그대로 덮여 썼고,
+    #   검사는 「말하지 않는다」로 터졌다. 여기서는 폴더를 잠근다.
+    #   (사람이 Finder 에서 누르는 「잠금」은 `uchg` 플래그라 바꿔치기가 진짜로 막힌다.)
+    _폴더 = _잠긴.parent
+    _옛파일권한 = _stat6.S_IMODE(_os6.stat(_잠긴).st_mode)
+    _옛폴더권한 = _stat6.S_IMODE(_os6.stat(_폴더).st_mode)
     _os6.chmod(_잠긴, _stat6.S_IREAD)
+    if _os6.name != "nt":
+        # 파일만 잠가서는 안 막힌다. **폴더도** 잠가야 임시 파일 만들기와
+        # 덮어쓰기가 둘 다 막혀 진짜 「못 쓰는 상태」가 된다.
+        _os6.chmod(_폴더, 0o500)
     try:
         _한것 = win.do_order(_orders6.read_order("잠긴 글 시험에 덧붙일 줄 적어줘"))
         assert _한것 is True, "쓰기가 막혔는데 검색으로 흘러갔다"
         assert "못 썼어" in win.say.text(), f"쓰기가 막혔는데 말하지 않는다: {win.say.text()!r}"
     finally:
-        _os6.chmod(_잠긴, _stat6.S_IWRITE)
+        if _os6.name != "nt":
+            _os6.chmod(_폴더, _옛폴더권한)
+        _os6.chmod(_잠긴, _옛파일권한 | _stat6.S_IWRITE)
 
     # ★ 메뉴 신호는 `checked` 를 덧붙여 부른다 — 장식 씌운 슬롯이 그걸 받아도 안 터져야 한다.
     win.clear_detail()
@@ -1476,6 +2204,356 @@ def run() -> None:
         win.report, win.skills.save = _옛말3, _옛저장
     assert any("못 저장했어" in t for t in _승인말), f"승인이 막혔는데 까닭을 안 말한다: {_승인말}"
     assert win.store.proposal("막힐승인")["decision"] is None, "저장이 막혔는데 결정을 적었다(제안이 사라진다)"
+
+    # ★★ **코드 칸(헤르메스 IDE)** — 열고·고치고·저장까지 **알맹이를 태운다.**
+    #   오늘 「갈래만 재고 알맹이를 안 태웠다」로 묻기가 창에서 통째로 안 됐다(2026-09-21).
+    import codefiles as _코드검사
+    import hermes as _헤검사
+
+    _자리검사 = tempfile.mkdtemp()
+    _뿌리검사 = Path(_자리검사) / "projects"
+    (_뿌리검사 / "CodePanel" / "src").mkdir(parents=True)
+    (_뿌리검사 / "CodePanel" / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    _옛뿌리검사 = _헤검사.기본뿌리
+    _헤검사.기본뿌리 = _뿌리검사
+    try:
+        _창코드 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+        _창코드.show()
+        _창코드.코드그리기()
+        assert _창코드._코드줄.count() >= 1, "코드 칸이 비었다"
+        # 파일을 연다 — **창고 글이 아니어야 한다**
+        _창코드.코드열기("CodePanel", "src/main.py")
+        assert _창코드._연코드 == ("CodePanel", "src/main.py"), _창코드._연코드
+        assert _창코드.detail_body.toPlainText() == "x = 1\n"
+        assert _창코드.editing is None, "코드를 열었는데 창고 글이 열려 있다"
+        # 고치고 저장 — **그 파일에** 써져야 한다
+        _창코드.detail_body.setPlainText("x = 2\n")
+        _창코드.save_note()
+        assert (_뿌리검사 / "CodePanel" / "src" / "main.py").read_text(encoding="utf-8") == "x = 2\n", \
+            "코드 저장이 파일에 안 갔다"
+        # ★★ **창고로 새면 안 된다** — 코드가 창고 글이 되면 갈래·링크가 흐려진다
+        _센것 = _창코드.notes.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"]
+        assert _창코드.notes.read("CodePanel/src/main.py") is None, "코드가 창고 글이 됐다"
+        assert _센것 <= 2, f"코드를 저장했더니 창고 글이 늘었다: {_센것}"
+        # 자리를 벗어난 파일은 못 연다
+        _창코드.코드열기("CodePanel", "../../밖.txt")
+        assert _창코드._연코드 == ("CodePanel", "src/main.py"), "자리 밖 파일을 열었다"
+        # ★★ **긴 경로가 칸을 밀면 안 된다.** 곁 칸은 폭이 정해져 있어서 긴 이름 하나가
+        #   목록 전체를 화면 밖으로 민다(오늘 결과 칸에서 본 그 병이다 · 2026-09-21).
+        (_뿌리검사 / "CodePanel" / "아주" / "깊은" / "자리").mkdir(parents=True, exist_ok=True)
+        (_뿌리검사 / "CodePanel" / "아주" / "깊은" / "자리" /
+         "아주아주아주아주아주아주긴이름의파일.py").write_text("y = 2\n", encoding="utf-8")
+        _창코드._프로젝트펼치기("CodePanel")
+        _창코드.코드그리기()
+        _창코드.코드줄임()
+        app.processEvents()
+        _칸폭 = max(_창코드.codes.width(), 200)
+        _넘침 = [(_것.text()[:20], _것.sizeHint().width()) for i in range(_창코드._코드줄.count())
+               for _것 in [_창코드._코드줄.itemAt(i).widget()]
+               if _것 is not None and _것.sizeHint().width() > _칸폭 + 4]
+        assert not _넘침, f"코드 칸이 밀린다(폭 {_칸폭}): {_넘침[:3]}"
+
+        # ★★ **맡기기(에이전트 CLI) — 시작·진행·끝·적립·스킬 제안을 끝까지 태운다.**
+        #   CLI 가 안 깔린 기계에서도 **가짜 손**으로 전 경로를 잰다(2026-09-21).
+        import subprocess as _깃맡검
+        import time as _때맡검
+
+        import agentcli as _시엘검
+
+        _맡자리 = _뿌리검사 / "CodePanel"
+        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
+                    "commit", "-qm", "첫"], capture_output=True)
+        _창코드.notes.write(Note(title="프로젝트 · CodePanel", kind="엔티티", body="시험"))
+        _창코드.notes.reindex()
+
+        # 지시가 비면 안 돈다 — 무엇을 시킬지 모르고 돌리면 안 된다
+        _창코드.맡기기시작("CodePanel", "   ", 손물건=_시엘검.가짜())
+        assert _창코드._맡김중 == "", "빈 지시로 돌았다"
+
+        _난맡검 = {}
+        _창코드.handoff_done.connect(lambda p, r: _난맡검.update(프로젝트=p, 결과=r))
+        _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 9로",
+                       손물건=_시엘검.가짜(str(_맡자리 / "src" / "main.py"), "x = 9\n"))
+        assert _창코드._맡김중 == "CodePanel", "돌고 있다고 표시가 안 된다"
+        # ★★ **도는 중인 것이 채팅에도 보인다** — 아무 표시가 없으면 또 보낸다
+        # ★ 채팅 칸이 접혀 있으면 자식도 «안 보임»이다 — **제 상태**로 재야 한다
+        assert _창코드.chat_status.isVisibleTo(_창코드.chat), "생각 중 표시가 숨어 있다"
+        assert "생각 중" in _창코드.chat_status.text(), _창코드.chat_status.text()
+        # ★ 하나 도는 동안 또 시키면 막는다 — 둘이 같은 폴더를 고치면 엉킨다
+        _창코드.맡기기시작("CodePanel", "또 시켜본다", 손물건=_시엘검.가짜())
+        _끝맡검 = _때맡검.monotonic() + 20
+        while not _난맡검 and _때맡검.monotonic() < _끝맡검:
+            app.processEvents()
+            _때맡검.sleep(0.02)
+        assert _난맡검, "맡기기가 딴 실에서 죽었다 — 끝났다는 신호가 안 왔다"
+        app.processEvents()
+        assert _창코드._맡김중 == "", "끝났는데 돌고 있다고 남아 있다"
+        assert not _창코드.chat_status.isVisibleTo(_창코드.chat), "끝났는데 생각 중이라고 남아 있다"
+        _돌맡검 = (_난맡검["결과"] or {}).get("지음") or {}
+        assert _돌맡검["됐나"] and _돌맡검["바뀐파일"] == ["src/main.py"], _돌맡검
+        assert (_맡자리 / "src" / "main.py").read_text(encoding="utf-8") == "x = 9\n"
+        # ★★ **창고 쓰기는 창에서** 한다 — 한 일이 창고에 남는다
+        _창코드.notes.reindex()
+        _남긴맡검 = [r["title"] for r in _창코드.notes.conn.execute(
+            "SELECT title FROM notes WHERE kind = '작업'")]
+        assert _남긴맡검, "맡긴 일이 창고에 안 남았다"
+        # ★★ 스킬 제안 상자는 **창을 막지 않는다**
+        _상자맡검 = getattr(_창코드, "_스킬상자", None)
+        if _상자맡검 is not None:
+            assert not _상자맡검.isModal(), "스킬 상자가 창을 막는다"
+            _창코드._스킬상자 = None
+            _상자맡검.close()
+            app.processEvents()
+
+        # ★★ **협업도 창에서 돌아간다** — 문만 있고 창에 길이 없으면 만든 것이 아니다.
+        #   짓는 손이 고치고, 보는 손은 **읽기만** 한다(둘 다 가짜로 잰다).
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
+                    "commit", "-qm", "둘째"], capture_output=True)
+
+        class _본손검(_시엘검.가짜):
+            이름 = "보는이"
+
+            def 명령(self, 지시, 읽기전용=False):
+                import json as _j
+                import sys as _s
+                싼것 = _j.dumps({"type": "result", "result": "좋다 — 고칠 데가 없다"},
+                              ensure_ascii=False)
+                return [_s.executable, "-c", f"print({싼것!r})"]
+
+            def 읽을말(self, 나온것, 탈난것=""):
+                return _시엘검.클로드().읽을말(나온것, 탈난것)
+
+        _난맡검.clear()
+        _창코드.맡기기시작("CodePanel", "src/main.py 의 x 를 11로",
+                       손물건=_시엘검.가짜(str(_맡자리 / "src" / "main.py"), "x = 11\n"),
+                       보는손="보는이", 보는물건=_본손검())
+        assert _창코드._맡김중 == "CodePanel", "협업이 안 돌기 시작했다"
+        _끝둘검 = _때맡검.monotonic() + 30
+        while not _난맡검 and _때맡검.monotonic() < _끝둘검:
+            app.processEvents()
+            _때맡검.sleep(0.02)
+        assert _난맡검, "협업이 딴 실에서 죽었다"
+        app.processEvents()
+        _둘검 = _난맡검["결과"]
+        assert _둘검.get("협업") is True, _둘검
+        assert (_둘검.get("지음") or {}).get("바뀐파일") == ["src/main.py"], _둘검.get("지음")
+        # ★★ 보는 손이 실제로 불렸고 **아무것도 안 고쳤다**
+        assert _둘검.get("봄"), "바뀐 것이 있는데 보는 손을 안 불렀다"
+        assert _둘검["봄"]["읽기전용"] is True and _둘검["봄"]["바뀐파일"] == [], _둘검["봄"]
+        # ★★ 검토 말이 **껍데기가 아니라 말로** 창고에 붙는다
+        _창코드.notes.reindex()
+        _몸둘검 = "\n".join(r["body"] or "" for r in _창코드.notes.conn.execute(
+            "SELECT body FROM notes WHERE kind = '작업'"))
+        assert "가 본 것" in _몸둘검 and "좋다 — 고칠 데가 없다" in _몸둘검, _몸둘검[-400:]
+        assert "total_cost_usd" not in _몸둘검, "껍데기가 창고에 들어갔다"
+        _상자둘검 = getattr(_창코드, "_스킬상자", None)
+        if _상자둘검 is not None:
+            _창코드._스킬상자 = None
+            _상자둘검.close()
+            app.processEvents()
+
+        # ★★ **채팅 칸 — 접힘/올라옴 · 엔진 갈아 끼우기 · 보내기.**
+        #   「엔진이 로컬·claude·codex 로 바뀔 뿐 전부 VC 다」(오너 2026-09-24).
+        assert not _창코드.chat.isVisible(), "채팅 칸이 처음부터 펴져 있다"
+        # 말하는 자리를 누르면 올라온다
+        from PyQt5.QtCore import QEvent as _이벤트채팅
+        from PyQt5.QtGui import QMouseEvent as _누름채팅
+        from PyQt5.QtCore import QPointF as _점채팅
+
+        def _say누르기():
+            누름 = _누름채팅(_이벤트채팅.MouseButtonPress, _점채팅(4.0, 4.0),
+                         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+            _창코드.eventFilter(_창코드.say, 누름)
+            app.processEvents()
+
+        _say누르기()
+        assert _창코드.chat.isVisible(), "말하는 자리를 눌렀는데 채팅이 안 올라온다"
+        _say누르기()
+        assert not _창코드.chat.isVisible(), "또 눌렀는데 안 내려간다"
+        _창코드.채팅열기(True)
+        app.processEvents()
+
+        # ★ 고른 하나만 눌려 있어야 한다 — 둘이 눌려 있으면 무엇이 도는지 모른다
+        _창코드.채팅엔진고르기("claude")
+        assert _창코드._채팅엔진 == "claude"
+        assert [n for n, b in _창코드._엔진단추.items() if b.isChecked()] == ["claude"], \
+            [n for n, b in _창코드._엔진단추.items() if b.isChecked()]
+        assert "claude" in _창코드.chat_box.placeholderText()
+        # ★★ **고른 것이 눈에 보여야 한다.** 무엇이 도는지 모르고 값비싼 손을 부르면
+        #   안 된다 — 찍어 보니 claude 를 골랐는데 로컬이 더 밝았다.
+        assert "font-weight" in _창코드._엔진단추["claude"].styleSheet(), "고른 엔진이 안 보인다"
+        assert "font-weight" not in _창코드._엔진단추["로컬"].styleSheet(), "안 고른 것도 굵다"
+        _창코드.채팅엔진고르기("없는엔진")
+        assert _창코드._채팅엔진 == "claude", "모르는 엔진으로 바뀌었다"
+
+        # ★★ **프로젝트를 안 열었어도 일은 시킨다.** 전에는 여기서 돌려보냈는데,
+        #   「창고에 적어 둬」처럼 프로젝트와 상관없는 일까지 막혔다 — 오너가
+        #   「내가 시킨 일을 하지 못한다」고 짚은 자리다(2026-09-24).
+        _간것 = []
+        _옛맡김0 = _창코드.맡기기시작
+        _창코드.맡기기시작 = lambda p, t, **ㄴ: _간것.append((p, t, ㄴ.get("뿌리")))
+        try:
+            _창코드._연프로젝트 = None
+            _창코드._엔진말하기()
+            _창코드.chat_box.setText("창고에 적어 둬")
+            _창코드.채팅보내기()
+            app.processEvents()
+            assert _간것, "프로젝트가 없다고 아예 안 돌았다"
+            import paths as _자리검
+
+            assert _간것[0][0] == _자리검.일터().name, _간것[0]
+            assert _간것[0][2] == _자리검.일터().parent, _간것[0]
+            # ★ 칸에도 무엇을 만질지 적힌다 — 모르고 시키면 안 된다
+            assert "창고 일" in _창코드.chat_box.placeholderText(), \
+                _창코드.chat_box.placeholderText()
+        finally:
+            _창코드.맡기기시작 = _옛맡김0
+
+        # ★★ **마디 사이가 벌어져야 읽힌다.** `div`·`p` 여백은 Qt 가 안 먹어서 말이
+        #   한 덩이로 붙어 보였다(찍어서 두 번 잡았다) — 블록 여백으로 준다.
+        _쪽들 = []
+        _블록 = _창코드.chat_log.document().begin()
+        while _블록.isValid():
+            _쪽들.append((_블록.text(), _블록.blockFormat().topMargin()))
+            _블록 = _블록.next()
+        assert any(여백 > 0 for _, 여백 in _쪽들), f"마디 사이가 안 벌어진다: {_쪽들}"
+        assert _쪽들[0][1] == 0, "첫 마디 위에도 여백이 붙는다"
+
+        # ★ 오간 말이 칸에 쌓인다 — 말하는 자리는 한 줄이라 앞말이 지워진다
+        _쌓인 = _창코드.chat_log.toPlainText()
+        assert "창고에 적어 둬" in _쌓인, _쌓인[-300:]
+        # 빈 말은 안 보낸다
+        _창코드.chat_box.setText("   ")
+        _창코드.채팅보내기()
+        assert _창코드.chat_log.toPlainText() == _쌓인, "빈 말이 보내졌다"
+
+        # ★★ **로컬은 창고에 묻는다.** 엔진이 바뀌어도 창구는 하나다.
+        _물은것 = []
+        _옛묻기 = _창코드.창고에묻기
+        _창코드.창고에묻기 = lambda 말, 앞말=None, 대화=False: _물은것.append((말, list(앞말 or []), 대화))
+        try:
+            _창코드.채팅엔진고르기("로컬")
+            _창코드.chat_box.setText("VC 가 뭐야")
+            _창코드.채팅보내기()
+            assert _물은것 and _물은것[0][0] == "VC 가 뭐야", _물은것
+            # ★★ **앞말을 들고 간다** — 로컬은 세션이 없어 이것 없이는 이어 말 못 한다
+            assert any("창고에 적어 둬" == m["content"] for m in _물은것[0][1]), _물은것[0][1]
+            # ★★ **채팅은 대화 문으로 간다** — 묻기 문은 「안녕」에도 창고를 뒤진다
+            assert _물은것[0][2] is True, "채팅이 묻기 문으로 간다"
+        finally:
+            _창코드.창고에묻기 = _옛묻기
+
+        # ★★ **엔진이 claude 면 그 손으로 맡긴다** — 가짜 손으로 전 경로를 잰다
+        _맡긴것 = []
+        _옛맡김 = _창코드.맡기기시작
+        _창코드.맡기기시작 = lambda p, t, 손="", **ㄴ: _맡긴것.append((p, t, 손))
+        try:
+            _창코드._연프로젝트 = "CodePanel"
+            _창코드.채팅엔진고르기("codex")
+            assert "CodePanel" in _창코드.chat_box.placeholderText()
+            _창코드.chat_box.setText("x 를 3으로")
+            _창코드.채팅보내기()
+            assert _맡긴것 == [("CodePanel", "x 를 3으로", "codex")], _맡긴것
+        finally:
+            _창코드.맡기기시작 = _옛맡김
+
+        # ★★ **엔터로도 열린다**(오너 2026-09-24). 누르기만 두면 손을 마우스로 옮겨야 한다.
+        from PyQt5.QtGui import QKeyEvent as _키채팅
+
+        def _엔터(대상):
+            _창코드.eventFilter(대상, _키채팅(_이벤트채팅.KeyPress, Qt.Key_Return,
+                                          Qt.NoModifier))
+            app.processEvents()
+
+        _창코드.채팅열기(False)
+        _엔터(_창코드.graph)
+        assert _창코드.chat.isVisible(), "엔터를 눌렀는데 채팅이 안 열린다"
+        # ★★ **글 치는 칸에서는 안 가로챈다** — 찾기 칸 엔터도, 글 쓰다 줄 바꾸기도
+        #   다 망가진다. 뷰포트처럼 **칸 속 부품**에 떨어져도 안 가로채야 한다.
+        _창코드.채팅열기(False)
+        _엔터(_창코드.ask_box)
+        assert not _창코드.chat.isVisible(), "찾기 칸 엔터를 가로챘다"
+        _엔터(_창코드.chat_log.viewport())
+        assert not _창코드.chat.isVisible(), "글칸 속 부품의 엔터를 가로챘다"
+        _창코드.채팅열기(True)
+
+        # ★★ **대화가 이어진다.** 세션을 안 물려주면 한 마디마다 처음 보는 사이가 된다.
+        _이은것 = []
+        _옛맡김2 = _창코드.맡기기시작
+        _창코드.맡기기시작 = lambda p, t, 손="", 이어서="", **ㄴ: _이은것.append((t, 손, 이어서))
+        try:
+            _창코드._연프로젝트 = "CodePanel"
+            _창코드.채팅엔진고르기("claude")
+            _창코드.chat_box.setText("첫 마디")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("첫 마디", "claude", ""), _이은것   # 처음엔 빈 줄기
+            # 한 판이 끝나면서 줄기를 챙긴다
+            _창코드._맡김중 = ""
+            _창코드._맡김끝("CodePanel", {"지시": "첫 마디", "지음": {
+                "손": "claude", "됐나": True, "세션": "SESS-7", "바뀐파일": []}})
+            app.processEvents()
+            assert _창코드._채팅줄기[("CodePanel", "claude")] == "SESS-7", _창코드._채팅줄기
+            _창코드.chat_box.setText("둘째 마디")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("둘째 마디", "claude", "SESS-7"), _이은것[-1]
+            # ★ 엔진이 다르면 **딴 줄기다** — 섞으면 claude 에게 한 말이 codex 로 샌다
+            _창코드.채팅엔진고르기("codex")
+            _창코드.chat_box.setText("코덱스에게")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("코덱스에게", "codex", ""), _이은것[-1]
+            # ★ 「새 대화」는 줄기를 끊는다
+            _창코드.채팅엔진고르기("claude")
+            _창코드.채팅새로()
+            assert _창코드._채팅줄기 == {}, _창코드._채팅줄기
+            _창코드.chat_box.setText("다시 처음")
+            _창코드.채팅보내기()
+            assert _이은것[-1] == ("다시 처음", "claude", ""), _이은것[-1]
+        finally:
+            _창코드.맡기기시작 = _옛맡김2
+            _상자새 = getattr(_창코드, "_스킬상자", None)
+            if _상자새 is not None:
+                _창코드._스킬상자 = None
+                _상자새.close()
+                app.processEvents()
+
+        _창코드.채팅엔진고르기("로컬")
+        _창코드.채팅열기(False)
+
+        # 창고 글을 열면 코드 모드가 풀린다
+        _창코드.notes.write(Note(title="딴 글", body="몸"))
+        _창코드.notes.reindex()
+        _창코드.show_note("딴 글")
+        assert _창코드._연코드 is None, "창고 글을 열었는데 코드 모드가 안 풀렸다"
+        _창코드.close()
+        app.processEvents()
+    finally:
+        _헤검사.기본뿌리 = _옛뿌리검사
+
+    # ★★ **답이 와도 창이 멈추면 안 된다.** 「남길까」를 모달(`exec_()`)로 띄웠더니
+    #   창이 답마다 멈춰 섰고, 화면 없는 검사는 **영영 기다렸다**(2026-09-21 재서 잡았다).
+    #   맨 뒤에서 잰다 — 이 검사가 `say` 줄을 덮어 앞 검사를 흔들었다.
+    _창묻기 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+    _창묻기.show()
+    # 여기서 재는 것은 **상자가 창을 막느냐** 하나다 — 말하기·결과 칸·글 열기는 딴 데서 잰다
+    _창묻기.report = lambda *a, **k: None
+    _창묻기.show_results = lambda *a, **k: None
+    _창묻기.show_note = lambda *a, **k: None
+    _창묻기._묻기보이기("물음?", "짧은 답 [[회의록]]", ["회의록"])
+    # ★★ **대화일 때는 「남길까」 상자가 안 뜬다** — 말 한 마디마다 뜨면 대화가 안 된다
+    _창묻기._스킬상자 = None
+    _열린것 = getattr(_창묻기, "_남길까상자", None)
+    _창묻기._묻기보이기("안녕", "안녕 [[회의록]]", ["회의록"], True)
+    app.processEvents()
+    _상자 = getattr(_창묻기, "_묻기상자", None)
+    assert _상자 is not None and not _상자.isModal(), "남길까 상자가 창을 막는다"
+    _창묻기._묻기상자 = None
+    _상자.close()
+    app.processEvents()
+    _창묻기.close()
+    app.processEvents()
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

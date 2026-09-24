@@ -13,9 +13,11 @@ from __future__ import annotations
 import os
 import tempfile
 import base64
+import hashlib
 import hmac
 import json
 import queue
+import re
 import time
 from dataclasses import asdict
 import secrets
@@ -27,12 +29,15 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import paths
+import report
 
 import backends
 import brain
 import model_store
 import models_config
 import notes
+import wiki
+import plugins as 확장들
 import remote
 import skills
 from eb_protocol import PROTOCOL_VERSION, Hello, LogEvent
@@ -43,7 +48,9 @@ from skills import SkillStore
 import keystore
 from store import Store
 
-CONFIG_PATH = paths.config_path()
+# ★★ 설정 자리는 **부를 때** 정한다(`paths.config_path()`). 불러올 때 박아 두면 옛 창고 옮기기 **전** 자리를 가리켜,
+#   원본을 지운 뒤 「없다」고 보고 **새 열쇠로 옛 자리에 다시 만들었다** — 업그레이드 첫 켜기에 폰 짝짓기가 풀리고
+#   기록 폴더에 열쇠 파일이 생겼다(⑦ 실기 2026-09-15).
 MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 폰 사진 한 장이 이보다 크면 줄여서 보내야 한다
 # 글 한 편을 통째로 줄 때의 상한. **넉넉하다** — 오너 창고에서 제일 긴 글이 3,241자다.
 # 아껴서 답을 자르면 AI 가 다시 부르므로 되레 손해고, 상한이 없으면 5만 자도 그대로 나간다.
@@ -67,8 +74,9 @@ def _알림(말: str) -> None:
         pass
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+def load_config(path: Path | None = None) -> dict[str, Any]:
     """설정이 없으면 페어링 토큰을 만들어 저장한다. 이 토큰이 QR에 실린다(결정 16)."""
+    path = path or paths.config_path()
     if path.exists():
         # ★★ **설정이 깨져도 켜져야 한다.** `json.loads` 가 그대로 터져 서버·창이 아예 안 켜졌다.
         #   깨졌으면 지우지 않고 `.깨짐-<시각>` 으로 옆에 치우고 새로 만든다(열쇠가 새로 나오니
@@ -133,6 +141,28 @@ class Hub:
             q.put(event)
 
 
+카드미리보기 = notes.카드미리보기   # 폰 카드 · 맥 VC 최근 글이 같이 쓴다
+
+
+def 앞머리(path: str) -> str:
+    """글 파일의 앞머리(`---` 사이) 글자. 색인 몸에는 앞머리가 없어 파일에서 읽는다."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            첫 = f.readline()
+            if 첫.strip() != "---":
+                return ""
+            줄 = []
+            for 한 in f:
+                if 한.strip() == "---":
+                    break
+                줄.append(한)
+                if len(줄) > 60:
+                    break
+            return "".join(줄)
+    except OSError:
+        return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "EB/" + PROTOCOL_VERSION
@@ -146,13 +176,35 @@ class Handler(BaseHTTPRequestHandler):
         header = self.headers.get("Authorization", "")
         return header[7:] if header.startswith("Bearer ") else ""
 
+    @staticmethod
+    def _같은열쇠(온것: str, 우리것: str) -> bool:
+        """열쇠 두 개가 같은가. **바이트로 견준다.**
+
+        ★★ `hmac.compare_digest` 는 글자열끼리는 **ASCII 만** 견준다 — 한글이 섞이면
+        `TypeError: comparing strings with non-ASCII characters` 로 터져, 열쇠가 틀렸다는
+        401 대신 **500 이 나가고 연결이 끊겼다.** 폰에는 그것이 「컴퓨터에 못 닿았어」로 보여
+        「테일스케일이 문젠가」를 한참 뒤졌다(2026-09-19 실기에서 잡았다).
+        바이트로 견주면 아무 글자나 와도 안 터지고, 견주는 시간도 그대로 일정하다.
+        """
+        return hmac.compare_digest(온것.encode("utf-8", "surrogatepass"),
+                                   우리것.encode("utf-8", "surrogatepass"))
+
     def _authorized(self, path: str = "") -> bool:
         """폰·내 PC는 페어링 토큰으로, 외부 PC는 폰이 승인한 원격 토큰으로 들어온다.
 
         원격 토큰은 허용된 경로에서만 통한다 — 검사는 remote.RemoteGate가 한다.
         """
         token = self._bearer()
-        if token and hmac.compare_digest(token, self.server.cfg["pair_token"]):
+        if token and self._같은열쇠(token, self.server.cfg["pair_token"]):
+            self.session = None
+            return True
+
+        # ★★ **그물 열쇠는 신호 문 하나만 연다.** 기기끼리 「바뀌었다」를 주고받으려면
+        #   같은 열쇠가 있어야 하는데, 그 열쇠로 창고까지 열어 주면 열쇠 하나가 새는
+        #   순간 글이 통째로 샌다. **들을 권한과 읽을 권한은 다르다**(2026-09-24).
+        그물열쇠 = str((self.server.cfg.get("그물") or {}).get("열쇠") or "")
+        if (token and 그물열쇠 and (path or urlparse(self.path).path) == "/eb/v1/events"
+                and self._같은열쇠(token, 그물열쇠)):
             self.session = None
             return True
 
@@ -171,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         relay = self.headers.get("X-EB-Relay", "")
         claimed = self.headers.get("X-EB-Client", "")
-        if claimed and relay and hmac.compare_digest(relay, self.server.cfg["pair_token"]):
+        if claimed and relay and self._같은열쇠(relay, self.server.cfg["pair_token"]):
             return claimed
         return self.client_address[0]
 
@@ -210,6 +262,28 @@ class Handler(BaseHTTPRequestHandler):
         #   기본은 `append` 라 대부분은 이 길로 안 온다. 덧붙이기는 아무것도 안 지운다.
         # ★★ **`force` 는 진짜 참(`true`)일 때만 뚫는다.** `bool()` 로 읽으니 글자 `"false"`·`"0"` 도
         #   참이 되어 **사람이 고친 글을 덮었다** — 덮어쓰기 막이가 글자 한 줄에 무너졌다.
+        # ★★ **오프라인에서 고친 글 되돌려 보내기(오너 결정 28).** 폰은 제가 본 판의 지문
+        #   (`base_hash`)을 함께 보낸다. 그 사이 컴퓨터 쪽 글이 그대로면 **조용히 덮고**,
+        #   바뀌었으면 **아무것도 안 지우고 둘 다 남긴다** — 폰이 고친 판을 글 끝에 붙이고
+        #   「둘이 달라 붙여 뒀다」고 알린다. 사람이 보고 정리한다(덮어쓰기는 늘 명시적이다).
+        base = body.get("base_hash")
+        if mode == "replace" and old is not None and isinstance(base, str) and base:
+            지금 = hashlib.sha256(old.body.encode("utf-8")).hexdigest()
+            if 지금 == base:
+                body = {**body, "force": True}          # 내가 본 그 판 그대로다 — 덮어도 안전하다
+            else:
+                언제 = time.strftime("%Y-%m-%d %H:%M")
+                붙임 = f"\n\n## 폰에서 고친 판 ({언제})\n\n{text}"
+                경로 = self.server.notes.append(title, 붙임, old.kind, pinned=old.pinned)
+                self.server.notes.embed_one(경로)
+                self.server.notes._vec_cache = None
+                실림2 = getattr(self.server, "plugins", None)
+                if 실림2:
+                    실림2.fire_saved(notes.제목맞춤(title), log=_알림)
+                return self._send(201, {
+                    "title": title, "mode": "append", "merged": "appended",
+                    "hint": "폰에서 고치는 사이 컴퓨터 쪽 글도 바뀌어, 덮지 않고 글 끝에 붙였다"})
+
         if mode == "replace" and old is not None and body.get("force") is not True:
             return self._send(409, {
                 "error": "이미 있는 글을 통째로 덮으려 한다. force 가 필요하다",
@@ -219,17 +293,29 @@ class Handler(BaseHTTPRequestHandler):
 
         # ★★ **없는 글에 처음 덧붙이는 것도 `append` 로 보낸다.** 전에는 「없으면 새로 쓰기」로 갈라져
         #   잠금 밖이었다 — 두 AI 가 같은 새 글에 동시에 쌓으면 서로 덮어 줄이 사라졌다(재 봤다).
+        # ★ **어디서 왔는지 적어 둔다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   밖에서 가져온 것과 내가 적은 것은 다루는 법이 다르다 — 원본은 안 고치고,
+        #   내 글은 고친다. 나중에 `출처:공유` 로 모아 볼 수도 있다.
+        출처 = body.get("source")
+        더할앞머리 = {}
+        if isinstance(출처, str) and 출처 in wiki.앞머리규약["출처"]:
+            더할앞머리["출처"] = 출처
+        갈래 = body.get("kind", old.kind if old else wiki.기본갈래)
         if mode == "append":
-            path = self.server.notes.append(title, text,
-                                            body.get("kind", old.kind if old else "note"),
+            path = self.server.notes.append(title, text, 갈래,
                                             pinned=body.get("pinned") is True)
+            if 더할앞머리 and (붙인글 := self.server.notes.read(title)) is not None:
+                if not set(더할앞머리) <= set(붙인글.extra):
+                    붙인글.extra = {**더할앞머리, **붙인글.extra}
+                    path = self.server.notes.write(붙인글, path)
         else:
             note = notes.Note(
                 title=title,
                 body=text,
-                kind=body.get("kind", old.kind if old else "note"),
+                kind=갈래,
                 pinned=body.get("pinned") is True or bool(old and old.pinned),   # "false" 는 거짓
                 aliases=old.aliases if old else [],
+                extra={**더할앞머리, **(old.extra if old else {})},
             )
             path = self.server.notes.write(note)
         # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
@@ -246,11 +332,17 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # 벡터를 못 만들어도 저장은 끝났다. 다만 **방금 쓴 글이 뜻으로 안 찾히는 것**이라 남긴다.
             _알림(f"[뜻 벡터] 방금 쓴 글을 못 만들었다 — {type(e).__name__}: {e}")
+        # 확장에 「글이 저장됐다」고 알린다(결정 23). **확장이 터져도 저장은 이미 끝났다** —
+        # 예외는 `fire_saved` 안에서 잡혀 자국으로만 간다.
+        저장제목 = notes.제목맞춤(title)
+        실림 = getattr(self.server, "plugins", None)
+        if 실림:
+            실림.fire_saved(저장제목, log=_알림)
         # ★ 절대 경로는 안 싣는다 — 집 폴더(사용자 이름)가 들어 있고, AI 는 제목으로 부르므로 쓸 데가 없다(쓸 때마다 글자만 탄다).
         답 = {"title": title, "mode": mode}
         # ★ 파일에 못 쓰는 글자(? : / …)는 전각으로 바뀌어 저장된다. **바뀐 제목을 알려 준다** —
         #   AI 가 다음에 그 제목으로 부르거나 [[링크]] 로 이을 때 헷갈리지 않게.
-        if (저장제목 := notes.제목맞춤(title)) != title:
+        if 저장제목 != title:
             답["saved_as"] = 저장제목
         # ★ **쓴 자리에서 뜻이 가까운 글을 알려 준다**(제목 셋, 60자쯤). 잇기는 **선택**이다 —
         #   저장소 규칙 1조가 「[[링크]] 를 일부러 넣을 필요 없다, 뜻 검색·비슷한 것 줄이 대신한다」
@@ -277,6 +369,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(201, 답)
 
     def _send(self, code: int, payload: Any = None) -> None:
+        self._보낸코드 = code          # 쓰기가 성공했는지 부른 쪽이 본다(폰 새 글 한 번만 받기)
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -326,10 +419,22 @@ class Handler(BaseHTTPRequestHandler):
     # ★★ **틀린 길·틀린 이름에 「not found」만 주면 AI 는 짐작으로 다시 두드린다** —
     #   한 번이 800자다. 재 보니 `search?query=` 는 **조용히 빈 검색**(창고 앞머리)을 줬고,
     #   `search` 를 POST 로 부르면 그냥 404 였다. **무엇이 틀렸는지 말해 준다.**
-    GET_PATHS = ("/eb/v1/hello", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
+    GET_PATHS = ("/eb/v1/hello", "/eb/v1/status", "/eb/v1/templates", "/eb/v1/attach", "/eb/v1/trash", "/eb/v1/folders", "/eb/v1/plugins", "/eb/v1/changes", "/eb/v1/memory/search", "/eb/v1/memory/note", "/eb/v1/graph")
     POST_PATHS = ("/eb/v1/memory", "/eb/v1/memory/delete", "/eb/v1/memory/rename", "/eb/v1/skills/propose",
                   "/eb/v1/me/learn",
-                  "/eb/v1/ask", "/eb/v1/log")
+                  "/eb/v1/ask", "/eb/v1/log", "/eb/v1/attach", "/eb/v1/assist", "/eb/v1/memory/mark", "/eb/v1/trash/restore", "/eb/v1/daily", "/eb/v1/memory/task",
+                  "/eb/v1/wiki/ask",
+                  "/eb/v1/wiki/chat",
+                  # 헤르메스(2단계) — 바이브코딩 관제탑. AI 도구가 이 문으로 부른다.
+                  "/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log",
+                  # 바이브코딩 — 바깥 AI 가 고칠 안을 내고, 승인하면 적용한다
+                  "/eb/v1/vibe/plan", "/eb/v1/vibe/apply",
+                  # 자가 스킬 생성 — 방금 한 일에서 스킬을 뽑아 제안하고, 승인하면 남긴다
+                  "/eb/v1/hermes/skill",
+                  # 남의 에이전트 CLI 에게 맡긴다 — 클로드 코드 · Codex
+                  "/eb/v1/hermes/handoff", "/eb/v1/hermes/hands",
+                  # 둘이 함께 — 하나가 고치고 하나가 본다
+                  "/eb/v1/hermes/duet")
 
     def _길없다(self, path: str) -> dict:
         답 = {"error": "not found", "path": path}
@@ -367,12 +472,117 @@ class Handler(BaseHTTPRequestHandler):
             via_phone = (parse_qs(url.query).get("via") or [""])[0] == "phone"
             return self._send_html(remote.page(session, via_phone))
 
+        # 폰 앱 껍데기. 열쇠는 안 들어 있고 자료는 열쇠를 단 API 로만 온다(phone_app.py).
+        if url.path == "/app":
+            import phone_app
+
+            return self._send_html(phone_app.page())
+
         if url.path == "/eb/v1/remote/status":
             sid = (parse_qs(url.query).get("s") or [""])[0]
             return self._send(200, self.server.gate.status(sid))
 
         if not self._authorized(url.path):
             return self._send(401, {"error": "unauthorized"})
+
+        # 폴더 보기(편의 기능 29번 · 원노트 공책·애플 노트 폴더) — 폴더마다 글 수. 기계 자리는 뺀다.
+        if url.path == "/eb/v1/folders":
+            뿌리 = str(self.server.notes.root)
+            셈: dict[str, int] = {}
+            for (경로,) in self.server.notes.conn.execute("SELECT path FROM notes"):
+                안 = Path(경로).parent
+                try:
+                    이름 = 안.relative_to(뿌리).as_posix()
+                except ValueError:
+                    continue
+                if 이름 in (".", ""):
+                    이름 = "/"
+                if any(x.startswith((".", "_")) for x in 이름.split("/")):
+                    continue
+                셈[이름] = 셈.get(이름, 0) + 1
+            return self._send(200, {"folders": [{"path": k, "notes": v}
+                                                for k, v in sorted(셈.items())]})
+
+        if url.path == "/eb/v1/trash":
+            return self._send(200, {"trash": [
+                {"id": self._휴지통id(판), "title": t, "when": w}
+                for t, w, 판, _ in self.server.notes.trashed()[:100]]})
+
+        # 첨부 받아 보기 — 폰 글 보기가 사진을 그린다(오너 실기 2026-09-16: 앱에서 사진이 안 보였다).
+        # 이름만 받는다 — 경로 성분은 버리고 첨부 꼴만, 창고 안에서만 찾는다.
+        if url.path == "/eb/v1/attach":
+            물음 = parse_qs(url.query)
+            name = (물음.get("name") or [""])[0]
+            path = self.server.notes.attachment_path(Path(name).name) if name else None
+            if path is None or not path.is_file():
+                return self._send(404, {"error": "없는 첨부", "name": name[:80]})
+            # ★★ **목록 카드는 작은 사진을 받는다**(`w=320`). 전에는 카드마다 **원본을 통째로**
+            #   받아 갔다 — 폰에서 목록만 훑어도 몇 MB 씩 나갔다. 못 줄이는 꼴(HEIC 등)이면
+            #   원본을 그대로 준다 — 폰이 그것을 제 자리에 넣어 **두 번은 안 받는다.**
+            try:
+                넓이 = int((물음.get("w") or ["0"])[0])
+            except ValueError:
+                넓이 = 0
+            if 넓이:
+                작은 = self.server.notes.thumbnail_path(Path(name).name, 넓이)
+                if 작은 is not None:
+                    path = 작은
+            import mimetypes
+
+            data = path.read_bytes()
+            꼴 = ("image/heic" if path.suffix.lower() in (".heic", ".heif")
+                 else mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", 꼴)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+            return None
+
+        # 서식을 폰까지(5단계 · 결정 19) — 폰 적기 탭이 부른다. `{{날짜}}` 같은 자리는 폰이 **적는 순간** 채운다.
+        if url.path == "/eb/v1/templates":
+            n = self.server.notes
+            return self._send(200, {"templates": [{"name": t, "body": n.template(t)} for t in n.templates()]})
+
+        # ★★ **바뀐 것만 내어 준다**(결정 30 · 딴 PC 의 VC 가 사본을 쌓는 문).
+        #   메인이 죽어도 손님 PC 의 자료가 살아 새 메인이 될 수 있어야 한다 — 그러려면
+        #   손님이 **글을 통째로 들고** 있어야 한다. 매번 전부 받으면 못 쓰니 **그때 뒤로 바뀐 것**만.
+        #   ※ 지운 글은 「지난 판은 있는데 글이 없는 것」(휴지통)으로 알아낸다 — VC 는 지울 때 늘 한 판 남긴다.
+        if url.path == "/eb/v1/changes":
+            물음 = parse_qs(url.query)
+            try:
+                뒤로 = float((물음.get("since") or ["0"])[0])
+            except ValueError:
+                return self._send(400, {"error": "since 는 숫자(초)여야 한다"})
+            몇개 = max(1, min(500, int((물음.get("limit") or ["200"])[0] or 200)))
+            n = self.server.notes
+            줄들 = n.conn.execute(
+                "SELECT path, title, mtime, kind FROM notes WHERE mtime > ? ORDER BY mtime LIMIT ?",
+                (뒤로, 몇개)).fetchall()
+            바뀜 = [{"title": r["title"], "path": r["path"], "mtime": r["mtime"], "kind": r["kind"]}
+                  for r in 줄들]
+            지움 = [{"title": t, "when": 언제} for t, 언제, _마지막, _자리 in n.trashed()[:100]]
+            # 다음에 어디서부터 받을지 — 받은 것 중 가장 늦은 때. 없으면 물어본 자리 그대로.
+            다음 = max((r["mtime"] for r in 줄들), default=뒤로)
+            return self._send(200, {"changes": 바뀜, "trashed": 지움, "next_since": 다음,
+                                    "more": len(줄들) >= 몇개})
+
+        # 확장 플러그인(결정 23 · 편의 기능 31번) — **보기만** 한다.
+        # ★ 폰에서 확장을 켜고 끄는 길은 일부러 안 낸다 — 코드가 도는 곳은 컴퓨터이고,
+        #   「이 컴퓨터에서 코드가 돈다」 경고를 보고 켜는 일은 그 컴퓨터 앞에서 한다(안전 원칙).
+        if url.path == "/eb/v1/plugins":
+            실림 = getattr(self.server, "plugins", None)
+            정보 = 실림.infos if 실림 else 확장들.find(cfg=self.server.cfg)
+            return self._send(200, {"plugins": [
+                {"name": i.name, "version": i.version, "note": i.note,
+                 "on": i.enabled, "error": i.error} for i in 정보]})
+
+        # 「상태·기록」(결정 17 ③) — 폰 ⋮ 메뉴가 부른다. 기록 내용·글 이름·집 경로는 가린다.
+        if url.path == "/eb/v1/status":
+            import report
+
+            return self._send(200, report.상태요약())
 
         if url.path == "/eb/v1/hello":
             cfg = self.server.cfg
@@ -397,7 +607,7 @@ class Handler(BaseHTTPRequestHandler):
                 # ★ **더 잘 찾는 길이 있으면 AI 도 알아야 한다.** 큰 뜻 모델을 받으면
                 #   같은 창고에서 찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개).
                 #   AI 가 이걸 보면 오너에게 알려 줄 수 있다 — 안 알려 주면 있는 줄도 모른다.
-                큰모델있나 = (paths.models_dir() / "e5-base" / "model.onnx").is_file()
+                큰모델있나 = paths.meaning_dir("e5-base").name == "e5-base"      # exe 옆에 받은 것까지 본다
                 몸["store"] = {
                     "notes": c.execute("SELECT count(*) FROM notes").fetchone()[0],
                     "kinds": 갈래,
@@ -476,11 +686,18 @@ class Handler(BaseHTTPRequestHandler):
             간추려 = (args.get("brief") or ["0"])[0] not in ("0", "", "false")
             k = max(1, min(k, MAX_HITS_BRIEF if 간추려 else MAX_HITS))
             통째로 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
+            카드 = (args.get("card") or ["0"])[0] not in ("0", "", "false")
+            보관함 = (args.get("archived") or ["0"])[0] not in ("0", "", "false")
             # ★★ **훑을 때는 제목만 있으면 된다.** 「무슨 결정들이 있었나」처럼 목록을 보는
             #   일은 흔한데, 지금은 장마다 요약·날짜·이음선까지 실어 보낸다.
             #   [잰 것, 오너 창고] `kind:결정` 120장 — 지금 20,233자 · 제목만 6,586자(3배).
             #   AI 는 목록을 보고 **고른 것만** 다시 묻는다. 그때 요약이 필요하면 그때 준다.
-            rows = self.server.notes.search(q, k)
+            rows = self.server.notes.search(q, k * 3 if 카드 else k)
+            if 카드:
+                # 폰 목록 — 보관한 글은 보관함에서만(킵). AI 길은 그대로 다 본다.
+                def 보관됨(r) -> bool:
+                    return bool(re.search(r"(?m)^보관:\s*true\s*$", 앞머리(r["path"])))
+                rows = [r for r in rows if 보관됨(r) == 보관함][:k]
             out = []
             for r in rows:
                 몸 = r["body"]
@@ -493,7 +710,7 @@ class Handler(BaseHTTPRequestHandler):
                 #     AI 가 한 번 꺼낼 때 나가는 글자가 곧 값이다.
                 if 간추려:
                     작은장 = {"title": r["title"], "chars": len(몸)}
-                    if r["kind"] and r["kind"] != "note":
+                    if r["kind"] and r["kind"] != wiki.기본갈래:
                         작은장["kind"] = r["kind"]
                     out.append(작은장)
                     continue
@@ -504,8 +721,8 @@ class Handler(BaseHTTPRequestHandler):
                     "summary": notes.요약(몸, 물음=q),
                     "chars": len(몸),
                 }
-                if r["kind"] and r["kind"] != "note":
-                    한장["kind"] = r["kind"]           # 보통은 note 다
+                if r["kind"] and r["kind"] != wiki.기본갈래:
+                    한장["kind"] = r["kind"]           # 보통은 기본갈래다
                 if r["pinned"]:
                     한장["pinned"] = True              # 거짓은 안 보낸다
                 if r["created"]:
@@ -526,6 +743,24 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 if 통째로:
                     한장["body"] = 몸
+                # 폰 목록 카드(`card=1`) — 사람이 훑기 좋게 태그 · 첫 사진 · 깔끔한 미리보기 · 고친 날.
+                #   AI 가 부르는 기본 길에는 안 싣는다(크레딧).
+                if 카드:
+                    if 태그들 := notes.parse_tags(몸)[:6]:
+                        한장["tags"] = 태그들
+                    if 사진 := next((a for a in notes.parse_attachments(몸)
+                                   if Path(a).suffix.lower() in notes.IMAGE_EXT | {".heic", ".heif"}), None):
+                        한장["image"] = 사진
+                    if 첨부수 := len(notes.parse_attachments(몸)):
+                        한장["files"] = 첨부수
+                    한장["preview"] = 카드미리보기(몸)
+                    머리 = 앞머리(r["path"])
+                    if m := re.search(r"(?m)^색:\s*\"?([^\"\s]+)\"?\s*$", 머리):   # 앞머리는 따옴표로 적힌다
+                        한장["color"] = m.group(1)
+                    try:
+                        한장["updated"] = time.strftime("%Y-%m-%d", time.localtime(Path(r["path"]).stat().st_mtime))
+                    except OSError:
+                        pass
                 out.append(한장)
             답 = {"results": out}
             # 뜻 검색이 아직 못 도는 때만 말한다(다 올랐으면 한 글자도 안 싣는다).
@@ -622,6 +857,10 @@ class Handler(BaseHTTPRequestHandler):
             #   `[[제목]]` 을 넣으면 그물이 자란다. 있을 때만 싣는다(제목 다섯 개).
             if 언급 := [t for t, _ in self.server.notes.언급(note.title, k=5)]:
                 답["unlinked"] = 언급
+            # 이 글을 가리키는 글(편의 기능 19번 · 옵시디언 백링크) — 사람이 보는 폰 글 보기용. 열두 장까지.
+            if (args.get("back") or ["0"])[0] not in ("0", "", "false"):
+                if 뒤 := list(dict.fromkeys(t for t, _ in self.server.notes.backlinks(note.title)))[:12]:
+                    답["backlinks"] = 뒤
             return self._send(200, 답)
 
         if url.path == "/eb/v1/graph":
@@ -671,7 +910,7 @@ class Handler(BaseHTTPRequestHandler):
             pr = self.server.downloader.progress
             return self._send(200, {
                 "catalog": model_store.listing(self.server.downloader.model_dir,
-                                               self.server.picked["hardware"]["vram_mb"]),
+                                               self.server.picked["hardware"]["vram_mb"], also=paths.models_dir()),
                 "state": pr.state, "key": pr.key, "label": pr.label,
                 "percent": pr.percent, "done_mb": round(pr.done_mb),
                 "total_mb": round(pr.total_mb), "error": pr.error,
@@ -727,8 +966,69 @@ class Handler(BaseHTTPRequestHandler):
             _알림(f"[서버] POST {urlparse(self.path).path[:80]} 에서 뜻밖의 예외: {type(뜻밖).__name__}: {뜻밖}")
             return self._send(500, {"error": "서버 안에서 뜻밖의 일이 났다", "why": type(뜻밖).__name__})
 
+    # 첨부 한 개의 한도(4단계). 폰 사진은 수 MB, 짧은 영상은 수십 MB 다. 글(8MB)보다 넉넉히, 그래도 끝은 있다.
+    MAX_ATTACH = 200 * 1024 * 1024
+
+    def _휴지통id(self, 판: Path) -> str:
+        """휴지통 한 장의 이름표 — 경로를 밖에 안 내보낸다."""
+        import hashlib
+
+        return hashlib.sha1(str(판).encode("utf-8")).hexdigest()[:16]
+
+    def _attach(self, url) -> None:
+        """폰이 찍은 사진·영상·음성을 `_첨부/연/월/` 에 저장하고 **본문에 쓸 이름**을 준다(4단계).
+
+        ★ 글에 붙이는 일은 안 한다 — 폰이 받은 이름으로 `![[이름]]` 을 적어 **기존 글 쓰기 길**로 보낸다.
+          그래야 덧붙이기 · 같은 글 두 번 막기 · 글 잠금을 새로 만들지 않는다.
+        """
+        # ★ 몸이 크니 **읽기 전에** 열쇠를 본다. 틀린 열쇠로 200MB 를 받아 줄 까닭이 없다 — 끊는다.
+        if not self._authorized(url.path):
+            self.close_connection = True
+            return self._send(401, {"error": "unauthorized"})
+        q = parse_qs(url.query)
+        name = (q.get("name") or [""])[0]
+        stem = (q.get("title") or [""])[0].strip()
+        cid = (q.get("client_id") or [""])[0]
+        if not name or not notes.is_attachment(name):
+            self.close_connection = True
+            return self._send(400, {"error": "받는 파일 꼴이 아니다", "name": name[:80]})
+        if cid and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", cid):
+            self.close_connection = True
+            return self._send(400, {"error": "client_id 는 영문·숫자·-_ 8~80자다"})
+        try:
+            length = int(self.headers.get("Content-Length") or -1)
+        except ValueError:
+            length = -1
+        if length <= 0:
+            self.close_connection = True
+            return self._send(400, {"error": "Content-Length 가 없거나 0 이다"})
+        if length > self.MAX_ATTACH:
+            self.close_connection = True
+            self._send(413, {"error": "첨부가 너무 크다", "max_mb": self.MAX_ATTACH // (1024 * 1024)})
+            return self._비우고끊기()
+        # ★★ 폰 대기함은 응답이 끊기면 같은 파일을 다시 보낸다 — `client_id` 로 한 번만 받는다(글과 같은 표).
+        store = self.server.store
+        if cid and (전 := store.client_write(cid)) is not None and self.server.notes.attachment_path(전["title"]):
+            self.close_connection = True          # 몸은 안 받는다 — 이미 있다
+            return self._send(200, {"name": 전["title"], "duplicate": True})
+        data = self.rfile.read(length)
+        if len(data) != length:
+            return self._send(400, {"error": "몸이 덜 왔다", "got": len(data), "want": length})
+        try:
+            saved = self.server.notes.save_attachment(data, Path(name).suffix.lower(), stem=stem)
+        except OSError as 못씀:
+            return self._send(507, {"error": "못 썼다 — 첨부 자리에 쓸 수 없다", "why": type(못씀).__name__})
+        if cid:
+            store.client_write_begin(cid, saved)
+            store.client_write_done(cid)
+        return self._send(201, {"name": saved, "bytes": length})
+
     def _post(self) -> None:
         url = urlparse(self.path)
+
+        # 첨부는 몸이 JSON 이 아니라 **파일 바이트 그대로**다 — JSON 읽기 앞에서 가른다.
+        if url.path == "/eb/v1/attach":
+            return self._attach(url)
 
         # 인증보다 먼저 본문을 읽어 비운다. 안 읽고 401을 보내면 남은 바이트가 소켓에
         # 남아 다음 요청이 그걸 요청줄로 읽고 연결이 끊긴다(keep-alive라 더 잘 터진다).
@@ -808,8 +1108,57 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/eb/v1/ask":
             return self._ask(body)
 
+        # ★★ **묻기(Query)** — 창고를 뒤져 **근거를 달아** 답한다(카파시 LLM Wiki 의 셋째 일).
+        #   네 가지 일 중 여기만 비어 있었다(2026-09-21). `/eb/v1/ask` 와 다르다 —
+        #   그쪽은 **시키는** 문이고 이쪽은 **창고에게 묻는** 문이다.
+        if url.path == "/eb/v1/wiki/ask":
+            return self._wiki_ask(body)
+
+        # ★★ **대화** — 묻기와 **다른 일**이다. 묻기는 「창고에 뭐라 적혀 있나」를 재는
+        #   엄한 길이라 근거가 없으면 「창고에 없다」로 끝나는데, 그 길로 채팅을 했더니
+        #   「안녕」에도 창고를 뒤지고 없다고 답했다(오너가 짚었다 · 2026-09-24).
+        #   여기는 **그냥 말을 주고받고**, 창고는 도울 때만 곁든다.
+        if url.path == "/eb/v1/wiki/chat":
+            return self._wiki_chat(body)
+
+        # ★★ **헤르메스(2단계) — 바이브코딩 관제탑.** 차리기·꺼내기·적립하기.
+        #   사람이 창을 옮겨 다니면 맥락이 끊기므로 **AI 도구가 이 문으로** 부른다
+        #   (오너 2026-09-21). 창은 나중에 이 위에 붙는다.
+        if url.path.startswith("/eb/v1/hermes/"):
+            return self._hermes(url.path.rsplit("/", 1)[-1], body)
+
+        # ★★ **바이브코딩** — 제안 → 승인 → 적용. `plan` 은 아무것도 안 쓴다.
+        if url.path.startswith("/eb/v1/vibe/"):
+            return self._vibe(url.path.rsplit("/", 1)[-1], body)
+
         if url.path == "/v1/chat/completions":
             return self._chat(body)
+
+        # 글 요약·번역(편의 기능 1·3번) — 폰 글 보기 ⋮ · PC 글 ⋯ 메뉴가 부른다. 로컬 모델이 먼저다.
+        if url.path == "/eb/v1/assist":
+            what = body.get("action")
+            title = body.get("title")
+            if what not in ("summary", "translate") or not isinstance(title, str) or not title.strip():
+                return self._send(400, {"error": "action 은 summary·translate, title 은 글 제목"})
+            lang = body.get("lang") if isinstance(body.get("lang"), str) and body.get("lang") else "영어"
+            글 = self.server.notes.read(title.strip())
+            if 글 is None:
+                return self._send(404, {"error": "없는 글", "title": title[:80]})
+            try:
+                return self._send(200, {"text": self.server.assist(what, 글.body, lang)})
+            except self.server.NoModel as 없음:
+                return self._send(503, {"error": str(없음)})
+            except backends.BackendError as 못함:
+                # ★★ **기계 이름을 사람 화면에 내보내지 않는다.** 폰에 「AI 가 답을 못 했다 — BackendError」 가
+                #   그대로 떴다(2026-09-18 시뮬레이터 실기) — 그 글자를 본 사람은 **무엇을 해야 할지 모른다.**
+                #   할 일을 적어 주고, 기계 이름은 자국에만 남긴다.
+                _알림(f"[AI 도움] 엔진이 답을 못 했다 — {type(못함).__name__}: {못함}")
+                return self._send(502, {
+                    "error": "AI 엔진이 답을 못 했다 — 자체 모델이 올라와 있는지, 바깥 AI 를 쓴다면 주소·키가 맞는지 본다",
+                    "why": str(못함)[:120]})
+            except Exception as e:
+                _알림(f"[AI 도움] 뜻밖의 일 — {type(e).__name__}: {e}")
+                return self._send(502, {"error": "AI 가 답을 못 했다 — 잠시 뒤 다시 해 본다"})
 
         if url.path == "/eb/v1/log":
             try:
@@ -844,14 +1193,93 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "mode must be append or replace"})
             # ★★ **읽고-막고-쓰기를 한 잠금 안에서.** 밖이면 없던 글을 두 AI 가 동시에 덮거나,
             #   읽은 뒤 남이 덧붙인 줄을 `force` 없이 통째로 지웠다(막이가 본 `old` 가 낡았다).
+            # ★★ **폰의 전송 대기함은 같은 글을 다시 보낸다** — 서버엔 써졌는데 응답이 끊기면 폰은 실패로 안다.
+            #   덧붙이기라 그대로 받으면 같은 줄이 두 번 붙는다. `client_id`(글마다 하나)로 한 번만 받는다.
+            #   받은 표시는 eb.db 에 남아 서버를 다시 켜도 산다.
+            cid = body.get("client_id")
+            if cid is not None and (not isinstance(cid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", cid)):
+                return self._send(400, {"error": "client_id 는 영문·숫자·-_ 8~80자다"})
             with self.server.notes._글잠금(title):
-                return self._memory_write(title, text, mode, body)
+                if cid:
+                    store = self.server.store
+                    전 = store.client_write(cid)
+                    if 전 is not None:
+                        # 쓰기 시작 표시만 있고 끝 표시가 없으면, 글을 쓰는 사이 꺼졌을 수 있다 — 글에 그 몸이 있으면 받은 것이다
+                        있던글 = self.server.notes.read(전["title"])
+                        몸 = (lambda s: s.replace(chr(13) + chr(10), chr(10)).strip())
+                        if 전["done"] or (있던글 is not None and 몸(text) in 몸(있던글.body)):
+                            store.client_write_done(cid)
+                            답 = {"title": 전["title"], "mode": mode, "duplicate": True}
+                            if (저장제목 := notes.제목맞춤(전["title"])) != 전["title"]:
+                                답["saved_as"] = 저장제목
+                            return self._send(200, 답)
+                    else:
+                        store.client_write_begin(cid, title)
+                self._memory_write(title, text, mode, body)
+                if cid and getattr(self, "_보낸코드", 0) in (200, 201):
+                    self.server.store.client_write_done(cid)
+                return
 
         # ★★ **AI 가 제가 잘못 쓴 글을 못 지우고, 제목도 못 고쳤다.** 화면에서는 둘 다 되는데
         #   문이 없었다 — 옵시디언에서는 당연한 일이고, 창고가 AI 의 바깥 기억이라면
         #   **잘못 넣은 것을 치우는 길**이 없는 쪽이 이상하다.
         #   지우기는 **되돌릴 수 있다**(지우기 전에 한 판 남긴다) — 그래서 승인 없이 연다.
         #   이름 바꾸기는 **가리키던 링크까지 따라 고친다**(`rename`) — 옵시디언과 같다.
+        # 고정 · 보관 · 색(편의 기능 18·27·30번) — 폰 카드 길게 누르기·밀기가 부른다
+        if url.path == "/eb/v1/memory/mark":
+            title = body.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return self._send(400, {"error": "title required"})
+            고름 = {}
+            for k in ("pinned", "archived"):
+                if k in body:
+                    if not isinstance(body[k], bool):
+                        return self._send(400, {"error": f"{k} 는 true·false"})
+                    고름[k] = body[k]
+            if "color" in body:
+                if not isinstance(body["color"], str):
+                    return self._send(400, {"error": "color 는 글자", "colors": list(notes.Notes.COLORS)})
+                고름["color"] = body["color"]
+            try:
+                g = self.server.notes.mark(title.strip(), **고름)
+            except ValueError as e:
+                return self._send(400, {"error": str(e), "colors": list(notes.Notes.COLORS)})
+            if g is None:
+                return self._send(404, {"error": "no such note", "title": title[:80]})
+            return self._send(200, {"title": g.title, "pinned": g.pinned,
+                                    "archived": g.extra.get("보관") is True, "color": g.extra.get("색", "")})
+
+        # 휴지통 되살리기(편의 기능 28번) — 목록의 id 로만(경로를 받지 않는다)
+        if url.path == "/eb/v1/trash/restore":
+            want = body.get("id")
+            for i, (_, _, 판, _) in enumerate(self.server.notes.trashed()):
+                if want == self._휴지통id(판):
+                    제목 = self.server.notes.untrash(판)
+                    if 제목:
+                        return self._send(200, {"title": 제목, "restored": True})
+            return self._send(404, {"error": "휴지통에 없다"})
+
+        # 오늘 일지(편의 기능 23번 · 옵시디언 일일 노트) — 없으면 서식 `_서식/일지` 로 만든다
+        if url.path == "/eb/v1/daily":
+            day = body.get("day") if isinstance(body.get("day"), str) else ""
+            글 = self.server.notes.daily(day.strip())
+            return self._send(200, {"title": 글.title})
+
+        # 할 일 체크(편의 기능 26번) — 보이는 줄이 아니라 **원문**을 뒤집는다
+        if url.path == "/eb/v1/memory/task":
+            title, nth = body.get("title"), body.get("nth")
+            if not isinstance(title, str) or not title.strip() or not isinstance(nth, int) or nth < 0:
+                return self._send(400, {"error": "title 과 nth(0부터)가 필요하다"})
+            글 = self.server.notes.read(title.strip())
+            if 글 is None:
+                return self._send(404, {"error": "no such note", "title": title[:80]})
+            바뀜 = notes.flip_task(글.body, nth)
+            if 바뀜 is None:
+                return self._send(404, {"error": "그 자리에 할 일 표가 없다", "nth": nth})
+            글.body, 한일 = 바뀜
+            self.server.notes.write(글)
+            return self._send(200, {"title": 글.title, "nth": nth, "done": 한일})
+
         if url.path == "/eb/v1/memory/delete":
             title = body.get("title", "")
             if not isinstance(title, str) or not title.strip():
@@ -969,6 +1397,240 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     # --- 성장 루프 (결정 17·18) -----------------------------------------
+
+    def _vibe(self, 무엇: str, body: Any) -> None:
+        """바이브코딩 문. `plan`(고칠 안 + 차이) · `apply`(승인한 것만 적용).
+
+        ★★ **`plan` 은 파일을 안 건드린다.** 쓰는 것은 `apply` 뿐이다 —
+           제안과 적용을 한 문에 두면 사람이 차이를 보기 전에 써 버린다.
+        """
+        import vibe as _바이브
+
+        프로젝트 = (body.get("project") or body.get("프로젝트") or "").strip() \
+            if isinstance(body.get("project") or body.get("프로젝트") or "", str) else ""
+        if not 프로젝트:
+            return self._send(400, {"error": "project required"})
+        n = self.server.notes
+
+        if 무엇 == "plan":
+            손 = None
+            모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+            if 모델:
+                손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0,
+                                                         max_tokens=4000)
+            안 = _바이브.고칠안(n, 손, 프로젝트,
+                            str(body.get("text") or body.get("지시") or ""),
+                            body.get("files") or body.get("파일들"))
+            return self._send(200, {
+                "why": 안["왜"], "changes": [것["파일"] for 것 in 안["고침"]],
+                "plan": 안["고침"], "looked": 안["본파일"], "error": 안["탈"],
+                "diff": _바이브.차이(프로젝트, 안), "size": _바이브.잰것(프로젝트, 안)})
+
+        if 무엇 == "apply":
+            안 = {"고침": body.get("plan") or body.get("고침") or []}
+            난것 = _바이브.적용(프로젝트, 안, body.get("only") or body.get("고를것"))
+            제안 = {}
+            if 난것["쓴것"]:
+                import wikilog as _일지바
+
+                _일지바.적기(n, "적립", f"바이브코딩 — {프로젝트}: "
+                                   f"{' · '.join(난것['쓴것'][:3])}")
+                # ★★ **자가 스킬 생성.** 일이 한 바퀴 돌았으니 그 과정을 스킬로 뽑아
+                #   **제안**한다(네 기둥의 둘째: 해결 과정을 스킬로 코드화해 저장).
+                #   저장은 승인한 뒤다 — 바로 넣으면 창고가 쓰다 만 스킬로 찬다.
+                import skillgen as _스킬생성
+
+                뽑은것 = _스킬생성.뽑기(n, 프로젝트,
+                                    str(body.get("text") or body.get("지시") or ""),
+                                    쓴파일=난것["쓴것"])
+                제안 = {"text": _스킬생성.사람말(뽑은것), "why": 뽑은것["왜"],
+                       "dup": 뽑은것["겹침"]}
+                if 뽑은것["스킬"] is not None:
+                    from dataclasses import asdict as _짜기
+
+                    제안["skill"] = _짜기(뽑은것["스킬"])
+            return self._send(200, {"written": 난것["쓴것"], "failed": 난것["못쓴것"],
+                                    "skill_suggestion": 제안})
+
+        return self._send(404, self._길없다("/eb/v1/vibe/" + 무엇))
+
+    def _hermes(self, 무엇: str, body: Any) -> None:
+        """헤르메스 문. `start`(차리기) · `context`(꺼내기) · `log`(적립하기)."""
+        import hermes as _헤르메스
+        import wikilog as _일지헤
+
+        n = self.server.notes
+        이름 = (body.get("name") or body.get("이름") or "").strip() \
+            if isinstance(body.get("name") or body.get("이름") or "", str) else ""
+        if not 이름:
+            return self._send(400, {"error": "name required"})
+
+        if 무엇 == "start":
+            난것 = _헤르메스.차리기(n, 이름, str(body.get("one_line") or body.get("한줄") or ""))
+            if 난것["만든것"]:
+                _일지헤.적기(n, "차리기", f"{이름} — {' · '.join(난것['만든것'])}",
+                          [_헤르메스.프로젝트글제목(이름)])
+            return self._send(200, {"path": 난것["자리"], "made": 난것["만든것"],
+                                    "why": 난것["왜"]})
+
+        if 무엇 == "context":
+            난것 = _헤르메스.꺼내기(n, 이름)
+            return self._send(200, {"project": 난것["프로젝트"], "text": 난것["글"],
+                                    "buckets": {k: [t for t, _ in v] for k, v in 난것["칸"].items()},
+                                    "rules": 난것["규칙"]})
+
+        if 무엇 == "hands":
+            # 이 기계에 어떤 손이 깔려 있나. **없으면 없다고 말한다** — 조용히 실패하지 않는다.
+            import agentcli as _시엘
+
+            낼것 = {}
+            for 이름 in _시엘.손들:
+                손 = _시엘.손고르기(이름)
+                낼것[이름] = {"installed": bool(손 and 손.있나()),
+                            "exe": 손.실행파일 if 손 else ""}
+            return self._send(200, {"hands": 낼것})
+
+        if 무엇 == "duet":
+            난것 = _헤르메스.협업(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                str(body.get("maker") or body.get("짓는손") or "claude"),
+                str(body.get("reviewer") or body.get("보는손") or "codex"),
+                int(body.get("timeout") or body.get("제한초") or 0))
+            지 = 난것["지음"]
+            봄 = 난것["봄"] or {}
+            return self._send(200, {
+                "maker": {"hand": 지.get("손"), "ok": bool(지.get("됐나")),
+                          "changed": 지.get("바뀐파일") or [], "diff": 지.get("차이") or "",
+                          "why": 지.get("왜") or ""},
+                "reviewer": ({"hand": 봄.get("손"), "ok": bool(봄.get("됐나")),
+                              "said": ((봄.get("읽을말") or 봄.get("나온말") or "")
+                                       .strip()[:4000]),
+                              "why": 봄.get("왜") or ""} if 봄 else {}),
+                "kept": (난것["적립"] or {}).get("만든것") or [],
+                "text": 난것.get("사람말") or ""})
+
+        if 무엇 == "handoff":
+            import agentcli as _시엘2
+
+            난것 = _헤르메스.맡기기(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                str(body.get("hand") or body.get("손") or "claude"),
+                int(body.get("timeout") or body.get("제한초") or 0))
+            돌 = 난것["돌린것"]
+            낼것 = {"ok": bool(돌.get("됐나")), "hand": 돌.get("손"),
+                  "exit_code": 돌.get("끝난코드"), "changed": 돌.get("바뀐파일") or [],
+                  "already_dirty": 돌.get("원래더럽던것") or [],
+                  "diff": 돌.get("차이") or "", "elapsed": 돌.get("든시간"),
+                  "why": 돌.get("왜") or "", "said": 돌.get("끝말") or "",
+                  "kept": (난것["적립"] or {}).get("만든것") or [],
+                  "text": 난것.get("사람말") or ""}
+            제안 = 난것.get("스킬제안") or {}
+            if 제안.get("스킬") is not None:
+                from dataclasses import asdict as _짜기3
+
+                낼것["skill_suggestion"] = {"text": 제안.get("사람말"),
+                                          "skill": _짜기3(제안["스킬"])}
+            return self._send(200, 낼것)
+
+        if 무엇 == "skill":
+            # 자가 스킬 생성 — `지시`만 주면 **뽑아 보여 주고**, `skill` 을 주면 남긴다.
+            import skillgen as _스킬생성
+
+            받은 = body.get("skill") or body.get("스킬")
+            if 받은:
+                from skills import Skill as _스킬꼴
+
+                쓸것 = {k: v for k, v in (받은 or {}).items()
+                      if k in _스킬꼴.__dataclass_fields__}
+                이름 = _스킬생성.남기기(n, _스킬꼴(**쓸것))
+                if 이름:
+                    _일지헤.적기(n, "적립", f"스킬 남김 — {이름}", [이름])
+                return self._send(200, {"kept": 이름})
+            뽑은것 = _스킬생성.뽑기(
+                n, 이름, str(body.get("text") or body.get("지시") or ""),
+                쓴파일=body.get("files") or body.get("쓴파일") or ())
+            낼것 = {"text": _스킬생성.사람말(뽑은것), "why": 뽑은것["왜"],
+                  "dup": 뽑은것["겹침"]}
+            if 뽑은것["스킬"] is not None:
+                from dataclasses import asdict as _짜기2
+
+                낼것["skill"] = _짜기2(뽑은것["스킬"])
+            return self._send(200, 낼것)
+
+        if 무엇 == "log":
+            난것 = _헤르메스.적립하기(
+                n, 이름,
+                결정=body.get("decisions") or body.get("결정") or (),
+                오류=body.get("errors") or body.get("오류") or (),
+                작업=body.get("tasks") or body.get("작업") or ())
+            if 난것["만든것"]:
+                _일지헤.적기(n, "적립", f"{이름} — {len(난것['만든것'])}장", 난것["만든것"][:3])
+            return self._send(200, {"made": 난것["만든것"], "why": 난것["왜"]})
+
+        return self._send(404, self._길없다("/eb/v1/hermes/" + 무엇))
+
+    def _wiki_chat(self, body: Any) -> None:
+        """대화. **창고를 곁에 두고 그냥 말한다.**
+
+        ★ 일지에는 **창고를 실제로 쓴 말만** 남긴다 — 잡담까지 남기면 일지가 인사로 덮인다.
+        """
+        말 = (body.get("text") or "").strip() if isinstance(body.get("text") or "", str) else ""
+        if not 말:
+            return self._send(400, {"error": "text required"})
+
+        import query as _대화
+        import wikilog as _일지대화
+
+        n = self.server.notes
+        손 = None
+        모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+        if 모델 and (self.server.cfg.get("backend") or {}).get("kind") == "local":
+            손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0.3,
+                                                    max_tokens=_대화.낼토큰)
+        앞말 = body.get("history") or body.get("앞말") or []
+        칸 = int(getattr(self.server.backend, "n_ctx", 0) or 0)
+        난것 = _대화.대화(n, 손, 말, 앞말=앞말 if isinstance(앞말, list) else [], 칸=칸)
+        if 난것.get("근거"):
+            _일지대화.적기(n, "묻기", (난것["답"] or "")[:120], 난것["근거"][:3])
+        return self._send(200, {"answer": 난것["답"], "sources": 난것["근거"],
+                                "looked": 난것["본것"], "why": 난것["왜"]})
+
+    def _wiki_ask(self, body: Any) -> None:
+        """묻기(Query). 창고를 뒤져 근거를 달아 답하고, 일지에 한 줄 남긴다.
+
+        ★ `남길까` 를 주면 답을 창고에 **한 장으로** 남긴다. 기본은 안 남긴다 —
+          물을 때마다 글이 쌓이면 창고가 물음으로 덮인다.
+        """
+        물음 = (body.get("text") or "").strip() if isinstance(body.get("text") or "", str) else ""
+        if not 물음:
+            return self._send(400, {"error": "text required"})
+
+        import query as _묻기
+        import wikilog as _일지
+
+        n = self.server.notes
+        손 = None
+        모델 = (self.server.picked.get("using") or {}).get("chat") or ""
+        if 모델 and (self.server.cfg.get("backend") or {}).get("kind") == "local":
+            손 = lambda 말들: self.server.backend.chat(말들, 모델, temperature=0, max_tokens=400)
+        # ★ 오간 말을 주면 **이어서** 답한다. 밖에서 오는 값이라 꼴은 `앞말다듬기` 가 거른다.
+        앞말 = body.get("history") or body.get("앞말") or []
+        # ★★ **모델 창을 물어서 넘긴다.** 짐작한 값을 쓰면 창이 다른 기계·다른 판에서
+        #   조용히 넘친다 — 굽힌 앱이 「4233 > 4096」 으로 막혔던 자리다(2026-09-24).
+        칸 = int(getattr(self.server.backend, "n_ctx", 0) or 0)
+        난것 = _묻기.묻기(n, 손, 물음, 앞말=앞말 if isinstance(앞말, list) else [],
+                     칸=칸)
+
+        남긴것 = None
+        if body.get("남길까") or body.get("keep"):
+            남긴것 = _묻기.남기기(n, 물음, 난것)
+        # ★ **답을 못 냈어도 남긴다.** 무엇을 물었는데 창고가 못 답했는지가
+        #   다음에 무엇을 채울지 알려 준다 — 그게 일지를 두는 까닭이다.
+        _일지.적기(n, "묻기", (난것["답"] or 난것["왜"] or "")[:120],
+                 ([남긴것] if 남긴것 else 난것.get("근거") or []))
+        return self._send(200, {"answer": 난것["답"], "sources": 난것["근거"],
+                                "looked": 난것["본것"], "why": 난것["왜"],
+                                "kept": 남긴것})
 
     def _ask(self, body: Any) -> None:
         """지시를 받아 실제로 돌린다. 결과는 파일로도 남겨 어디서든 내려받게 한다."""
@@ -1120,6 +1782,11 @@ def _모델자리(설정된: str) -> str:
     return str(paths.gguf_dir())
 
 
+#: 지금 떠 있는 서버. **설정 창이 확장을 켜고 끈 뒤 곧바로 다시 싣기 위해서만** 쓴다
+#: (창 쪽은 서버 객체를 안 들고 있었다 — 없으면 「다시 켜야 적용된다」밖에 할 말이 없다).
+RUNNING: "EBServer | None" = None
+
+
 class EBServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -1134,6 +1801,11 @@ class EBServer(ThreadingHTTPServer):
         self.notes = note_store
         self.skills = SkillStore(note_store)
         self.hub = Hub()
+        # ★★ **바뀌면 바로 쏜다.** 창고 한 군데(`notes.알림걸이`)에 걸어 두면
+        #   창이 쓰든 문이 쓰든 AI 가 쓰든 다 걸린다 — 부르는 자리마다 넣으면
+        #   반드시 한 군데를 빠뜨린다(오너 2026-09-24: 「감시하지 말고 신호 전송」).
+        self.notes.알림걸이 = self.hub.publish
+        self.그물 = None
         self.backend = backends.build(cfg["backend"])
         # 자체 엔진이면 가진 모델을 설정보다 우선한다 — 모델 이름을 손으로 적게 하면
         # 파일명을 그대로 옮겨야 해서 오타 한 번에 "모델이 없다"가 뜬다.
@@ -1144,20 +1816,62 @@ class EBServer(ThreadingHTTPServer):
         #   클라우드로 바꿔도 `llama-8b` 같은 파일 이름이 Anthropic·Gemini 에 그대로 나갔다.
         if 뒤.get("kind") != "local" and isinstance(뒤.get("model"), str) and 뒤["model"].strip():
             self.picked["using"]["chat"] = self.picked["using"]["vision"] = 뒤["model"].strip()
-        self.downloader = model_store.Downloader(model_dir)
+        # ★ 받는 자리는 **판을 올려도 남는 곳**(설치본은 exe 옆 models) — 프로그램 속에 받으면 새 판을 풀 때 지워졌다
+        self.downloader = model_store.Downloader(paths.fetched_dir())
         if hasattr(self.backend, "n_gpu_layers"):
             self.backend.n_gpu_layers = self.picked["gpu_layers"]
         self.gate = remote.RemoteGate()
+        self._정리잠금 = threading.Lock()   # 뒤 실과 「지금 정리」가 겹치지 않게
         # ★ 작업 폴더에 기대지 않는다 — 딴 폴더에서 켜면 거기 만들다 접근 거부로 **아예 안 떴다**(시험 쪽).
-        self.artifacts = Path(cfg.get("artifact_dir") or paths.data_dir() / "data" / "artifacts")
+        self.artifacts = Path(cfg.get("artifact_dir") or paths.기계자리("data/artifacts"))
         self.artifacts.mkdir(parents=True, exist_ok=True)
+
+        # ★★ 확장 플러그인(결정 23 · 편의 기능 31번) — **켜 둔 것만** 싣는다.
+        #   싣다가 터진 확장은 그것만 안 실리고 까닭이 자국에 남는다(VC 는 산다).
+        #   ※ `plugins_dir` 은 검사용 — 평소에는 앱 자리 `plugins/` 를 본다.
+        self.plugins = 확장들.load(cfg.get("plugins_dir") or None, store=note_store, cfg=cfg, log=_알림)
 
         # 원격에서 들어온 지시를 처리할 오케스트레이터. 폰과 같은 부품·같은 1단 모델을 쓴다.
         mods = build_modules(self.backend, self.picked["using"]["vision"]
                              or self.picked["using"]["chat"])
+        mods += self._확장부품(self.plugins)
         self.eb = Orchestrator(mods, brain=brain.build(mods, self.skills.all()),
                                log=self.store.add_log)
         self.eb.load_skills(self.skills.all())
+
+        global RUNNING
+        RUNNING = self
+
+    def reload_plugins(self) -> "확장들.Loaded":
+        """설정에서 켜고 끈 뒤 다시 싣는다 — VC 를 다시 켜지 않아도 저장 알림·명령이 바로 바뀐다.
+
+        ※ **지시에 반응하는 부품은 다시 켤 때 붙는다** — 오케스트레이터는 켤 때 한 번 짜인다.
+          설정 창이 그렇게 적어 준다(할 수 없는 것을 된다고 말하지 않는다).
+        """
+        self.plugins = 확장들.load(self.cfg.get("plugins_dir") or None,
+                                 store=self.notes, cfg=None, log=_알림)
+        return self.plugins
+
+    @staticmethod
+    def _확장부품(실림: 확장들.Loaded) -> list:
+        """확장이 낸 부품을 오케스트레이터의 `ModuleSpec` 으로 옮긴다.
+
+        ★ **부품이 터져도 지시 처리는 계속된다** — 확장 함수를 감싸 까닭만 답한다.
+          감싸지 않으면 확장 하나의 오타가 「지시를 못 받는 VC」가 된다.
+        """
+        from orchestrator import ModuleSpec
+
+        만든것 = []
+        for 확장, m in 실림.modules:
+            def 감싸기(글, _m=m, _확장=확장):
+                try:
+                    return str(_m.run(getattr(글, "text", 글)))
+                except Exception as e:
+                    _알림(f"[확장 {_확장}] 부품 「{_m.name}」 이 터졌다 — {type(e).__name__}: {e}")
+                    return f"확장 「{_확장}」 이 답을 못 냈다"
+            만든것.append(ModuleSpec(name=f"확장:{m.name}", triggers=m.triggers,
+                                    run=감싸기, tiers=["pc"]))
+        return 만든것
 
     def set_model(self, role: str, name: str) -> bool:
         """사용자가 고른 모델을 저장하고 바로 반영한다.
@@ -1172,12 +1886,12 @@ class EBServer(ThreadingHTTPServer):
         #   그 사이 화면이 같은 파일에 글자 크기·화면 방식을 적는다 — 통째로 쓰면 그것들이 말없이 지워졌다.
         #   지금 파일을 다시 읽어 **고른 모델 칸만** 바꿔 쓴다.
         try:
-            지금 = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+            지금 = json.loads(paths.config_path().read_text(encoding="utf-8")) if paths.config_path().exists() else {}
             if not isinstance(지금, dict):
                 지금 = {}
         except (OSError, ValueError):
             지금 = {}
-        CONFIG_PATH.write_text(json.dumps({**지금, "models": self.cfg.get("models", {})},
+        paths.config_path().write_text(json.dumps({**지금, "models": self.cfg.get("models", {})},
                                           ensure_ascii=False, indent=2), encoding="utf-8")
         self.picked = models_config.resolve(self.cfg, model_dir)
         if role in ("chat", "vision"):
@@ -1226,7 +1940,7 @@ class EBServer(ThreadingHTTPServer):
                 except Exception as e:  # 청소가 실패해도 서버는 계속 떠 있어야 한다
                     _알림(f"[청소 실패] {e}")
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("청소·집안일", loop)
 
     def start_embedding(self, every_sec: int = 30) -> None:
         """뜻 벡터를 뒤에서 채운다. **창이 없어도 자라야 한다.**
@@ -1307,7 +2021,215 @@ class EBServer(ThreadingHTTPServer):
                     알린다(f"[뜻 벡터 실패] {e}")
                 time.sleep(every_sec)
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("뜻 벡터", loop)
+
+    class NoModel(RuntimeError):
+        """쓸 대화 모델이 없다."""
+
+    _도움말 = {
+        "summary": ("아래 메모를 읽고 무슨 일이 있었는지 한국어로 **새로 써서** 요약한다. 원문 줄을 그대로 옮기지 않는다. "
+                    "2~4줄 목록(- )으로 쓰고, 마지막 줄은 「- 지금: …」 으로 지금 상태를 쓴다. "
+                    "메모에 없는 것은 쓰지 않는다. 앞말 없이 목록만. /no_think"),
+        "translate": "아래 메모를 {lang}(으)로 옮긴다. 목록·표·줄바꿈 꼴은 그대로 둔다. `[[…]]` · `![[…]]` · `#태그` 는 그대로 둔다. 옮긴 글만 답한다. /no_think",
+    }
+
+    def assist(self, what: str, body: str, lang: str = "영어") -> str:
+        """글 한 장을 요약하거나 옮긴다. 모델이 없으면 NoModel."""
+        모델 = (self.picked.get("using") or {}).get("chat") or ""
+        if not 모델:
+            raise self.NoModel("대화 모델이 없다 — 설정 › 모델에서 받거나 바깥 AI 키를 넣는다")
+        말 = [{"role": "system", "content": self._도움말[what].format(lang=lang)},
+              {"role": "user", "content": body[:6000]}]
+        곁 = {"temperature": 0.2, "max_tokens": 900} if (self.cfg.get("backend") or {}).get("kind") == "local" else {}
+        답 = self.backend.chat(말, 모델, **곁)
+        return re.sub(r"(?s)<think>.*?</think>", "", 답 or "").strip()
+
+    def consolidate_now(self) -> dict:
+        """흩어진 메모를 정리 글로 모은다(편의 기능 1·5번 · 1겹 — AI 없이 서식 칸으로)."""
+        import consolidate
+
+        import ai_fill
+
+        with self._정리잠금:
+            # 2겹 — 로컬 대화 모델이 있으면 칸 없는 메모를 몇 장 짐작한다(없으면 쌓인 짐작만 쓴다)
+            모델 = (self.picked.get("using") or {}).get("chat") or ""
+            chat = None
+            if 모델 and (self.cfg.get("backend") or {}).get("kind") == "local":
+                chat = lambda 말: self.backend.chat(말, 모델, temperature=0, max_tokens=300)
+            try:
+                짐작 = ai_fill.run(self.notes, chat)
+            except Exception as e:
+                _알림(f"[정리 짐작 실패] {type(e).__name__}")
+                짐작 = {}
+            # ★★ **합치기(Compile)** — `raw/` 에 모인 원본을 읽어 `wiki/` 쪽을 만든다
+            #   (오너 2026-09-20 · 카파시 LLM Wiki). 손은 갈아 끼울 수 있다 —
+            #   지금은 로컬 1차, 나중에 더 좋은 모델을 같은 문에 끼운다.
+            try:
+                import synth
+
+                import report as _자국9
+
+                # ★ **합치기는 답이 길다**(JSON 네 칸). 정리 짐작과 같은 300토큰으로 부르면
+                #   답이 잘려 아무것도 안 만들어진다 — 실측으로 `<think>` 가 400을 다 썼다.
+                합치기손 = None
+                if 모델 and (self.cfg.get("backend") or {}).get("kind") == "local":
+                    합치기손 = lambda 말: self.backend.chat(말, 모델, temperature=0, max_tokens=600)
+                import wikilog as _일지9
+
+                합침 = synth.합치기(
+                    self.notes, 합치기손,
+                    적기=lambda 줄: (_자국9.trail(줄),
+                                   _일지9.적기(self.notes, "합치기", 줄.split(" · ", 1)[-1])))
+                for 쪽 in 합침.get("만든것", []):
+                    self.notes.embed_one(self.notes.path_of(쪽))
+                # ★ 지도는 **바뀌었을 때만** 다시 쓴다 — 매번 쓰면 폰·딴 PC 가 일 없이 받아 간다
+                _일지9.지도쓰기(self.notes)
+            except Exception as e:
+                _알림(f"[합치기 실패] {type(e).__name__}: {e}")
+            got = consolidate.run(self.notes, 짐작)
+            # 녹음 받아쓰기(편의 기능 14번) — 붙은 녹음을 몇 개씩. 요약은 대화 모델이 있을 때만
+            try:
+                import transcribe
+
+                요약 = None
+                if chat is not None:
+                    요약 = lambda 글: self.assist("summary", 글)
+                if 들음 := transcribe.run(self.notes, transcribe.whisper, 요약):
+                    _알림(f"[받아쓰기] 녹음 {len(들음)}개를 글 끝에 붙였다")
+            except Exception as e:
+                _알림(f"[받아쓰기 실패] {type(e).__name__}")
+        if got.get("written"):
+            _알림(f"[정리] 제품 {got['products']}개 · 새로 쓴 정리 글 {len(got['written'])}장")
+        return got
+
+    # --- 딴 PC 사본(결정 30) -------------------------------------------------
+    def 손님설정(self) -> dict:
+        """이 VC 가 손님이면 {`main_url`, `main_token`}, 메인이면 빈 표."""
+        got = self.cfg.get("사본") or {}
+        if not isinstance(got, dict) or got.get("역할") != "손님":
+            return {}
+        주소, 열쇠 = str(got.get("main_url") or "").strip(), str(got.get("main_token") or "").strip()
+        return {"main_url": 주소, "main_token": 열쇠} if 주소 and 열쇠 else {}
+
+    def _메인부르기(self, 설정: dict):
+        """메인에 묻는 함수를 만든다. `(method, path, 바이트=False, 몸=None)` → dict·bytes·None."""
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        뿌리 = 설정["main_url"].rstrip("/")
+
+        def 부르기(method: str, path: str, 바이트: bool = False, 몸: Any = None):
+            앞, _, 뒤 = path.partition("?")
+            주소 = 뿌리 + 앞 + (("?" + urllib.parse.urlencode(
+                {k: v[0] for k, v in parse_qs(뒤, keep_blank_values=True).items()})) if 뒤 else "")
+            req = urllib.request.Request(
+                주소, method=method,
+                data=None if 몸 is None else json.dumps(몸).encode(),
+                headers={"Authorization": f"Bearer {설정['main_token']}",
+                         "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    raw = r.read()
+                    if 바이트:
+                        return raw
+                    return json.loads(raw.decode()) if raw else {}
+            except (urllib.error.URLError, OSError, ValueError):
+                # 못 닿아도 **사본은 그대로 둔다** — 부르는 쪽이 까닭을 말한다.
+                return None
+
+        return 부르기
+
+    def 사본한판(self) -> str:
+        """메인에서 받고, 이 PC 에서 쓴 것을 보낸다. 사람에게 보일 한 줄."""
+        import mirror
+
+        설정 = self.손님설정()
+        if not 설정:
+            return "이 VC 는 메인이야 — 받을 곳이 없다."
+        자국 = paths.기계자리(mirror.MEMO)
+        부르기 = self._메인부르기(설정)
+        받 = mirror.한판(self.notes, 부르기, 자국)
+        보 = mirror.보내기(self.notes, 부르기, 자국)
+        if 받.까닭 or 보.까닭:
+            return f"메인({설정['main_url']})에 못 닿았어."
+        말 = []
+        if 받.몇개:
+            말.append(f"받음 새로 {받.새로} · 고침 {받.고침} · 지움 {받.지움}"
+                     + (f" · 사진 {받.첨부}" if 받.첨부 else ""))
+        if 보.보냄:
+            말.append(f"보냄 {보.보냄}" + (f"(둘 다 남김 {보.붙임})" if 보.붙임 else ""))
+        return " · ".join(말) if 말 else "메인과 같아 — 주고받을 게 없다."
+
+    def start_mesh(self) -> None:
+        """이웃 VC 를 스스로 찾아 **서로의 신호를 듣는다**(오너 2026-09-24).
+
+        주소를 사람이 안 적는다 — 테일스케일에게 물어본다. 「VC 깔고 테일스케일과
+        VC 설정만」이 오너가 정한 선이다.
+
+        ★ 열쇠는 이 기계 것을 쓴다. 같은 열쇠를 쓰는 기계끼리만 서로 듣는다 —
+          테일넷 안이라도 **아무나 붙게 두지 않는다.**
+        ★★ 받은 신호로 **글 몸을 받지 않는다.** 제 창고를 다시 볼 뿐이다 —
+           창고가 하나(NAS)면 그것으로 충분하고, 둘이 서로 덮을 일도 없다.
+        """
+        import mesh
+
+        if self.그물 is not None:
+            return
+        # ★ 그물 열쇠가 있어야 이웃과 붙는다. 없으면 이 기계는 혼자 쓴다 —
+        #   **조용히 아무 데나 붙지 않는다.**
+        열쇠 = str((self.cfg.get("그물") or {}).get("열쇠") or "")
+        if not 열쇠:
+            return
+
+        def 받으면(것: dict) -> None:
+            if not isinstance(것, dict) or 것.get("kind") != "note":
+                return                 # 제안 신호 따위는 그물이 안 다룬다
+            try:
+                self.notes.reindex()
+            except Exception as e:
+                _알림(f"[그물] 다시 보다 탈: {type(e).__name__}: {e}")
+
+        self.그물 = mesh.그물(열쇠, 받으면)
+        self.그물.돌기()
+
+    def start_mirror(self, every_sec: int = 60) -> None:
+        """손님이면 주기적으로 메인과 주고받는다. 메인이면 아무 일도 안 한다."""
+        def loop() -> None:
+            while True:
+                try:
+                    if self.손님설정():
+                        말 = self.사본한판()
+                        if 말 and "주고받을 게 없다" not in 말 and "메인이야" not in 말:
+                            _알림(f"[사본] {말}")
+                except Exception as e:      # 사본이 실패해도 VC 는 계속 떠 있어야 한다
+                    _알림(f"[사본 실패] {type(e).__name__}: {e}")
+                time.sleep(every_sec)
+
+        report.딴실로("사본 뜨기", loop)
+
+    def start_consolidate(self, every_sec: int = 120) -> None:
+        """메모가 바뀌면 **2분쯤 모았다가** 정리 글을 새로 쓴다(결정 19). 하루 한 번은 바뀐 게 없어도 돈다.
+
+        단추는 없다(결정 26) — 뒤에서 돌고, 확인할 것은 「제품 보유 목록」의 「확인 필요」에 올린다.
+        """
+        def 지문() -> tuple:
+            return tuple(self.notes.conn.execute(
+                "SELECT count(*), max(mtime) FROM notes WHERE path NOT LIKE ?", ("%_정리%",)).fetchone())
+
+        def loop() -> None:
+            본것, 마지막 = None, 0.0
+            while True:
+                try:
+                    지금 = 지문()
+                    if 지금 != 본것 or time.time() - 마지막 > 86400:
+                        self.consolidate_now()
+                        본것, 마지막 = 지문(), time.time()
+                except Exception as e:  # 정리가 실패해도 서버는 계속 떠 있어야 한다
+                    _알림(f"[정리 실패] {type(e).__name__}: {e}")
+                time.sleep(every_sec)
+
+        report.딴실로("정리", loop)
 
     def start_analyzer(self, every_sec: int = 900) -> None:
         """주기적으로 스스로 돌아본다. 사용자가 시키지 않아도 성장은 계속된다.
@@ -1331,13 +2253,13 @@ class EBServer(ThreadingHTTPServer):
                         import talklog
 
                         적음 = selflearn.run(self.notes, lambda 말: self.backend.chat(말, 모델),
-                                            talklog.read(60), paths.data_dir() / "vc-스스로짐작.txt")
+                                            talklog.read(60), paths.기계자리("vc-스스로짐작.txt"))
                         if 적음:
                             _알림(f"[스스로 짐작] 대화에서 오너 정보 {적음}개를 짐작으로 적었다(질문 창에서 확인)")
                 except Exception as e:
                     _알림(f"[스스로 짐작 실패] {type(e).__name__}")
 
-        threading.Thread(target=loop, daemon=True).start()
+        report.딴실로("스스로 짐작", loop)
 
 
 def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
@@ -1348,6 +2270,8 @@ def serve(host: str = "0.0.0.0", port: int = 8765) -> None:
     server.start_analyzer(cfg.get("analyze_every_sec", 900))
     server.start_housekeeping()
     server.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다
+    server.start_consolidate()  # 흩어진 메모 → 제품 정리 글
+    server.start_mirror()       # 손님이면 메인과 주고받는다(결정 30)
     print(f"EB 서버 시작 {host}:{port} (프로토콜 {PROTOCOL_VERSION})")
     print(f"페어링 열쇠: {paths.config_path()} 의 pair_token")   # 값은 안 찍는다(파일로 받으면 샌다)
     server.serve_forever()
@@ -1369,7 +2293,12 @@ def _self_check() -> None:
     tmp = tempfile.TemporaryDirectory()
     store = Store(":memory:")
     note_store = Notes(Path(tmp.name) / "notes")
+    # ★ 결과물 자리를 준다 — 안 주면 진짜 기록 자리에 `data/artifacts/*.txt` 가 검사마다 쌓였다(2026-09-15, 33개).
+    cfg["artifact_dir"] = str(Path(tmp.name) / "artifacts")
+    # 확장도 검사 자리에서만 본다 — 진짜 앱 자리의 확장이 검사에 끼면 안 된다
+    cfg["plugins_dir"] = str(Path(tmp.name) / "plugins")
     server = EBServer(("127.0.0.1", 0), cfg, store, note_store)
+    assert paths.data_dir() not in server.artifacts.parents, "자체점검이 진짜 기록 자리에 결과물을 남긴다"
 
     class FakeBackend(backends.Backend):
         fail = False
@@ -1443,6 +2372,272 @@ def _self_check() -> None:
         assert time.time() - began < 2.0, f"Content-Length {_길이} 에 늦게 답한다(실을 붙들었다)"
         conn.close()
     assert call("GET", "/eb/v1/hello")[0] == 200
+    # 「상태·기록」 문: 열쇠가 있어야 열리고, 집 경로가 안 샌다.
+    assert call("GET", "/eb/v1/status", token="wrong-token")[0] == 401
+    _상, _몸 = call("GET", "/eb/v1/status")
+    assert _상 == 200 and isinstance(_몸.get("trail"), list) and "deaths" in _몸, _몸
+    assert str(Path.home()) not in json.dumps(_몸, ensure_ascii=False), "상태에 집 경로가 샌다"
+
+    # --- 글 요약·번역(편의 기능 1·3번) ---
+    call("POST", "/eb/v1/memory", {"title": "요약 시험", "text": "긴 회의 메모 [[회의]] #일"})
+    _옛 = server.picked
+    server.picked = {**_옛, "using": {**_옛["using"], "chat": ""}}
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"})[0] == 503, "모델 없는데 조용히 빈 답"
+    server.picked = {**_옛, "using": {**_옛["using"], "chat": "시험모델"}}
+    fake.fail = False
+    _상, _답 = call("POST", "/eb/v1/assist", {"action": "translate", "title": "요약 시험", "lang": "일본어"})
+    assert _상 == 200 and "긴 회의 메모" in _답["text"], (_상, _답)
+    # ★ 엔진이 거절하면 **사람 말로** 알린다 — 클래스 이름(BackendError 따위)은 화면에 안 나간다
+    fake.fail = True
+    _상, _못 = call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"})
+    assert _상 == 502, _상
+    _영단어 = max((len(w) for w in "".join(c if (c.isascii() and c.isalpha()) else " "
+                                      for c in _못["error"]).split()), default=0)
+    assert _영단어 <= 2, f"기계 이름이 화면 문구에 샌다: {_못['error']}"   # 「AI」 까지만 봐준다
+    assert "본다" in _못["error"], _못["error"]
+    fake.fail = False
+    assert call("POST", "/eb/v1/assist", {"action": "지우기", "title": "요약 시험"})[0] == 400
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "없는 글"})[0] == 404
+    assert call("POST", "/eb/v1/assist", {"action": "summary", "title": "요약 시험"}, token="wrong-token")[0] == 401
+    server.picked = _옛
+
+    # --- 흩어진 메모 → 제품 정리 글(편의 기능 1·5번) ---
+    # 사진 속 글자(폰이 숨은 주석으로 붙임)는 찾기에 걸리고 카드 미리보기엔 안 보인다(편의 기능 13번)
+    call("POST", "/eb/v1/memory", {"title": "송장 사진", "text": "택배 보냄\n\n%%\n사진 글자 (a.jpg):\n운송장 55667788\n%%"})
+    _송 = call("GET", "/eb/v1/memory/search?q=55667788&card=1")[1]["results"]
+    assert any(x["title"] == "송장 사진" for x in _송), "사진 글자로 못 찾는다"
+    assert all("5566" not in x.get("preview", "") for x in _송), "숨은 글자가 미리보기에 보인다"
+    call("POST", "/eb/v1/memory", {"title": "정리 시험 받음", "text": "- 제품명 : zz-1\n- 받은날 : 2026-10-01"})
+    _정리 = server.consolidate_now()
+    assert _정리["products"] >= 1 and server.notes.read("제품 · zz-1") is not None, _정리
+    assert server.notes.read("제품 보유 목록").pinned, "보유 목록이 고정이 아니다"
+
+    # --- 폴더 보기(편의 기능 29번) ---
+    _폴 = call("GET", "/eb/v1/folders")[1]["folders"]
+    assert _폴 and all("/" != f["path"][0] or f["path"] == "/" for f in _폴), _폴
+    assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
+    assert sum(f["notes"] for f in _폴) >= 1
+    assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
+
+    # --- 손님 모드로 메인과 주고받기(결정 30) ---
+    # 메인 자리에서는 아무 일도 안 한다 — 제 창고를 제가 베끼면 안 된다
+    assert "메인이야" in server.사본한판(), server.사본한판()
+    assert server.손님설정() == {}
+    # 주소·열쇠가 반쪽이면 손님이 아니다(빈 주소로 부르다 터지는 것을 막는다)
+    server.cfg["사본"] = {"역할": "손님", "main_url": "", "main_token": "k"}
+    assert server.손님설정() == {}
+    # 닿지 않는 메인이면 **까닭을 말하고 창고는 그대로 둔다**
+    server.cfg["사본"] = {"역할": "손님", "main_url": "http://127.0.0.1:9", "main_token": "k"}
+    _장수 = server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
+    assert "못 닿았어" in server.사본한판(), server.사본한판()
+    assert server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == _장수, "못 닿았다고 창고가 줄었다"
+    server.cfg.pop("사본", None)
+
+    # --- 바뀐 것만 내어 주기(결정 30) — 딴 PC 의 VC 가 사본을 쌓는 문 ---
+    _처음 = call("GET", "/eb/v1/changes?since=0")[1]
+    assert isinstance(_처음.get("changes"), list) and _처음["changes"], _처음
+    assert "next_since" in _처음 and _처음["next_since"] > 0, _처음
+    # 받은 자리 뒤로는 **아무것도 안 준다** — 매번 전부 주면 사본이 못 쓴다
+    _다음 = call("GET", f"/eb/v1/changes?since={_처음['next_since']}")[1]
+    assert _다음["changes"] == [], _다음["changes"][:2]
+    # 새 글을 쓰면 그 자리에 걸린다
+    call("POST", "/eb/v1/memory", {"title": "사본 시험 글", "text": "딴 PC 로 갈 글"})
+    _새 = call("GET", f"/eb/v1/changes?since={_처음['next_since']}")[1]
+    assert any(c["title"] == "사본 시험 글" for c in _새["changes"]), _새["changes"]
+    # 지운 글도 알려 준다 — 사본에서도 지워야 진짜 사본이다
+    call("POST", "/eb/v1/memory/delete", {"title": "사본 시험 글"})
+    _지움 = call("GET", "/eb/v1/changes?since=0")[1]
+    assert any(t["title"] == "사본 시험 글" for t in _지움["trashed"]), _지움["trashed"][:3]
+    assert call("GET", "/eb/v1/changes?since=0", token="wrong-token")[0] == 401
+    assert call("GET", "/eb/v1/changes?since=abc")[0] == 400
+
+    # --- 확장 플러그인(결정 23 · 편의 기능 31번) ---
+    _확장자리 = Path(tmp.name) / "plugins"
+    확장들.write_sample(_확장자리)
+    # ★ 폴더에 있는 것만으로는 **안 돈다.** 목록에는 뜨고 `on` 은 거짓이다.
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={}, log=lambda _: None)
+    _확 = call("GET", "/eb/v1/plugins")[1]["plugins"]
+    assert [x["name"] for x in _확] == ["글자수"] and _확[0]["on"] is False, _확
+    assert _확[0]["note"] and not _확[0]["error"], _확
+    assert call("GET", "/eb/v1/plugins", token="wrong-token")[0] == 401
+    # 켜면 저장 뒤 알림이 온다
+    _확말 = []
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={"확장": {"글자수": True}}, log=_확말.append)
+    assert call("GET", "/eb/v1/plugins")[1]["plugins"][0]["on"] is True
+    _확말.clear()
+    assert call("POST", "/eb/v1/memory", {"title": "확장 알림 시험", "text": "한 줄"})[0] == 201
+    assert any("저장됨 — 확장 알림 시험" in x for x in _확말), _확말
+    # ★★ **확장이 터져도 저장은 된다.** 확장 하나가 글 쓰기를 막으면 안 된다.
+    _터짐자리 = _확장자리 / "터지는것"
+    _터짐자리.mkdir(parents=True, exist_ok=True)
+    (_터짐자리 / "plugin.json").write_text('{"name": "터지는것"}', encoding="utf-8")
+    (_터짐자리 / "main.py").write_text(
+        "def register(vc):\n    vc.on_saved(lambda 제목: 1 / 0)\n", encoding="utf-8")
+    server.plugins = 확장들.load(_확장자리, store=server.notes,
+                              cfg={"확장": {"글자수": True, "터지는것": True}}, log=_확말.append)
+    assert call("POST", "/eb/v1/memory", {"title": "확장 터짐 시험", "text": "두 줄"})[0] == 201, "확장이 터져 저장이 막혔다"
+    assert server.notes.read("확장 터짐 시험") is not None
+    # 확장이 낸 부품은 `확장:` 이름으로 오케스트레이터에 붙는다(터지면 까닭만 답한다)
+    _부품자리 = _확장자리 / "부품낸것"
+    _부품자리.mkdir(parents=True, exist_ok=True)
+    (_부품자리 / "plugin.json").write_text('{"name": "부품낸것"}', encoding="utf-8")
+    (_부품자리 / "main.py").write_text(
+        "def register(vc):\n    vc.module('나쁜부품', ['부품시험'], lambda 글: 1 / 0)\n", encoding="utf-8")
+    _실림 = 확장들.load(_확장자리, store=server.notes, cfg={"확장": {"부품낸것": True}}, log=_확말.append)
+    _옮김 = EBServer._확장부품(_실림)
+    assert [m.name for m in _옮김] == ["확장:나쁜부품"] and _옮김[0].matches("부품시험 해줘"), _옮김
+    assert "답을 못 냈다" in _옮김[0].run("부품시험"), "부품이 터져 지시 처리가 멈춘다"
+    server.plugins = 확장들.load(_확장자리, store=server.notes, cfg={}, log=lambda _: None)  # 뒤 검사에 끼지 않게 다 끈다
+
+    # --- 오늘 일지 · 할 일 체크(편의 기능 23·26번) ---
+    _상, _오늘 = call("POST", "/eb/v1/daily", {})
+    assert _상 == 200 and len(_오늘["title"]) == 10 and _오늘["title"][4] == "-", _오늘
+    assert call("POST", "/eb/v1/daily", {})[1]["title"] == _오늘["title"], "부를 때마다 새로 만든다"
+    call("POST", "/eb/v1/memory", {"title": "할 일 시험", "text": "- [ ] 우유 사기\n- [ ] 필터 갈기"})
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 1})[1]["done"] is True
+    assert "- [x] 필터 갈기" in server.notes.read("할 일 시험").body, server.notes.read("할 일 시험").body
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 1})[1]["done"] is False, "다시 누르면 풀려야 한다"
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험", "nth": 9})[0] == 404
+    assert call("POST", "/eb/v1/memory/task", {"title": "할 일 시험"})[0] == 400
+
+    # --- 백링크(편의 기능 19번) — back=1 일 때만 ---
+    call("POST", "/eb/v1/memory", {"title": "가리키는 글", "text": "[[백링크 대상]] 참고"})
+    call("POST", "/eb/v1/memory", {"title": "백링크 대상", "text": "몸"})
+    _뒤 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("백링크 대상") + "&back=1")[1]
+    assert "가리키는 글" in _뒤.get("backlinks", []), _뒤
+    assert "backlinks" not in call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("백링크 대상"))[1], "AI 길에 백링크가 실린다"
+
+    # --- 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번) ---
+    call("POST", "/eb/v1/memory", {"title": "표시 카드", "text": "보관할 글 표시카드낱말"})
+    assert call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "color": "검정"})[0] == 400
+    assert call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "pinned": "yes"})[0] == 400
+    assert call("POST", "/eb/v1/memory/mark", {"title": "없는 글", "pinned": True})[0] == 404
+    _상, _표 = call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "pinned": True, "color": "노랑"})
+    assert _상 == 200 and _표["pinned"] and _표["color"] == "노랑", _표
+    _카 = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1")[1]["results"]]
+    assert _카 and _카[0].get("color") == "노랑" and _카[0].get("pinned"), _카
+    call("POST", "/eb/v1/memory/mark", {"title": "표시 카드", "archived": True})
+    assert not call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1")[1]["results"], "보관한 글이 목록에 나온다"
+    assert call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말") + "&card=1&archived=1")[1]["results"], "보관함에 없다"
+    assert call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("표시카드낱말"))[1]["results"], "AI 길에서 보관 글이 사라졌다"
+    call("POST", "/eb/v1/memory/delete", {"title": "표시 카드"})
+    _휴 = [x for x in call("GET", "/eb/v1/trash")[1]["trash"] if x["title"] == "표시 카드"]
+    assert _휴 and "/" not in _휴[0]["id"], "휴지통에 없거나 경로가 샌다"
+    assert call("POST", "/eb/v1/trash/restore", {"id": "없는id"})[0] == 404
+    assert call("POST", "/eb/v1/trash/restore", {"id": _휴[0]["id"]})[0] == 200
+    assert server.notes.read("표시 카드") is not None, "휴지통에서 못 되살렸다"
+    assert call("GET", "/eb/v1/trash", token="wrong-token")[0] == 401
+
+    # --- 서식을 폰까지(5단계): 창고 `_서식/` 의 틀을 열쇠 단 문으로 준다. 자리는 채우지 않고 그대로 ---
+    server.notes.template_root().mkdir(parents=True, exist_ok=True)
+    (server.notes.template_root() / "시험서식.md").write_text(
+        "제품명 : \n받은날 : {{날짜}}\n", encoding="utf-8")
+    assert call("GET", "/eb/v1/templates", token="wrong-token")[0] == 401
+    _상, _틀 = call("GET", "/eb/v1/templates")
+    _시험틀 = [t for t in (_틀 or {}).get("templates", []) if t["name"] == "시험서식"]
+    assert _상 == 200 and _시험틀, _틀
+    assert "{{날짜}}" in _시험틀[0]["body"], "서식 자리를 서버가 미리 채웠다 — 폰이 적는 날짜가 아니게 된다"
+
+    # --- 첨부 올리기(4단계): 폰이 찍은 사진을 바이트 그대로 올리고, 받은 이름으로 글을 쓴다 ---
+    def 올리기(name, data, title="사진 시험", cid=None, token="test-token"):
+        import urllib.parse
+        q = urllib.parse.urlencode({"name": name, "title": title, **({"client_id": cid} if cid else {})})
+        req = urllib.request.Request(base + "/eb/v1/attach?" + q, data=data, method="POST",
+                                     headers={"Authorization": f"Bearer {token}",
+                                              "Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            return e.code, (json.loads(raw) if raw else None)
+
+    assert 올리기("사진.jpg", b"\xff\xd8fake", token="wrong-token")[0] == 401
+    assert 올리기("실행.exe", b"MZ")[0] == 400, "아무 파일이나 받는다"
+    _s1, _a1 = 올리기("IMG_0001.HEIC", b"heic-bytes", cid="attach-test-0001")
+    assert _s1 == 201 and _a1["name"].endswith(".heic"), (_s1, _a1)
+    _p1 = server.notes.attachment_path(_a1["name"])
+    assert _p1 is not None and _p1.read_bytes() == b"heic-bytes", _p1
+    _s2, _a2 = 올리기("IMG_0001.HEIC", b"heic-bytes", cid="attach-test-0001")
+    assert _s2 == 200 and _a2.get("duplicate") and _a2["name"] == _a1["name"], "폰이 다시 보내면 사진이 두 장 생긴다"
+    call("POST", "/eb/v1/memory", {"title": "사진 시험", "text": f"받은 제품\n\n![[{_a1['name']}]]"})
+    assert _a1["name"] in server.notes.read("사진 시험").attachments(), "받은 이름으로 쓴 글이 첨부를 안 가리킨다"
+    # 폰 글 보기가 사진을 받아 그린다 — 열쇠가 있어야 하고, 올린 바이트 그대로, 창고 밖은 못 연다
+    import urllib.parse
+    _req = urllib.request.Request(base + "/eb/v1/attach?" + urllib.parse.urlencode({"name": _a1["name"]}),
+                                  headers={"Authorization": "Bearer test-token"})
+    with urllib.request.urlopen(_req, timeout=5) as _r:
+        assert _r.read() == b"heic-bytes", "올린 사진과 받은 사진이 다르다"
+        assert _r.headers["Content-Type"] == "image/heic", _r.headers["Content-Type"]
+    assert call("GET", "/eb/v1/attach?" + urllib.parse.urlencode({"name": _a1["name"]}), token="wrong-token")[0] == 401
+    assert call("GET", "/eb/v1/attach?name=..%2F..%2Feb_config.json")[0] == 404, "창고 밖 파일을 연다"
+    # 폰 목록 카드(card=1): 첫 사진 · 태그 · 기호 걷은 미리보기. AI 기본 길에는 안 실린다.
+    call("POST", "/eb/v1/memory", {"title": "사진 시험", "text": "- 종류 : 정수기\n\n#제품"})
+    _c = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험") + "&card=1")[1]["results"]
+          if x["title"] == "사진 시험"][0]
+    assert _c.get("image") == _a1["name"] and "제품" in _c.get("tags", []), _c
+    assert "![[" not in _c["preview"] and "종류: 정수기" in _c["preview"], _c["preview"]
+    assert 카드미리보기("[[정수기 vcis-689]] 먼저 · [[회의#8월|8월 회의]]") == "정수기 vcis-689 먼저 · 8월 회의"
+    _ai = [x for x in call("GET", "/eb/v1/memory/search?q=" + urllib.parse.quote("사진 시험"))[1]["results"]
+           if x["title"] == "사진 시험"][0]
+    assert "preview" not in _ai and "image" not in _ai, "AI 기본 길에 카드 칸이 실린다(크레딧)"
+
+    # ★★ **아스키가 아닌 열쇠가 와도 터지지 않는다.** `hmac.compare_digest` 는 글자열끼리는
+    #   ASCII 만 견뎌, 한글이 섞인 열쇠가 오면 401 대신 **500 으로 터지고 연결이 끊겼다** —
+    #   폰에는 그것이 「컴퓨터에 못 닿았어」로 보여 엉뚱한 곳(테일스케일)을 뒤지게 했다(2026-09-19 실기).
+    #   ※ 머리글은 latin-1 로 오간다 — 폰이 UTF-8 로 실어 보낸 바이트가 서버에는 이 꼴로 보인다.
+    _한글열쇠 = "한글열쇠".encode("utf-8").decode("latin-1")
+    assert call("GET", "/eb/v1/hello", token=_한글열쇠)[0] == 401, "아스키 아닌 열쇠에 401 이 아니라 500 이 난다"
+    assert call("GET", "/eb/v1/hello", token="🔑".encode().decode("latin-1"))[0] == 401
+
+    # --- 오프라인에서 고친 글 되돌려 보내기(결정 28) · 작은 사진(결정 27) ---
+    import hashlib as _hl
+
+    call("POST", "/eb/v1/memory", {"title": "오프라인 글", "text": "처음 줄"})
+    _본 = server.notes.read("오프라인 글").body
+    _지문 = _hl.sha256(_본.encode()).hexdigest()
+    # ① 그 사이 아무도 안 건드렸다 → force 없이도 덮는다(폰이 본 그 판이니까)
+    _상, _답 = call("POST", "/eb/v1/memory",
+                   {"title": "오프라인 글", "text": "폰에서 고친 줄", "mode": "replace", "base_hash": _지문})
+    assert _상 == 201 and _답.get("merged") is None, _답
+    assert server.notes.read("오프라인 글").body.strip() == "폰에서 고친 줄", server.notes.read("오프라인 글").body
+    # ② 그 사이 컴퓨터 쪽이 바뀌었다 → **덮지 않는다.** 둘 다 남기고 알린다
+    call("POST", "/eb/v1/memory", {"title": "오프라인 글", "text": "컴퓨터에서 보탠 줄"})
+    _상, _답 = call("POST", "/eb/v1/memory",
+                   {"title": "오프라인 글", "text": "폰에서 또 고친 줄", "mode": "replace", "base_hash": _지문})
+    assert _상 == 201 and _답.get("merged") == "appended", _답
+    _몸 = server.notes.read("오프라인 글").body
+    assert "컴퓨터에서 보탠 줄" in _몸, "컴퓨터에서 쓴 줄을 지웠다"
+    assert "폰에서 또 고친 줄" in _몸 and "## 폰에서 고친 판" in _몸, _몸
+    # ③ 지문 없이 덮으려 하면 예전처럼 막힌다(force 가 필요하다)
+    assert call("POST", "/eb/v1/memory",
+                {"title": "오프라인 글", "text": "그냥 덮기", "mode": "replace"})[0] == 409
+
+    # 작은 사진 — 목록 카드가 원본을 통째로 안 받게(결정 27)
+    import io as _io
+
+    from PIL import Image as _Image
+
+    _버퍼 = _io.BytesIO()
+    _Image.new("RGB", (1600, 1200), (30, 90, 200)).save(_버퍼, "JPEG", quality=95)
+    _상, _사진 = 올리기("큰사진.jpg", _버퍼.getvalue(), title="사진 시험")
+    assert _상 == 201, (_상, _사진)
+
+    def 내려받기(이름, 너비=0):
+        import urllib.parse as _up
+        칸 = {"name": 이름, **({"w": str(너비)} if 너비 else {})}
+        요청 = urllib.request.Request(base + "/eb/v1/attach?" + _up.urlencode(칸),
+                                    headers={"Authorization": "Bearer test-token"})
+        with urllib.request.urlopen(요청, timeout=5) as 답:
+            return 답.read()
+
+    _원본 = 내려받기(_사진["name"])
+    _작은 = 내려받기(_사진["name"], 320)
+    assert len(_작은) * 4 < len(_원본), (len(_작은), len(_원본))
+    assert _작은[:3] == b"\xff\xd8\xff", "작은 사진이 JPEG 가 아니다"
+    # 모르는 너비·못 줄이는 꼴이면 원본을 그대로 준다(사진이 안 보이는 것보다 낫다)
+    assert 내려받기(_사진["name"], 999) == _원본
+    assert 내려받기(_a1["name"], 320) == b"heic-bytes", "못 줄이는 꼴인데 빈 것을 준다"
 
     status, hello = call("GET", "/eb/v1/hello")
     # ★★ **방금 쓴 글은 바로 뜻으로도 찾혀야 한다.** 안 그러면 AI 가 제가 저장한 것을
@@ -1535,7 +2730,7 @@ def _self_check() -> None:
     else:
         os.environ["VC_MODELS"] = 옛모델자리
     _, 큰것있을때 = call("GET", "/eb/v1/hello")
-    assert "e5-base" not in (큰것있을때.get("store") or {}).get("how", "")         or not (paths.models_dir() / "e5-base" / "model.onnx").is_file(),         "이미 받았는데 또 받으라고 한다"
+    assert "e5-base" not in (큰것있을때.get("store") or {}).get("how", "")         or paths.meaning_dir("e5-base").name != "e5-base",         "이미 받았는데 또 받으라고 한다"
     st_b, _ = call("GET", "/eb/v1/memory/search?brief=1&q=" + urllib.parse.quote("VC"))
     assert st_b == 200, f"안내가 brief=1 을 말하는데 안 돈다: {st_b}"
     assert status == 200 and hello["protocol"] == PROTOCOL_VERSION
@@ -1874,14 +3069,24 @@ def _self_check() -> None:
 
     assert call("POST", "/eb/v1/memory", {"title": "막힌 글", "text": "첫 판"})[0] == 201
     막힌파일 = note_store.path_of("막힌 글")
+    # ★ **막는 방법이 운영체제마다 다르다.** 윈도우는 파일만 읽기 전용이면 자리 바꾸기가
+    #   막히는데, **맥·리눅스는 `os.replace` 가 폴더 권한만 봐서 그냥 써진다** —
+    #   맥에서 그대로 재니 201(썼다)이 나와 이 검사가 터졌다. 폴더도 같이 잠근다.
+    막힌폴더 = 막힌파일.parent
+    _옛파일 = _stat.S_IMODE(_os.stat(막힌파일).st_mode)
+    _옛폴더 = _stat.S_IMODE(_os.stat(막힌폴더).st_mode)
     _os.chmod(막힌파일, _stat.S_IREAD)
+    if _os.name != "nt":
+        _os.chmod(막힌폴더, 0o500)
     try:
         상태, 못씀 = call("POST", "/eb/v1/memory",
                         {"title": "막힌 글", "text": "둘째 판", "mode": "replace", "force": True})
         assert 상태 == 507, f"못 쓰고도 그렇게 말하지 않는다: {상태} {못씀}"
         assert 못씀.get("hint"), 못씀
     finally:
-        _os.chmod(막힌파일, _stat.S_IWRITE)
+        if _os.name != "nt":
+            _os.chmod(막힌폴더, _옛폴더)
+        _os.chmod(막힌파일, _옛파일 | _stat.S_IWRITE)
 
     # ★★ **쓴 자리에서 이을 곳을 알려 준다.** 오너 창고는 2820장 중 2700장(95%)이 아무 데도
     #   안 이어져 있다 — AI 가 글을 붓기만 하고 잇지 않기 때문이다. 이어지지 않은 글은
@@ -2069,7 +3274,8 @@ def _self_check() -> None:
 
     # ★★ 바깥 AI 로 켜면 그 제공자의 모델 이름을 쓴다(깐 gguf 이름이 클라우드로 나가면 안 된다)
     with tempfile.TemporaryDirectory() as _바깥곳:
-        _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"}},
+        _바깥 = EBServer(("127.0.0.1", 0), {"pair_token": "t", "backend": {"kind": "anthropic", "model": "claude-시험"},
+                         "artifact_dir": str(Path(_바깥곳) / "a")},
                         Store(":memory:"), Notes(Path(_바깥곳) / "n", index_now=False))
         try:
             assert _바깥.picked["using"]["chat"] == "claude-시험" == _바깥.picked["using"]["vision"], _바깥.picked["using"]
@@ -2097,21 +3303,21 @@ def _self_check() -> None:
     # 받아쓰기는 파일이 아니라 이름이라 어느 PC에서든 고를 수 있다.
     # ★★ 모델을 골라도 **화면이 같은 설정 파일에 적은 칸**(글자 크기 등)이 안 지워져야 한다 —
     #   서버가 켤 때 들고 있던 사본으로 통째로 덮어 말없이 지웠다.
-    _설정원문 = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    _설정원문 = paths.config_path().read_text(encoding="utf-8") if paths.config_path().exists() else None
     try:
         _지금 = json.loads(_설정원문) if _설정원문 else {}
-        CONFIG_PATH.write_text(json.dumps({**_지금, "글자배율": 1.3, "화면방식": "최대화"},
+        paths.config_path().write_text(json.dumps({**_지금, "글자배율": 1.3, "화면방식": "최대화"},
                                           ensure_ascii=False), encoding="utf-8")
         assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
-        _뒤 = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        _뒤 = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert _뒤.get("글자배율") == 1.3 and _뒤.get("화면방식") == "최대화", \
             f"모델을 고르니 화면이 적은 설정이 지워졌다: {sorted(_뒤)}"
         assert _뒤.get("models", {}).get("stt") == "medium", _뒤.get("models")
     finally:
         if _설정원문 is None:
-            CONFIG_PATH.unlink(missing_ok=True)
+            paths.config_path().unlink(missing_ok=True)
         else:
-            CONFIG_PATH.write_text(_설정원문, encoding="utf-8")
+            paths.config_path().write_text(_설정원문, encoding="utf-8")
         assert call("POST", "/eb/v1/models", {"role": "stt", "name": "medium"})[0] == 200
     assert call("GET", "/eb/v1/models")[1]["using"]["stt"] == "medium"
     # 없는 것·없는 역할은 막는다.
@@ -2220,6 +3426,247 @@ def _self_check() -> None:
 
     tmp.cleanup()
 
+    # ★★ **합치기(Compile)가 실제로 돈다**(오너 2026-09-20). 모델이 없으면 조용히 넘어가고,
+    #   있으면 `raw/` 원본에서 `wiki/` 요약 쪽이 생긴다. 여기서는 가짜 손을 끼워 잰다.
+    import synth as _합9
+    import tempfile as _임9
+
+    with _임9.TemporaryDirectory() as _합창고:
+        _표9 = Path(_합창고) / "합쳤다.json"
+        note_store.write(notes.Note(title="합칠 원본", body="- https://example.com/x\n몸",
+                                    kind="원본"))
+        _가짜9 = lambda 말들: '{"요점": "예제", "갈래": "개념", "태그": ["시험"], "이어질것": ["example"]}'
+        _난9 = _합9.합치기(note_store, _가짜9, 어디=_표9)
+        assert "합칠 원본 요점" in _난9["만든것"], _난9
+        _쪽9 = note_store.read("합칠 원본 요점")
+        assert _쪽9 is not None and "[[합칠 원본]]" in _쪽9.body, _쪽9
+        assert note_store.path_of("합칠 원본").parent.parent.parent.name == "raw"
+        assert note_store.path_of(_쪽9.title).parent.parent.parent.name == "wiki"
+        # 모델이 없으면 아무 일도 안 난다
+        assert _합9.합치기(note_store, None, 어디=_표9)["만든것"] == []
+
+    # ★★ **헤르메스(2단계) 배선을 잰다.** 문을 내고 `POST_PATHS` 에 안 적으면 404 다 —
+    #   오늘 「갈래만 재고 알맹이를 안 태웠다」로 두 번 헛통과했다(2026-09-21).
+    import hermes as _헤9
+    import tempfile as _임헤9
+
+    for _길헤9 in ("/eb/v1/hermes/start", "/eb/v1/hermes/context", "/eb/v1/hermes/log"):
+        assert _길헤9 in Handler.POST_PATHS, f"헤르메스 문이 POST 목록에 없다: {_길헤9}"
+    assert hasattr(Handler, "_hermes"), "헤르메스 문을 받을 손이 없다"
+
+    with _임헤9.TemporaryDirectory() as _뿌리헤9:
+        from pathlib import Path as _P헤9
+
+        _난헤9 = _헤9.차리기(note_store, "HermesWire", "배선 시험", 뿌리=_P헤9(_뿌리헤9))
+        assert "폴더" in _난헤9["만든것"] and (_P헤9(_난헤9["자리"]) / "CLAUDE.md").exists(), _난헤9
+        note_store.reindex()
+        _헤9.적립하기(note_store, "HermesWire",
+                   오류=[{"제목": "HermesWire — 배선이 끊겼다", "몸": "문을 목록에 안 적었다."}])
+        note_store.reindex()
+        _맥헤9 = _헤9.꺼내기(note_store, "HermesWire")
+        assert [t for t, _ in _맥헤9["칸"]["오류"]] == ["HermesWire — 배선이 끊겼다"], _맥헤9["칸"]
+        # 한글 이름은 막는다 — 맥에서 한글 경로가 도구를 죽인다
+        assert _헤9.차리기(note_store, "한글프로젝트", 뿌리=_P헤9(_뿌리헤9))["만든것"] == []
+
+    # ★★ **바이브코딩 배선을 잰다.** `plan` 이 파일을 건드리면 안 된다.
+    import vibe as _바9
+
+    for _길바9 in ("/eb/v1/vibe/plan", "/eb/v1/vibe/apply"):
+        assert _길바9 in Handler.POST_PATHS, f"바이브 문이 POST 목록에 없다: {_길바9}"
+    assert hasattr(Handler, "_vibe"), "바이브 문을 받을 손이 없다"
+
+    with _임헤9.TemporaryDirectory() as _뿌리바9:
+        from pathlib import Path as _P바9
+
+        _옛뿌리바9 = _헤9.기본뿌리
+        _헤9.기본뿌리 = _P바9(_뿌리바9)
+        try:
+            _헤9.차리기(note_store, "VibeWire", "배선 시험")
+            (_P바9(_뿌리바9) / "VibeWire" / "a.py").write_text("x = 1\n", encoding="utf-8")
+            note_store.reindex()
+            _손바9 = lambda m: '{"왜":"바꾼다","고침":[{"파일":"a.py","새글":"x = 2\\n"}]}'
+            _안바9 = _바9.고칠안(note_store, _손바9, "VibeWire", "a.py 고쳐")
+            assert [것["파일"] for 것 in _안바9["고침"]] == ["a.py"], _안바9
+            # ★★ **안 만들기는 파일을 안 건드린다**
+            assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+            assert "-x = 1" in _바9.차이("VibeWire", _안바9)
+            _바9.적용("VibeWire", _안바9)
+            assert (_P바9(_뿌리바9) / "VibeWire" / "a.py").read_text(encoding="utf-8") == "x = 2\n"
+        finally:
+            _헤9.기본뿌리 = _옛뿌리바9
+
+    # ★★ **맡기기 배선을 잰다.** 남의 CLI 에게 맡기고 결과를 창고에 남기는 길이다.
+    for _길맡9 in ("/eb/v1/hermes/handoff", "/eb/v1/hermes/hands"):
+        assert _길맡9 in Handler.POST_PATHS, f"맡기기 문이 POST 목록에 없다: {_길맡9}"
+    import agentcli as _시9
+
+    assert set(_시9.손들) >= {"claude", "codex", "fake"}, _시9.손들
+    # ★ 안 깔린 CLI 는 **까닭을 말한다** — 조용히 실패하면 사람이 왜 안 되는지 모른다
+    assert _시9.손고르기("claude") is not None and _시9.손고르기("없는손") is None
+
+    # ★★ **협업 배선을 잰다.** 보는 손은 읽기만 해야 한다.
+    assert "/eb/v1/hermes/duet" in Handler.POST_PATHS, "협업 문이 POST 목록에 없다"
+    assert hasattr(_헤9, "협업"), "협업이 없다"
+
+    # ★★ **자가 스킬 생성 배선을 잰다.** 일이 한 바퀴 돌면 그 과정을 스킬로 뽑아 **제안**한다.
+    assert "/eb/v1/hermes/skill" in Handler.POST_PATHS, "스킬 문이 POST 목록에 없다"
+    import skillgen as _스9
+
+    with _임헤9.TemporaryDirectory() as _뿌리스9:
+        from pathlib import Path as _P스9
+
+        _옛뿌리스9 = _헤9.기본뿌리
+        _헤9.기본뿌리 = _P스9(_뿌리스9)
+        try:
+            _헤9.차리기(note_store, "SkillWire", "스킬 배선")
+            note_store.reindex()
+            _뽑9 = _스9.뽑기(note_store, "SkillWire", "인사말을 한국어로 바꿔라",
+                          쓴파일=["greet.py"])
+            assert _뽑9["스킬"] is not None, _뽑9
+            assert _뽑9["스킬"].project == _헤9.프로젝트글제목("SkillWire")
+            # ★★ **뽑기는 저장을 안 한다**
+            note_store.reindex()
+            assert note_store.read(_뽑9["스킬"].name) is None, "뽑기가 저장까지 했다"
+            _이름9 = _스9.남기기(note_store, _뽑9["스킬"])
+            note_store.reindex()
+            assert note_store.read(_이름9).kind == "skill", _이름9
+            # ★ 같은 일을 또 뽑지 않는다
+            assert _스9.뽑기(note_store, "SkillWire", "인사말을 한국어로 바꿔라",
+                          쓴파일=["a.py"])["겹침"] == _이름9
+            # ★ 프로젝트 맥락을 꺼낼 때 스킬이 같이 뜬다 — 안 뜨면 배워 놓고 못 찾는다
+            _맥9 = _헤9.꺼내기(note_store, "SkillWire")
+            assert any(_이름9 == t for 칸 in _맥9["칸"].values() for t, _ in 칸), _맥9["칸"]
+        finally:
+            _헤9.기본뿌리 = _옛뿌리스9
+
+    # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
+    #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
+    assert "/eb/v1/wiki/ask" in Handler.POST_PATHS, "묻기 문이 POST 목록에 없다"
+    # ★★ **그물 열쇠는 신호 문 하나만 연다.** 그 열쇠로 창고까지 열어 주면 열쇠
+    #   하나가 새는 순간 글이 통째로 샌다 — 들을 권한과 읽을 권한은 다르다.
+    server.cfg["그물"] = {"열쇠": "mesh-only-key"}
+    try:
+        # ★ 신호 문은 **끊기지 않는 흐름**이라 끝까지 기다리면 검사가 멈춘다.
+        #   막히면 401 이 곧바로 오고, 열리면 흐름이 붙잡는다 — 그 차이로 잰다.
+        import urllib.error as _탈9그
+        import urllib.request as _요청9그
+
+        def _신호문(열쇠: str) -> str:
+            req = _요청9그.Request(base + "/eb/v1/events",
+                                headers={"Authorization": f"Bearer {열쇠}"})
+            try:
+                with _요청9그.urlopen(req, timeout=1.5) as r:
+                    r.read(1)
+                return "열림"
+            except _탈9그.HTTPError as e:
+                return str(e.code)
+            except (TimeoutError, OSError):
+                return "열림"       # 머리말까지 받고 흐름이 붙잡았다
+
+        assert _신호문("mesh-only-key") == "열림", "그물 열쇠로 신호 문이 안 열린다"
+        for _막힐길 in ("/eb/v1/memory/search?q=x", "/eb/v1/memory/note?title=x",
+                     "/eb/v1/status", "/eb/v1/graph"):
+            _코드 = call("GET", _막힐길, token="mesh-only-key")[0]
+            assert _코드 == 401, f"그물 열쇠로 {_막힐길} 까지 열렸다 ({_코드})"
+        assert call("POST", "/eb/v1/memory", {"title": "ㄱ", "text": "ㄴ"},
+                    token="mesh-only-key")[0] == 401, "그물 열쇠로 글이 써진다"
+        # ★ 열쇠가 비면 아무것도 안 연다 — 빈 열쇠로 붙는 일이 없게
+        server.cfg["그물"] = {"열쇠": ""}
+        assert _신호문("") == "401", _신호문("")
+    finally:
+        server.cfg.pop("그물", None)
+
+    # ★★ **대화 문은 묻기와 따로 있다** — 한 길로 묶으면 「안녕」에도 창고를 뒤진다
+    assert "/eb/v1/wiki/chat" in Handler.POST_PATHS, "대화 문이 POST 목록에 없다"
+    assert hasattr(Handler, "_wiki_chat"), "대화 문 손잡이가 없다"
+    import inspect as _본다대화9
+
+    _소스대화9 = _본다대화9.getsource(Handler._wiki_chat)
+    assert "대화(" in _소스대화9, "대화 문이 묻기를 부른다 — 그러면 잡담에도 창고를 뒤진다"
+    assert "n_ctx" in _소스대화9 and "앞말=" in _소스대화9, _소스대화9[:200]
+    assert hasattr(Handler, "_wiki_ask"), "묻기 문을 받을 손이 없다"
+    note_store.write(notes.Note(title="묻기 시험 글", kind="오류",
+                                body="맥에서 한글 경로에 Qt 플러그인이 걸리면 창이 안 뜬다."))
+    note_store.reindex()
+    import query as _묻9
+
+    # ★★ **모델 창을 실제로 물어본다.** 짐작한 값을 쓰면 창이 다른 기계에서 넘친다.
+    import inspect as _본다9
+
+    _소스9 = _본다9.getsource(Handler._wiki_ask)
+    assert "n_ctx" in _소스9, "모델 창을 안 물어보고 짐작한다"
+    assert "칸=칸" in _소스9, "물어본 창을 묻기에 안 넘긴다"
+
+    # ★★ **앞말이 모델에게 실제로 간다.** 배선만 보면 「받아서 버리는」 것을 못 잡는다.
+    _본말9 = []
+    _묻9.묻기(note_store, lambda 말들: (_본말9.extend(말들), "그렇다")[1], "한글 경로",
+            앞말=[{"role": "user", "content": "앞에 한 말"}])
+    assert any(m["content"] == "앞에 한 말" for m in _본말9), _본말9
+    assert _본말9[-1]["role"] == "user" and "한글 경로" in _본말9[-1]["content"]
+
+    _난묻9 = _묻9.묻기(note_store, lambda 말들: "창이 안 뜬다 [[묻기 시험 글]]", "한글 경로")
+    assert _난묻9["근거"] == ["묻기 시험 글"], _난묻9
+    assert _묻9.묻기(note_store, None, "한글 경로")["왜"] == "모델이 없다"
+
+    # ★★ **배선까지 잰다.** 위는 `합치기` 를 직접 부른 것이라, 주기 정리에서 **안 부르게**
+    #   고쳐도 통과한다(막이를 되돌려 보고 알았다). 실제 길(`consolidate_now`)로 돌려 본다.
+    note_store.write(notes.Note(title="배선 원본", body="- https://example.com/y\n몸", kind="원본"))
+    _옛백9, _옛골9, _옛설9 = server.backend, server.picked, server.cfg
+    # ★★ **검사가 진짜 앱 자리를 건드리면 안 된다.** 합치기는 「합쳤다」 표시를 기계 자리에
+    #   남기는데, 그것을 그대로 쓰면 **두 번째 실행부터 건너뛰어** 배선 검사가 터진다
+    #   (단독으로는 통과하고 `--모두검사` 에서만 터졌다 — 앞선 실행이 남긴 표시 때문이다).
+    import os as _os9
+
+    _옛상태9 = _os9.environ.get("VC_STATE")
+    _임시상태9 = _임9.TemporaryDirectory()
+    _os9.environ["VC_STATE"] = _임시상태9.name
+    try:
+        server.backend = type("가짜백엔드", (), {
+            "chat": lambda self, 말들, 모델, **곁:
+                '{"요점": "배선 시험", "갈래": "개념", "태그": [], "이어질것": []}'})()
+        server.picked = {**server.picked, "using": {"chat": "가짜모델"}}
+        server.cfg = {**server.cfg, "backend": {"kind": "local"}}
+        server.consolidate_now()
+    finally:
+        server.backend, server.picked, server.cfg = _옛백9, _옛골9, _옛설9
+        if _옛상태9 is None:
+            _os9.environ.pop("VC_STATE", None)
+        else:
+            _os9.environ["VC_STATE"] = _옛상태9
+        _임시상태9.cleanup()
+    assert note_store.read("배선 원본 요점") is not None, (
+        "주기 정리에서 합치기를 안 부른다 — 모아만 두고 영영 안 합쳐진다")
+    # ★ 합치면 **일지에 남고 지도가 갱신된다**
+    import wikilog as _일지8
+
+    _일지파일 = Path(note_store.root) / _일지8.LOG
+    assert _일지파일.exists() and " | 합치기 | " in _일지파일.read_text(encoding="utf-8"), \
+        "합쳤는데 일지에 안 남는다"
+    _지도파일 = Path(note_store.root) / _일지8.INDEX
+    assert _지도파일.exists() and "[[배선 원본 요점]]" in _지도파일.read_text(encoding="utf-8"), \
+        "합쳤는데 지도에 안 오른다"
+
+    # ★★ **어디서 왔는지 적힌다**(오너 2026-09-20 · 모으기). 공유로 온 원본은 `raw/` 로,
+    #   내가 적은 것은 `wiki/` 로 간다 — 밖에서 가져온 것과 내 글은 다루는 법이 다르다.
+    import wiki as _위키9
+
+    _받기 = lambda 몸: call("POST", "/eb/v1/memory", 몸)
+    _받기({"title": "공유로 온 원본", "text": "- https://example.com/a",
+          "kind": _위키9.원본갈래, "source": "공유", "mode": "replace"})
+    _온것 = note_store.read("공유로 온 원본")
+    assert _온것 is not None and _온것.kind == _위키9.원본갈래, _온것
+    assert _온것.extra.get("출처") == "공유", _온것.extra
+    assert note_store.path_of("공유로 온 원본").parent.parent.parent.name == _위키9.RAW, \
+        note_store.path_of("공유로 온 원본")
+    # 폰에서 적은 것은 **원본이 아니다** — 내 생각이라 `wiki/` 로 간다
+    _받기({"title": "폰에서 적은 것", "text": "곱창 먹었다", "source": "폰", "mode": "replace"})
+    _폰것 = note_store.read("폰에서 적은 것")
+    assert _폰것.extra.get("출처") == "폰", _폰것.extra
+    assert note_store.path_of("폰에서 적은 것").parent.parent.parent.name == _위키9.WIKI
+    # ★ 모르는 출처는 **적지 않는다** — 아무 말이나 앞머리에 들어가면 셀 수가 없다
+    _받기({"title": "엉뚱한 출처", "text": "몸", "source": "어디선가", "mode": "replace"})
+    assert "출처" not in (note_store.read("엉뚱한 출처").extra or {}), "모르는 출처를 그대로 적었다"
+
     server.shutdown()
 
     # ★ 설정의 모델 자리에 gguf 가 없으면 exe 옆(사람이 넣는 자리)을 본다.
@@ -2275,6 +3722,15 @@ def _self_check() -> None:
             ("def start_embedding(", "벡터를 채우는 실이 서버에 없다"),
             ("eb.start_embedding()", "창 있는 판이 벡터 실을 안 띄운다"),
             ("server.start_embedding()", "--no-ui 로 띄우면 뜻 벡터가 안 자란다"),
+            ("eb.start_consolidate()", "창 있는 판이 정리 실을 안 띄운다"),
+            ("server.start_consolidate()", "--no-ui 로 띄우면 메모가 정리되지 않는다"),
+            # 사본 실(결정 30) — 안 띄우면 손님으로 골라 놔도 **아무것도 안 받는다**
+            ("def start_mirror(", "사본 실이 서버에 없다"),
+            ("def start_mesh(", "그물 실이 서버에 없다"),
+            ("eb.start_mesh()", "창 있는 판이 그물을 안 띄운다"),
+            ("self.notes.알림걸이 = self.hub.publish", "바뀐 것을 아무 데도 안 쏜다"),
+            ("eb.start_mirror()", "창 있는 판이 사본 실을 안 띄운다"),
+            ("server.start_mirror()", "--no-ui 로 띄우면 사본이 안 자란다"),
             # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 처음엔 이 실의 제 연결에만
             #   임베더를 붙였다 — 벡터는 자라는데 `search` 가 쓰는 `self.notes` 는
             #   `_embed` 가 None 이라 **뜻 검색이 영영 0건**이었다(시험 쪽이 --no-ui 에서 잡음).
@@ -2294,6 +3750,26 @@ def _self_check() -> None:
     소스 = Path(__file__).read_text(encoding="utf-8", errors="replace")
     for 길 in _r.REMOTE_ALLOWED:
         assert f'"{길}"' in 소스, f"원격에 열어 둔 길이 실재하지 않는다: {길}"
+
+    # ★★ **옛 창고 옮기기 뒤 첫 켜기에 열쇠가 바뀌면 안 된다**(⑦ 실기 2026-09-15). 설정 자리를 불러올 때 박아 두면
+    #   옮기기 전 옛 자리를 가리켜, 원본을 지운 뒤 새 열쇠로 옛 자리에 다시 만들었다 — 폰 짝짓기가 풀리고 기록 폴더에 열쇠 파일이 생겼다.
+    import os as _os7
+    with tempfile.TemporaryDirectory() as _t7:
+        _기록7, _앱7 = Path(_t7) / "기록", Path(_t7) / "앱"
+        _기록7.mkdir()
+        (_기록7 / "eb_config.json").write_text(json.dumps({"pair_token": "옛열쇠-옮기기시험"}), encoding="utf-8")
+        _옛7 = {k: _os7.environ.get(k) for k in ("VC_DATA", "VC_STATE")}
+        _os7.environ["VC_DATA"], _os7.environ["VC_STATE"] = str(_기록7), str(_앱7)
+        try:
+            assert "eb_config.json" in paths.기계파일옮기기()["옮김"]
+            assert load_config().get("pair_token") == "옛열쇠-옮기기시험", "옮긴 뒤 첫 켜기에 열쇠가 바뀌었다 — 폰 짝짓기가 풀린다"
+            assert not (_기록7 / "eb_config.json").exists(), "옮긴 뒤 기록 폴더에 설정(열쇠)이 다시 생겼다"
+        finally:
+            for _k, _v in _옛7.items():
+                if _v is None:
+                    _os7.environ.pop(_k, None)
+                else:
+                    _os7.environ[_k] = _v
 
     print("server self-check 통과")
 

@@ -45,6 +45,27 @@ def server_alive(port: int = PORT, timeout: float = 0.6) -> bool:
         return False
 
 
+def 모델내리기(서버) -> None:
+    """★★ **끝내기 전에 로컬 모델을 내린다.**
+
+    안 내리면 llama.cpp 의 Metal 판이 **프로세스 종료 중에 assert 로 죽는다** —
+    `ggml_metal_device_free` 가 `__cxa_finalize_ranges` 안에서 터져 끝난 코드가
+    **134(abort)** 다. 실기로 쟀다(2026-09-24): 모델을 쓰면 134, 안 쓰면 0,
+    **내리고 끝내면 0.** 오너가 로컬로 한 마디만 해도 창을 닫을 때마다 맥이
+    크래시 보고를 띄웠을 자리다.
+
+    ★ 무슨 일이 나도 끄는 것을 막지 않는다 — 못 내려도 꺼지기는 해야 한다.
+    """
+    뒤 = getattr(서버, "backend", None)
+    내리기 = getattr(뒤, "unload", None)
+    if not callable(내리기):
+        return
+    try:
+        내리기()
+    except Exception as e:
+        report.trail(f"모델 못 내렸다: {type(e).__name__}: {e}")
+
+
 def start_server(cfg: dict) -> srv.EBServer:
     store = srv.Store(cfg.get("db_path") or str(paths.store_path()))
     # 훑지 않고 연다. 항목이 쌓이면 훑는 데만 몇 십 초가 드는데, 그동안 서버가
@@ -56,6 +77,11 @@ def start_server(cfg: dict) -> srv.EBServer:
     eb.start_analyzer(cfg.get("analyze_every_sec", 900))
     eb.start_housekeeping()
     eb.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다 (--no-ui)
+    eb.start_consolidate()  # 흩어진 메모 → 제품 정리 글 (2분 모아서)
+    eb.start_mirror()       # 손님이면 메인과 주고받는다(결정 30). 메인이면 아무 일도 안 한다
+    # ★★ **이웃이 바꾸면 바로 안다** — 훑어서 알아내지 않는다(오너 2026-09-24).
+    #   주소를 사람이 안 적는다. 테일스케일에게 물어 스스로 찾는다.
+    eb.start_mesh()
     threading.Thread(target=eb.serve_forever, daemon=True).start()
     return eb
 
@@ -69,7 +95,7 @@ def _log_crash(err: BaseException) -> None:
     import traceback
 
     try:
-        note = paths.data_dir() / "vc-오류.txt"
+        note = paths.기계자리("vc-오류.txt")
         with note.open("a", encoding="utf-8") as f:
             f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')}" + chr(10))
             traceback.print_exception(type(err), err, err.__traceback__, file=f)
@@ -158,10 +184,15 @@ def _사람이손댄것(뿌리) -> list[str]:
 
     남 = []
     import notes as _notes
+    import wiki as _위키2
+
+    # 창고의 **특별 폴더**(새 이름·옛 이름 다)는 사람 글이 아니다 — 표에서 받아 온다.
+    특별폴더이름들 = {이름 for 새, 옛들 in _위키2.특별폴더.items()
+                 for 이름 in (새, *옛들)}
 
     for f in _notes.훑어내림(_P(뿌리), (".md",)):   # 연결 폴더는 안 따라간다
         조각 = f.relative_to(뿌리).parts
-        if ".이력" in 조각 or "_서식" in 조각:
+        if any(이름 in 조각 for 이름 in 특별폴더이름들):
             continue
         try:
             글 = f.read_text(encoding="utf-8", errors="replace")
@@ -197,6 +228,10 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--사본치우기", "--판올리기", "--휴지통", "--시험표", "--화면상태",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
     "--모두검사", "--check-all",
+    # ★★ 바깥 AI 가 VC 의 일을 도구로 잡는 다리(MCP). **구운 앱에는 파이썬이 따로
+    #   없어서** 제 실행파일을 이 스위치로 다시 부른다 — 여기 없으면 「모르는 것이다」
+    #   하고 끝나 도구가 통째로 안 뜬다.
+    "--mcp",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
 값받는스위치 = {"--빼고", "--without"}
@@ -284,12 +319,46 @@ def main(argv: list[str] | None = None) -> int:
         print("모르는 것이다: " + " ".join(모름))
         print("아는 것: " + " ".join(sorted(아는스위치 - {"-h"})))
         return 2
+    # ★★ **다리로 불린 것이면 다리만 하고 끝낸다.** 창도 서버도 띄우면 안 된다 —
+    #   `claude` 가 stdio 로 말을 걸고 있는데 다른 것이 같은 출구에 찍으면 프로토콜이
+    #   깨진다. 그리고 창이 또 뜨면 혼자 켜기 잠금에 걸린다.
+    if "--mcp" in argv:
+        import os as _os
+
+        import vcmcp as _다리
+
+        _다리.돌기(주소=_os.environ.get("VC_MCP_주소") or _다리.기본주소)
+        return 0
+
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
 
+    # ★★ **막혀 있으면 말하고 나서 기다린다.** 맥이 문서 폴더를 막으면 우리는
+    #   `opendir` 안에서 통째로 멈추는데, 그 자리엔 창도 서버도 없어 **아무 말도 안
+    #   남았다** — Finder 로 띄운 앱이 0% 로 매달려 있는데 까닭을 알 길이 없었다
+    #   (실기로 잡았다 · 2026-09-24). 막는 것이 아니라 **말을 하고** 그대로 간다 —
+    #   허락이 나면 이어서 켜지고, 안 나면 무엇을 눌러야 하는지가 남는다.
+    if 막힘 := paths.창고막혔나():
+        print("★ " + 막힘)
+        try:
+            report.trail("창고 막힘 — " + 막힘)
+        except Exception:
+            pass
+
+    # ★★ 기계 파일을 앱 자리로(오너 결정 2026-09-15) — **혼자 켜기 잠금을 잡은 뒤, db 를 열기 전에.**
+    #   이미 떠 있는 VC 가 db 를 쥐고 있을 때 옮기면 반쪽이 된다 — 서버가 살아 있거나 잠금을 못 잡으면 건너뛴다.
+    if not server_alive() and paths.only_one():
+        try:
+            옮김 = paths.기계파일옮기기()
+        except Exception as err:      # 옮기다 실패해도 켜는 것은 막지 않는다 — 옛 자리를 그대로 쓴다
+            옮김 = {"옮김": [], "남김": [f"옮기기 실패: {type(err).__name__}"], "이미": []}
+        if 옮김["옮김"] or 옮김["남김"]:
+            report.trail(f"기계 파일 앱 자리로 — 옮김 {len(옮김['옮김'])} · 남김 {옮김['남김']}")
+
     cfg = srv.load_config()
+    켠서버 = None
     if want_server and not server_alive():
-        start_server(cfg)
+        켠서버 = start_server(cfg)
         print(f"VC 서버 {HOST}:{PORT} (프로토콜 {srv.PROTOCOL_VERSION})")
         # ★ **토큰 값은 찍지 않는다 — 자리만 말한다.** stdout 을 파일로 받는 쓰임(`--no-ui > 기록`)이
         #   있어 값을 찍으면 열쇠가 파일에 남는다. `--doctor` 와 같은 규칙이다(열쇠를 두 군데 두지 않는다).
@@ -298,9 +367,9 @@ def main(argv: list[str] | None = None) -> int:
         # 알았다 — 「모르는 새 열린다」가 문제였다. 막이는 있지만(토큰 없으면 401)
         # **같은 공유기의 다른 기기에서 닿는다는 사실 자체**를 쓰는 사람이 알아야 한다.
         if HOST == "0.0.0.0":
-            print("  ★ 같은 공유기의 다른 기기에서도 이 자리에 닿는다"
+            print("  ★ 같은 공유기와 테일스케일로 이은 다른 기기에서도 이 자리에 닿는다"
                   " (토큰 없으면 401로 막힌다).")
-            print("  원격이 필요 없으면  VC.exe --no-server  로 켜라.")
+            print("  원격이 필요 없으면  --no-server  를 붙여 켜라.")
         report.trail(f"서버 열었다 {HOST}:{PORT}")
     elif want_server:
         print(f"서버가 이미 떠 있어 그쪽에 붙는다 (:{PORT})")
@@ -335,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from PyQt5.QtWidgets import QApplication, QMessageBox
 
+            paths.pin_qt_plugins()      # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
             app = QApplication.instance() or QApplication(sys.argv)
             QMessageBox.information(
                 None, "VC", "VC가 이미 떠 있어. 작업표시줄을 봐.  "
@@ -346,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from PyQt5.QtWidgets import QApplication
 
+    paths.pin_qt_plugins()              # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
     import ui
 
     app = QApplication(sys.argv)
@@ -360,10 +431,22 @@ def main(argv: list[str] | None = None) -> int:
 
     settings.apply_screen(win, str(paths.load_config().get("화면방식", "창")))
     report.trail("창 떴다")
+    # ★★ **모델이 없으면 처음 켠 사람에게 말해 준다.** 받는 길은 있는데 그 칸이
+    #   접혀 있어 아무도 못 찾는다 — 기록도 모델도 없이 시작하는 것이 목표라면
+    #   「다음에 뭘 눌러야 하는지」를 VC 가 말해야 한다(오너 2026-09-24).
+    #   창이 다 선 뒤에 말한다 — 짓는 중에 말하면 첫 인사에 덮인다.
+    from PyQt5.QtCore import QTimer as _때알림
+
+    _때알림.singleShot(1200, win.모델없으면알리기)
+    # ★★ **켤 때 새 판이 있는지 본다.** 딴 실에서 묻고, 있으면 말한다 —
+    #   조용히 갈아 끼우지 않는다(오너 2026-09-24).
+    _때알림.singleShot(3000, win.새판찾기)
     if 화면상태:
         _화면상태재기(app, win)
     code = app.exec_()
     report.trail(f"끔 ({code})")
+    # ★★ **모델을 내리고 끝낸다** — 안 내리면 종료 중에 Metal 이 abort 한다(134).
+    모델내리기(켠서버)
     report.stop_watching()
     return code
 
@@ -371,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
 def _화면상태적기(값: dict) -> None:
     import json
 
-    (paths.data_dir() / "vc-화면상태.json").write_text(
+    (paths.기계자리("vc-화면상태.json")).write_text(
         json.dumps(값, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -462,7 +545,7 @@ def _시험표(argv: list[str]) -> int:
     import json
     import urllib.parse
 
-    자리 = paths.data_dir()
+    자리 = paths.state_dir()   # 시험표도 기계 보고서다 — 기록 폴더에 안 둔다
     폴더 = next((a for a in argv if not a.startswith("-")), "")
     쓸까 = "--쓴다" in argv or "--write" in argv
     줄표: list = []
@@ -968,6 +1051,71 @@ def _self_check() -> None:
     #     (돌리면 76초라 여기서는 안 돌리고, **부를 수 있는지**와 스위치만 본다.)
     assert callable(globals().get("_모두검사")),         "모든 자체점검을 한 번에 도는 길이 없다 — 사람이 외우게 된다"
 
+    # ★★ **구운 판에서만 죽는 자리.** `VC.spec` 의 `hiddenimports` 에 안 적힌 우리 모듈은
+    #   빌드는 되고 **실행할 때** 없다고 죽는다(그 파일 주석이 그렇게 경고한다).
+    #   모듈을 하나 더할 때마다 사람이 그 목록을 기억해야 하는데, 오늘 여섯을 빠뜨렸다.
+    #   그래서 **세지 않고 검사가 잡는다**(2026-09-21).
+    _자리스펙 = pathlib.Path(__file__).resolve().parent
+    _스펙 = _자리스펙 / "VC.spec"
+    if _스펙.exists():
+        _스펙글 = _스펙.read_text(encoding="utf-8", errors="replace")
+        _안적힌 = []
+        for _파일 in sorted(_자리스펙.glob("*.py")):
+            _이름 = _파일.stem
+            if _이름 in ("eb.py", "eb") or _이름.endswith("_check") or _이름.startswith("_"):
+                continue
+            if f'"{_이름}"' not in _스펙글:
+                _안적힌.append(_이름)
+        assert not _안적힌, ("VC.spec 의 hiddenimports 에 없다 — 구운 판에서 죽는다: "
+                          + ", ".join(_안적힌))
+
+        # ★★ **맥이 막는 폴더를 쓰면 문구가 있어야 한다.** 없으면 맥은 **묻지도 않고**
+        #   막고, 우리는 `os.scandir` 에서 통째로 굳는다 — Finder 로 띄운 앱이
+        #   서버도 창도 못 띄운 채 0% 로 매달려 있었다(실기로 잡았다 · 2026-09-24).
+        #   터미널에서는 터미널의 허락을 물려받아 잘 돌아서, **구운 것으로만 나던 탈**이다.
+        _막는폴더 = {"Documents": "NSDocumentsFolderUsageDescription",
+                  "Desktop": "NSDesktopFolderUsageDescription",
+                  "Downloads": "NSDownloadsFolderUsageDescription"}
+        _쓰는자리 = str(paths.data_dir())
+        for _칸, _문구 in _막는폴더.items():
+            if f"/{_칸}/" in _쓰는자리 + "/":
+                assert _문구 in _스펙글, (
+                    f"창고가 {_칸} 안인데 VC.spec 에 {_문구} 가 없다 — "
+                    "맥이 묻지도 않고 막아서 구운 앱이 켜다 굳는다")
+
+    # ★★ **끝내기 전에 모델을 내리는 길이 있어야 한다.** 안 내리면 llama.cpp 의
+    #   Metal 판이 종료 중에 터져 끝난 코드가 134 가 된다(실기로 쟀다 · 2026-09-24).
+    import inspect as _본다끝
+
+    _소스끝 = _본다끝.getsource(main)
+    assert "모델내리기(" in _소스끝, "끝낼 때 모델을 안 내린다 — 종료 중에 abort 한다"
+    assert _소스끝.index("app.exec_()") < _소스끝.index("모델내리기("), \
+        "창이 끝나기 전에 모델을 내린다"
+
+    class _내려간손:
+        def __init__(self):
+            self.내렸나 = False
+
+        def unload(self):
+            self.내렸나 = True
+
+    class _서버흉내:
+        backend = _내려간손()
+
+    _흉내 = _서버흉내()
+    모델내리기(_흉내)
+    assert _흉내.backend.내렸나, "모델을 안 내렸다"
+    모델내리기(None)                     # 서버가 없어도 안 터진다
+
+    class _터지는손:
+        def unload(self):
+            raise RuntimeError("못 내린다")
+
+    class _탈서버:
+        backend = _터지는손()
+
+    모델내리기(_탈서버())                # 못 내려도 끄는 것은 막지 않는다
+
     print("eb self-check 통과")
 
 
@@ -1140,7 +1288,7 @@ if __name__ == "__main__":
                 f"  뜻 벡터는 뒤에서 다시 만든다 — 켜 두면 채워진다"
                 f" (지금 만들 거리 {n.vec_left()}개){chr(10)}"
                 f"  기록(.md)은 안 건드렸다.")
-        (paths.data_dir() / "vc-색인다시.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-색인다시.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
         말하기(said)
         # **일을 마쳤으면 반드시 나간다.** 설치본에서 이 스위치만 할 일을 다 하고도
@@ -1268,9 +1416,9 @@ if __name__ == "__main__":
                           f" (새 이름이 이미 있는 것들이다): {', '.join(못바꾼[:3])}")
 
         n.conn.close()
-        (paths.data_dir() / "vc-판올리기.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-판올리기.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:12]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-판올리기.txt'}")
+               + f"  적었다: {paths.기계자리('vc-판올리기.txt')}")
         os._exit(0)
 
     if "--휴지통" in sys.argv:
@@ -1303,9 +1451,9 @@ if __name__ == "__main__":
             줄.append(f"  … 앞 40개만 보였다 (모두 {보인}개)")
         줄 += ["", "  되살리려면 그 파일을 글 폴더로 옮겨라 — 파일이 곧 항목이다.",
                f"  글 폴더: {paths.notes_dir()}"]
-        (paths.data_dir() / "vc-휴지통.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-휴지통.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:12]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-휴지통.txt'}")
+               + f"  적었다: {paths.기계자리('vc-휴지통.txt')}")
         os._exit(0)
 
     if "--사본치우기" in sys.argv:
@@ -1435,9 +1583,9 @@ if __name__ == "__main__":
                    f"  남은 항목: {n.conn.execute('SELECT count(*) FROM notes').fetchone()[0]}장"]
 
         n.conn.close()
-        (paths.data_dir() / "vc-사본치움.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-사본치움.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[:14]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-사본치움.txt'}")
+               + f"  적었다: {paths.기계자리('vc-사본치움.txt')}")
         os._exit(0)
 
     if "--찾기점수" in sys.argv or "--score" in sys.argv:
@@ -1461,7 +1609,7 @@ if __name__ == "__main__":
                 건너뛸 = True
             elif not a.startswith("-"):
                 준것.append(a)
-        물음표 = Path(준것[0]) if 준것 else (paths.data_dir() / "찾기물음.txt")
+        물음표 = Path(준것[0]) if 준것 else (paths.기계자리("찾기물음.txt"))
         if not 물음표.exists():
             말하기(f"물음 파일이 없다: {물음표}{chr(10)}"
                    f"  한 줄에 하나씩 「물음 | 정답 제목」 꼴로 적어 두면 된다.")
@@ -1563,10 +1711,10 @@ if __name__ == "__main__":
         said = (f"물음 {센것}개 · 1등 {일등} · 3등 안 {셋안} · 목록 밖 {밖}"
                 f" · {clock.perf_counter() - t0:.1f}초{재는자리}{뺌}{chr(10)}{chr(10)}"
                 + chr(10).join(줄))
-        (paths.data_dir() / "vc-찾기점수.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-찾기점수.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
         말하기(said.split(chr(10))[0] + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-찾기점수.txt'}")
+               + f"  적었다: {paths.기계자리('vc-찾기점수.txt')}")
         os._exit(0)
 
     if "--흡수" in sys.argv or "--ingest" in sys.argv:
@@ -1662,7 +1810,7 @@ if __name__ == "__main__":
         except Exception as e:
             줄 += ["", f"★ 비싼 문지기를 못 돌렸다: {type(e).__name__}: {e}",
                    "  문지기 없이 쌓으면 과정 소음이 그대로 항목이 된다. 안 쓴다."]
-            (paths.data_dir() / "vc-흡수.txt").write_text(chr(10).join(줄),
+            (paths.기계자리("vc-흡수.txt")).write_text(chr(10).join(줄),
                                                           encoding="utf-8")
             # ★ **센 것을 오류 옆에 다시 놓는다.** 멈춘 재도 「내 파일을 몇 장 봤나」는
             # 알아야 한다 — 막이는 쓰는 것을 막아야지 보는 것을 막으면 안 된다.
@@ -1778,9 +1926,9 @@ if __name__ == "__main__":
             if 잃은:
                 줄.append(f"  ★ 쓴 것보다 는 것이 적다 — {잃은}개가 겹쳐 덮였다.")
 
-        (paths.data_dir() / "vc-흡수.txt").write_text(chr(10).join(줄), encoding="utf-8")
+        (paths.기계자리("vc-흡수.txt")).write_text(chr(10).join(줄), encoding="utf-8")
         말하기(chr(10).join(줄[-6:]) + chr(10)
-               + f"  적었다: {paths.data_dir() / 'vc-흡수.txt'}")
+               + f"  적었다: {paths.기계자리('vc-흡수.txt')}")
         os._exit(0)
 
     if "--이음선" in sys.argv or "--links" in sys.argv:
@@ -1801,9 +1949,9 @@ if __name__ == "__main__":
         줄 += ["", "== 카드 줄(내가 꼽은 1등) =="]
         줄 += [f"  {t}  →  {v[0] if v else '(없음)'}" for t, v in sorted(길.items())]
         said = chr(10).join(줄)
-        (paths.data_dir() / "vc-이음선.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-이음선.txt")).write_text(said, encoding="utf-8")
         n.conn.close()
-        말하기(줄[0] + chr(10) + f"  적었다: {paths.data_dir() / 'vc-이음선.txt'}")
+        말하기(줄[0] + chr(10) + f"  적었다: {paths.기계자리('vc-이음선.txt')}")
         os._exit(0)
 
     if "--재보기" in sys.argv or "--bench" in sys.argv:
@@ -1832,7 +1980,7 @@ if __name__ == "__main__":
                 f"  제일 빠른 것 {min(잰다):.0f} ms · 제일 느린 것 {max(잰다):.0f} ms{chr(10)}"
                 f"  뜻 벡터 {n.conn.execute('SELECT count(*) FROM vectors').fetchone()[0]}개"
                 f" · 아직 못 만든 것 {n.vec_left()}개 · 본문이 빈 항목 {빈것}개")
-        (paths.data_dir() / "vc-재보기.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-재보기.txt")).write_text(said, encoding="utf-8")
         말하기(said)
         raise SystemExit(0)
 
@@ -1840,7 +1988,7 @@ if __name__ == "__main__":
         # **일부러 예외를 500번 낸다.** 같은 예외가 쏟아져도 로그가 안 부푸는지
         # 낯선 PC 에서 직접 재 보라고 둔 스위치다 — 5차 시험에서 예외가 한 건도
         # 안 나서 그 방어가 실제로 도는지 못 봤다.
-        death = paths.data_dir() / report.DEATH
+        death = paths.기계자리(report.DEATH)
         before = death.stat().st_size if death.exists() else 0
         for _ in range(500):
             try:
@@ -1852,7 +2000,7 @@ if __name__ == "__main__":
                 f"  죽음 기록 {before} -> {after} 바이트 (늘어난 것 {after - before})"
                 f"{chr(10)}  막지 않았다면 수십 KB 가 됐어야 한다.{chr(10)}"
                 f"  파일: {death}")
-        (paths.data_dir() / "vc-예외시험.txt").write_text(said, encoding="utf-8")
+        (paths.기계자리("vc-예외시험.txt")).write_text(said, encoding="utf-8")
         말하기(said)
         raise SystemExit(0)
 
@@ -1871,6 +2019,7 @@ if __name__ == "__main__":
             "모델 있나": (m / "model.onnx").exists(),
             "낱말표 있나": (m / "tokenizer.json").exists(),
             "기록 자리": str(paths.data_dir()),
+            "앱 자리": str(paths.state_dir()),
             "런타임 붙듦": pin_runtime(),
             # 목소리 모델을 못 찾으면 윈도 기본 목소리로 조용히 내려앉는다 — 원격에서 볼 길이 여기뿐이다
             "목소리 모델 있나": any((m / "piper").glob("*.onnx")) if (m / "piper").is_dir() else False,
@@ -1948,7 +2097,7 @@ if __name__ == "__main__":
                 report["★ 기록 자리"] = 쪽지문제
             report["AI 가 붙는 법"] = (
                 f"GET http://127.0.0.1:{PORT}/eb/v1/hello · "
-                f"헤더 Authorization: Bearer <{paths.data_dir() / 'eb_config.json'} 의 pair_token> "
+                f"헤더 Authorization: Bearer <{paths.config_path()} 의 pair_token> "
                 "· hello 가 나머지 쓰는 법을 다 알려 준다")
             report["  그중 흐린 선"] = 셈("SELECT count(*) FROM links WHERE 흐림 = 1")
             report["뜻 벡터 수"] = 셈("SELECT count(*) FROM vectors")
@@ -1966,8 +2115,7 @@ if __name__ == "__main__":
             #   같은 창고에서 찾은 물음이 10 → 12 였다(오너 창고 2794장·얼린 물음 20개,
             #   2026-09-13). 받으면 `meaning_dir()` 이 저절로 그걸 고른다 — 설정은 없다.
             #   안 받았으면 그 사실을 여기서 말한다. 안 그러면 있는 줄도 모른다.
-            큰모델 = paths.models_dir() / "e5-base"
-            if not (큰모델 / "model.onnx").is_file():
+            if paths.meaning_dir("e5-base").name != "e5-base":      # exe 옆에 받은 것까지 본다
                 report["더 잘 찾으려면"] = (
                     "큰 뜻 모델 e5-base 를 받아라 (296MB · 화면 「받을 모델」 칸). "
                     "[잰 것] 같은 창고에서 찾은 물음 10 → 12. 받으면 저절로 쓴다")
@@ -1995,7 +2143,7 @@ if __name__ == "__main__":
             report["임베더 됨"] = onnx_embedder(m) is not None
         except BaseException as err:
             report["임베더 오류"] = f"{type(err).__name__}: {err}"
-        out = paths.data_dir() / "vc-진단.json"
+        out = paths.기계자리("vc-진단.json")
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         말하기(json.dumps(report, ensure_ascii=False, indent=2))
         raise SystemExit(0)

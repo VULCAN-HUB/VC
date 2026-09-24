@@ -39,7 +39,8 @@ START_LEVEL = 0.012  # 이 크기를 넘으면 말이 시작된 것으로 본다
 
 # 마이크마다 감도가 다르다. 기본값은 어디선가 반드시 틀린다 — 재서 저장한 값이 있으면
 # 그걸 쓴다(`mic_tune.py --apply`가 만든다).
-MIC_TUNING = paths.data_dir() / "mic.json"
+# 시험이 바꿔 끼운다 — **비어 있으면 부를 때 앱 자리를 본다**(불러올 때 정하면 옛 창고 옮기기 전 자리에 박힌다).
+MIC_TUNING: Path | None = None
 
 # 답한 직후 이만큼은 호출어 없이 받는다. 사람은 한 번 부르고 여러 마디 이어 말한다 —
 # 매번 호출어를 요구하면 대화가 아니라 명령 입력이 된다.
@@ -49,7 +50,7 @@ FOLLOWUP_SEC = 12
 def _load_tuning() -> None:
     global START_LEVEL, SILENCE_SEC
     try:
-        saved = json.loads(MIC_TUNING.read_text(encoding="utf-8"))
+        saved = json.loads((MIC_TUNING or paths.기계자리("mic.json")).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     START_LEVEL = float(saved.get("start_level", START_LEVEL))
@@ -76,6 +77,12 @@ WAKE_FORMS = (
     "브이카", "브이카는", "불카는",
     # 브이씨 계열 — 로마자로 온다
     "브이씨", "브이 씨", "브이씨야", "브이씨의", "VC", "VCR", "V씨", "비씨", "뷔씨",
+    # 맥에서 잰 것(2026-09-15 입→귀 왕복). 목소리가 윈도우와 달라 **점 찍힌 꼴**이 나온다:
+    #   VC · Vc · 브이씨 · VC5는 → 다 걸렸고, **`B.C.` 만 표에 없어서 흘렀다.**
+    # 한글 꼴만 적어 뒀으면 못 걸렸을 것이라는 위 발견이 맥에서 한 번 더 확인됐다.
+    # ※ 옆의 `BC`·`B씨` 도 넣고 싶었지만 **본 적이 없어서 안 넣는다** — 이 표는
+    #   짐작이 아니라 실제로 돌아온 꼴만 적는 자리다.
+    "B.C.",
 )
 
 # **이것만 말했을 때에만** 호출로 친다. `PC`는 너무 흔해서 꼴에 넣으면
@@ -88,7 +95,9 @@ WAKE_ALONE = ("PC", "피씨", "피시", "비시")
 # **"불 켜"·"불 꺼"를 호출어 꼴에 넣으면 안 된다.** 실제 지시어라서, 넣는 순간
 # 불을 켜라는 말이 전부 호출로 먹힌다 — 그래서 받침이 ㄴ인 꼴만 태운다.
 NOT_WAKE = ("발칸반도", "발칸포", "불칸반도", "브이로그", "비씨카드",
-            "PC방", "피시방", "피씨방", "VCR테이프")
+            "PC방", "피시방", "피씨방", "VCR테이프",
+            # `B.C.` 를 호출어 꼴에 넣었으니 그 꼴로 오는 흔한 말도 같이 막는다.
+            "B.C.카드")
 
 
 _load_tuning()
@@ -204,7 +213,9 @@ class Mouth:
     def _load_piper(self) -> bool:
         if Mouth._piper is not None:
             return True
-        models = sorted(self.piper_dir.glob("*.onnx")) if self.piper_dir.is_dir() else []
+        # 받은 목소리는 exe 옆(`paths.fetched_dir()`)에 들어간다 — 딸려 온 자리와 둘 다 본다
+        곳들 = dict.fromkeys((self.piper_dir, paths.fetched_dir() / "piper"))
+        models = sorted(m for 곳 in 곳들 if 곳.is_dir() for m in 곳.glob("*.onnx"))
         if self.model_name:
             # 고른 게 사라졌으면 조용히 첫 번째로 되돌아간다 — 그것 때문에 벙어리가 되면 안 된다.
             models = [m for m in models if m.stem == self.model_name] or models
@@ -633,19 +644,34 @@ def _self_check() -> None:
                 return
             assert wav.stat().st_size > 1000, "소리가 안 담겼다"
 
-            t = time.time()
-            heard = ears.transcribe(wav)
-            took = time.time() - t
-            woke, order = heard_wake(heard)
-            like = difflib.SequenceMatcher(
-                None, "오늘 일정 알려줘", order.strip(" .!?~")).ratio()
-            print(f"  {said!r} → {heard!r}  ({took:.1f}s)")
-            print(f"    깨움={woke}  지시={order!r}  닮음={like:.2f}")
+            # ★★ **브이씨도 흘린다.** `--모두검사` 로 기계가 바쁠 때 「빛이 오늘 일정
+            #   알려줘」로 받아써서 한 번 빨개졌다(2026-09-21). 단독으로는 세 번 다 통과했다.
+            #   **흔들리는 검사는 깨진 검사보다 나쁘다** — 사람이 빨간 것을 무시하게 된다.
+            #   그래서 세 번까지 다시 불러 본다. 호출어 판정이 **진짜** 망가졌으면 세 번 다
+            #   흘리므로 검사의 힘은 그대로다. 흘린 사실은 아래에 찍어 둔다.
+            시도 = []
+            for 번 in range(3 if must else 1):
+                if 번:
+                    mouth.to_wav(said, wav)      # 같은 말을 다시 낸다
+                t = time.time()
+                heard = ears.transcribe(wav)
+                took = time.time() - t
+                woke, order = heard_wake(heard)
+                like = difflib.SequenceMatcher(
+                    None, "오늘 일정 알려줘", order.strip(" .!?~")).ratio()
+                print(f"  {said!r} → {heard!r}  ({took:.1f}s)")
+                print(f"    깨움={woke}  지시={order!r}  닮음={like:.2f}")
+                시도.append(woke)
+                if woke:
+                    break
 
             assert heard, "받아쓰기가 빈 문자열이다"
             if must:
-                assert woke, f"'{name}'을 불렀는데 못 알아들었다: {heard}"
+                assert any(시도), \
+                    f"'{name}'을 {len(시도)}번 불렀는데 다 못 알아들었다: {heard}"
                 assert order, f"호출어만 떼고 나니 지시가 없다: {heard}"
+                if len(시도) > 1:
+                    print(f"    (참고: {len(시도)}번째에 알아들었다 — 이번 판은 흔들렸다)")
             elif not woke:
                 print(f"    (참고: '{name}'이 이번엔 흘렀다 — 측정치 3/4)")
 

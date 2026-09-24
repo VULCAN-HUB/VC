@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import errno
 import os
 import re
 import sys
@@ -26,7 +27,7 @@ APP_NAME = "VC"
 # 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
 # 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
 # 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
-VERSION = "0.5.18"
+VERSION = "0.5.19"
 
 
 def _qt_runtime_first() -> bool:
@@ -88,6 +89,63 @@ _PINNED = False
 _PINNED = pin_runtime()
 
 
+def qt_plugins_dir() -> Path | None:
+    """PyQt5 가 들고 온 플러그인 폴더(`PyQt5/Qt5/plugins`). 없으면 None.
+
+    **PyQt5 를 여기서 불러오지 않는다.** `pin_runtime()` 이 「Qt 가 먼저 올라왔는가」로
+    판단하므로, 이 파일을 불러오는 것만으로 Qt 가 올라오면 윈도우의 런타임 붙들기가
+    통째로 망가진다. 이미 올라와 있을 때만 그 자리를 알려 준다.
+    """
+    mod = sys.modules.get("PyQt5")
+    if mod is None or not getattr(mod, "__file__", None):
+        return None
+    곳 = Path(mod.__file__).parent / "Qt5" / "plugins"
+    return 곳 if 곳.is_dir() else None
+
+
+_QT_PINNED = False
+
+
+def pin_qt_plugins() -> bool:
+    """Qt 플러그인 자리를 **파이썬 글자 그대로** 박는다. 창을 만들기 전에 부른다.
+
+    ★★ **경로에 한글이 있으면 Qt 가 제 플러그인 자리를 스스로 못 찾는다.**
+    맥에서 `~/프로젝트/VC` 로 풀고 돌리자 창 띄우는 모듈 일곱이 통째로 죽었다:
+
+        PluginsPath: /Users/…/????/VC/pc/…/PyQt5/Qt5/plugins
+        qt.qpa.plugin: Could not find the Qt platform plugin "cocoa" in ""
+
+    Qt 가 제 설치 자리를 **8비트 글자로 되돌리면서** 한글을 `?` 로 버린다. 그런 폴더는
+    없으니 `cocoa` 도 `offscreen` 도 못 찾고, 자체점검까지 다 터진다. `LANG` 을 UTF-8 로
+    줘도 안 고쳐진다 — 되돌리는 자리가 로캘보다 앞이다.
+
+    `addLibraryPath()` 에는 **파이썬 글자를 그대로** 넘길 수 있어 8비트를 거치지 않는다.
+    그래서 한글 자리가 살아서 들어간다. 환경 변수(`QT_QPA_PLATFORM_PLUGIN_PATH`)로는
+    같은 병을 다시 밟는다 — 그쪽도 8비트로 읽힌다.
+
+    여러 번 불러도 된다. 참을 주면 자리를 박았거나 이미 박혀 있다는 뜻이다.
+    """
+    global _QT_PINNED
+    if _QT_PINNED:
+        return True
+    # ★ **PyQt5 를 여기서 직접 올린다.** 「이미 올라와 있으면」으로 두었더니, 부르는
+    #   자리가 `import PyQt5` 보다 한 줄 앞이면 **아무 말 없이 아무것도 안 했다** —
+    #   그리고 창은 그대로 안 떴다. 부르는 쪽은 어차피 곧 Qt 를 쓴다.
+    #   (`pin_runtime()` 은 이 파일을 불러오는 순간 이미 끝났으므로 늦지 않는다.)
+    import PyQt5        # noqa: F401
+    from PyQt5.QtCore import QCoreApplication
+
+    곳 = qt_plugins_dir()
+    if 곳 is None:
+        return False        # 구운 판은 PyInstaller 가 제 길로 넣는다
+
+    자리 = str(곳)
+    if 자리 not in QCoreApplication.libraryPaths():
+        QCoreApplication.addLibraryPath(자리)
+    _QT_PINNED = 자리 in QCoreApplication.libraryPaths()
+    return _QT_PINNED
+
+
 def frozen() -> bool:
     """설치본으로 도는 중인가."""
     return getattr(sys, "frozen", False)
@@ -120,15 +178,31 @@ def gguf_dir() -> Path:
     - 그렇다고 `models_dir()` 을 exe 옆으로 옮기면 **딸려 온 뜻 벡터 모델이
       안 보이게 된다.** 실제로 한 번 그렇게 고쳤다가 되돌렸다.
 
-    그래서 여기만 **exe 옆 `models` 를 먼저 보고**, 없으면 딸려 온 자리로 내려간다.
+    그래서 여기는 **exe 옆 `models`**(`fetched_dir()`) 를 쓴다. 딸려 온 뜻·목소리 모델은
+    `models_config.installed` · `meaning_dir` 가 두 자리를 다 보므로 안 사라진다.
+    같은 판에서 전에 프로그램 속에 받아 둔 gguf 만 있으면 그리로 내려간다.
+    """
+    곁 = fetched_dir()
+    if frozen() and not (곁.is_dir() and any(곁.glob("*.gguf"))) and any(models_dir().glob("*.gguf")):
+        return models_dir()
+    return 곁
+
+
+def fetched_dir() -> Path:
+    """**내려받은 모델**이 들어가는 자리 — 새 판을 덮어 풀어도 남아야 한다.
+
+    ★★ 전엔 받은 것이 `_internal/models`(프로그램 속)에 들어가 **판을 올리면 지워졌다** —
+    v0.5.18 을 실무 폴더에 풀자 받아 둔 e5-base(296MB)가 사라지고 뜻 벡터가 작은 모델 폭으로
+    통째로 다시 만들어졌다(찾음 12 → 4/20). 설치본은 exe 옆 `models`, 소스로 돌 때는 `models_dir()`.
     """
     if env := os.environ.get("VC_MODELS"):
         return Path(env)
-    if frozen():
-        곁 = Path(sys.executable).parent / "models"
-        if any(곁.glob("*.gguf")) if 곁.is_dir() else False:
-            return 곁
-    return models_dir()
+    if not frozen():
+        return models_dir()
+    if sys.platform == "darwin":
+        # ★ 맥에서 「exe 옆」은 `VC.app/Contents/MacOS` — **앱 속**이라 앱을 바꾸면 같이 지워진다.
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "models"
+    return Path(sys.executable).parent / "models"
 
 
 # 뜻 검색에 쓸 모델을 고르는 차례. **받은 것이 딸린 것보다 먼저다.**
@@ -160,9 +234,10 @@ def meaning_dir(고른것: str = "") -> Path:
         # 「딸려 온 것 (e5-small)」 처럼 꾸민 이름이면 뿌리를 가리킨다.
         차례.insert(0, "" if 고른것.startswith("딸려 온 것") else 고른것)
     for name in 차례:
-        here = root / name if name else root
-        if (here / "model.onnx").is_file() and (here / "tokenizer.json").is_file():
-            return here
+        # 받은 것(이름 폴더)은 받은 자리 먼저 — 같은 판에서 전에 프로그램 속에 받은 것도 본다. 딸려 온 것은 뿌리.
+        for here in ([fetched_dir() / name, root / name] if name else [root]):
+            if (here / "model.onnx").is_file() and (here / "tokenizer.json").is_file():
+                return here
     return root
 
 
@@ -187,6 +262,40 @@ def documents_dir() -> Path:
     return Path(os.path.expanduser("~")) / "Documents"
 
 
+_검사자리: Path | None = None
+_가둘까 = True          # 검사 안에서 「쪽지가 이기는지」를 잴 때만 잠시 끈다
+
+
+def 검사중인가() -> bool:
+    """이 프로세스가 **자체점검**으로 돌고 있나.
+
+    ★★ 자체점검이 **진짜 자리를 건드리면 안 된다.** 실제로 그랬다(2026-09-21):
+       `server` 검사가 진짜 `eb_config.json` 을 읽고 쓰는데, 그 사이 떠 있던 VC 가
+       반쯤 쓰인 파일을 읽고 **「설정이 깨졌다」며 새로 만들었다**(자국에 남았다:
+       「폰은 다시 짝지어야 한다」). `eb.db` 도 같은 식으로 「깨져서 옆에 치웠다」.
+       검사 한 번에 **쓰던 사람의 VC 가 망가진다** — 그것도 조용히.
+
+    ★ 전에는 안 났다. 소스로 돌 때 자리가 `Path.cwd()` 라 검사가 소스 폴더에 떨어졌기
+      때문이다. `기록자리.txt` 로 창고를 못 박으면서 **검사도 진짜 자리를 쓰게 됐다.**
+
+    `paths` 는 모든 모듈이 들여오므로 **여기 한 자리**에서 가둔다.
+    """
+    return _가둘까 and "--check" in sys.argv[1:]
+
+
+def _가둔자리() -> Path:
+    """검사가 쓸 임시 자리. 프로세스마다 하나, 끝나면 지운다."""
+    global _검사자리
+    if _검사자리 is None:
+        import atexit
+        import shutil
+        import tempfile
+
+        _검사자리 = Path(tempfile.mkdtemp(prefix="vc-검사-"))
+        atexit.register(lambda: shutil.rmtree(_검사자리, ignore_errors=True))
+    return _검사자리
+
+
 def data_dir() -> Path:
     """기록·색인·설정이 사는 자리. 없으면 만든다.
 
@@ -195,6 +304,8 @@ def data_dir() -> Path:
     """
     if env := os.environ.get("VC_DATA"):
         here = Path(env)
+    elif 검사중인가():
+        here = _가둔자리() / "기록"      # 검사는 진짜 창고를 안 건드린다
     elif (적힌 := _적어둔자리()) is not None:
         here = 적힌
     elif frozen():
@@ -208,6 +319,137 @@ def data_dir() -> Path:
         here = Path.cwd()
     here.mkdir(parents=True, exist_ok=True)
     return here
+
+
+def _앱자리기본() -> Path:
+    """구운 판이 **기계 파일**을 두는 운영체제 자리. 맥 Application Support · 윈도우 LOCALAPPDATA."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / APP_NAME
+    base = os.environ.get("XDG_STATE_HOME")
+    return (Path(base) if base else Path.home() / ".local" / "state") / APP_NAME
+
+
+def state_dir() -> Path:
+    """**기계 파일**(db · 설정 열쇠 · 로그 · 보고서 · 결과물 · 테마)이 사는 자리. 없으면 만든다.
+
+    ★★ 기록 자리는 **사람이 여는 폴더**다(옵시디언·파일 앱) — 오너 결정(2026-09-15): 메모만 둔다.
+    전에는 db·열쇠·로그 20여 가지가 글과 섞였고, 맥 문서 폴더는 iCloud 로 동기화돼
+    **열쇠와 db 가 올라가고** 「저장 공간 최적화」가 db 를 내리면 색인이 깨질 수 있었다.
+
+    차례: `VC_STATE` → `VC_DATA` 를 줬으면 **기록 자리를 따른다**(시험이 진짜 자리를 못 건드리게) →
+    구운 판이거나 `기록자리.txt` 를 쓰면 운영체제 앱 자리 → 소스로 돌면 기록 자리(개발 흐름 그대로).
+    """
+    if env := os.environ.get("VC_STATE"):
+        here = Path(env)
+    elif 검사중인가() and not os.environ.get("VC_DATA"):
+        here = _가둔자리() / "기계"      # 설정·db·열쇠도 진짜 것을 안 건드린다
+    elif os.environ.get("VC_DATA"):
+        here = data_dir()
+    elif frozen() or _적어둔자리() is not None:
+        here = _앱자리기본()
+    else:
+        here = data_dir()
+    here.mkdir(parents=True, exist_ok=True)
+    return here
+
+
+def 기계자리(이름: str) -> Path:
+    """기계 파일 하나의 자리. **앱 자리에 없고 옛 기록 자리에만 있으면 옛 자리를 준다.**
+
+    옮기기가 확인에 실패해 원본을 남겼을 때도 VC 가 그대로 돌게 하는 되돌림이다 —
+    아무것도 안 사라지고, 다음에 켤 때 다시 옮겨 본다.
+    """
+    새 = state_dir() / 이름
+    옛 = data_dir() / 이름
+    if 새 != 옛 and not 새.exists() and 옛.exists():
+        return 옛
+    return 새
+
+
+# 옛 기록 자리에서 앱 자리로 옮길 기계 파일. **글(`data/notes`) · 첨부 · 휴지통은 여기 없다** — 사람 것이다.
+기계파일들 = (
+    "notes_index.db", "eb.db", "eb_config.json", "theme.json", "mic.json",
+    "vc-기록.log", "vc-죽음.log", "vc-오류.txt", "vc-메모리.json", "vc-화면상태.json", "vc-자전.json",
+    "vc-진단.json", "vc-스스로짐작.txt", "vc-색인다시.txt", "vc-판올리기.txt", "vc-휴지통.txt",
+    "vc-사본치움.txt", "vc-찾기점수.txt", "vc-흡수.txt", "vc-이음선.txt", "vc-재보기.txt",
+    "vc-예외시험.txt", "찾기물음.txt",
+    "data/talk.jsonl", "data/recordings", "data/artifacts",
+)
+
+
+def _옮긴것확인(옛: Path, 새: Path, 옛크기: tuple[int, int]) -> bool:
+    """사본이 원본만큼 멀쩡한가. db 는 열어서 검사, json 은 읽어 보고, 나머지는 크기를 댄다."""
+    import json as _j
+
+    if 새.is_dir():
+        파일 = [f for f in 새.rglob("*") if f.is_file()]
+        return (len(파일), sum(f.stat().st_size for f in 파일)) == 옛크기
+    if 새.stat().st_size != 옛크기[1]:
+        return False
+    if 새.suffix == ".db":
+        con = _sq.connect(f"file:{새}?mode=ro", uri=True)
+        try:
+            return con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        finally:
+            con.close()
+    if 새.suffix == ".json":
+        _j.loads(새.read_text(encoding="utf-8"))
+    return True
+
+
+def 기계파일옮기기() -> dict:
+    """옛 기록 자리의 기계 파일을 앱 자리로 **복사 → 확인 → 원본 지움**(오너 결정 2026-09-15). 켤 때 한 번.
+
+    ★ **혼자 켜기 잠금을 잡은 뒤, db 를 열기 전에** 부른다 — 열린 db 를 옮기면 반쪽이 된다.
+    확인에 실패하면 반쪽 사본을 치우고 **원본은 그대로 둔다** — `기계자리()` 가 옛 자리를 계속 준다.
+    앱 자리에 이미 있는 것은 건드리지 않는다(두 번 불러도 같다).
+    """
+    import shutil
+
+    새곳, 옛곳 = state_dir(), data_dir()
+    결과: dict = {"옮김": [], "남김": [], "이미": []}
+    if 새곳.resolve() == 옛곳.resolve():
+        return 결과
+    for 이름 in 기계파일들:
+        옛, 새 = 옛곳 / 이름, 새곳 / 이름
+        if not 옛.exists():
+            continue
+        if 새.exists():
+            결과["이미"].append(이름)
+            continue
+        딸림 = [옛.with_name(옛.name + 끝) for 끝 in ("-wal", "-shm")] if 이름.endswith(".db") else []
+        딸림 = [f for f in 딸림 if f.exists()]
+        try:
+            새.parent.mkdir(parents=True, exist_ok=True)
+            if 옛.is_dir():
+                파일 = [f for f in 옛.rglob("*") if f.is_file()]
+                옛크기 = (len(파일), sum(f.stat().st_size for f in 파일))
+                shutil.copytree(옛, 새)
+            else:
+                옛크기 = (1, 옛.stat().st_size)
+                for f in 딸림:
+                    shutil.copy2(f, 새.with_name(f.name))
+                shutil.copy2(옛, 새)
+            if not _옮긴것확인(옛, 새, 옛크기):
+                raise ValueError("사본이 원본과 다르다")
+        except (OSError, ValueError, _sq.Error) as e:
+            if 새.is_dir():
+                shutil.rmtree(새, ignore_errors=True)
+            else:
+                for f in [새, *[새.with_name(d.name) for d in 딸림]]:
+                    f.unlink(missing_ok=True)
+            결과["남김"].append(f"{이름}: {type(e).__name__}")
+            continue
+        if 옛.is_dir():
+            shutil.rmtree(옛, ignore_errors=True)
+        else:
+            for f in [옛, *딸림]:
+                f.unlink(missing_ok=True)
+        결과["옮김"].append(이름)
+    return 결과
 
 
 SPOT = "기록자리.txt"
@@ -233,6 +475,13 @@ def _적어둔자리() -> Path | None:
     if frozen():
         찾을자리.append(Path(sys.executable).parent / SPOT)   # 사람이 놓는 자리
     찾을자리.append(app_dir() / SPOT)                        # 딸린 것 옆(_internal)
+    # ★★ **앱 자리에도 둘 수 있다.** 맥에서는 위 두 자리가 **`.app` 껍데기 안**이라
+    #   앱을 새로 깔면 쪽지가 통째로 사라진다 — 그러면 창고가 조용히 제자리로
+    #   돌아가고, 쓰는 사람 눈엔 기록이 없어진 것이 된다. 창고를 NAS·공유 폴더에
+    #   두고 여러 기계로 이어서 일할 때 바로 걸릴 자리다(오너 2026-09-24).
+    # ★ 여기는 고리가 안 생긴다 — `_앱자리기본()` 은 운영체제만 보고 정해서
+    #   쪽지를 읽지 않는다(`state_dir()` 을 쓰면 서로를 불러 돈다).
+    찾을자리.append(_앱자리기본() / SPOT)
     try:
         적힌 = ""
         for 쪽지 in 찾을자리:
@@ -288,7 +537,32 @@ def only_one(data: Path | None = None) -> bool:
     global _LOCK
     if _LOCK is not None:
         return True
-    where = (data or data_dir()) / "vc-혼자.lock"
+    if data is None and state_dir() != data_dir():
+        # 잠금 파일도 기계 파일이라 앱 자리에 둔다. **기록 자리마다 따로 잠그는 뜻**은 이름에 자리 지문을 넣어 지킨다.
+        import hashlib
+        지문 = hashlib.sha1(str(data_dir().resolve()).encode("utf-8")).hexdigest()[:10]
+        where = state_dir() / f"vc-혼자-{지문}.lock"
+    else:
+        where = (data or data_dir()) / "vc-혼자.lock"
+    if os.name != "nt":
+        # ★ 맥·리눅스는 **열린 파일도 지워진다** — 아래 윈도우 방식이면 둘째가 앞엣것의 잠금을 지우고 같이 떴다.
+        #   flock 은 여는 것마다 따로라 같은 프로세스 안에서도 둘째를 막는다(자체점검과 같은 뜻).
+        import fcntl
+
+        try:
+            f = where.open("a+", encoding="utf-8")
+        except OSError:
+            return True        # 못 잠그면 막지는 않는다. 안 켜지는 것이 더 나쁘다
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return False
+        f.truncate(0)
+        f.write(str(os.getpid()))
+        f.flush()
+        _LOCK = f
+        return True
     try:
         # 이미 열려 있으면 윈도우가 못 지운다 — 그것으로 남이 쓰는지 안다.
         if where.exists():
@@ -305,16 +579,84 @@ def only_one(data: Path | None = None) -> bool:
     return True
 
 
+# ★★ **맥은 문서·바탕화면 폴더를 권한으로 막는다.** Finder 로 띄운 앱은 허락이 날
+#   때까지 `opendir` 안에서 **통째로 멈춘다** — 창도 서버도 안 뜬 채 0% 로 매달렸고,
+#   아무 말도 안 남아서 무엇이 막혔는지 알 길이 없었다(실기로 잡았다 · 2026-09-24).
+#   터미널로 돌리면 터미널의 허락을 물려받아 잘 돌아, **구운 것으로만 나던 탈**이다.
+막힘기다림 = 5.0
+
+
+def 창고막혔나(자리: Path | None = None, 초: float = 막힘기다림) -> str:
+    """창고 자리를 읽을 수 있나. 읽히면 빈 글, 아니면 **사람이 할 일 한 줄.**
+
+    ★ 재는 것 자체가 막히므로 **딴 실에서** 재고 시간을 끊는다 — 여기서 같이 멈추면
+      재는 뜻이 없다. 딴 실은 남겨 둔다(끊을 수 없는 시스템 부름 안에 있다).
+    """
+    import threading
+
+    자리 = Path(자리) if 자리 else notes_dir()
+    난것: dict[str, object] = {}
+
+    def 본다() -> None:
+        try:
+            next(os.scandir(자리), None)
+            난것["됐다"] = True
+        except StopIteration:
+            난것["됐다"] = True
+        except OSError as e:
+            난것["탈"] = e
+
+    실 = threading.Thread(target=본다, daemon=True)
+    실.start()
+    실.join(초)
+    if 난것.get("됐다"):
+        return ""
+    if isinstance(난것.get("탈"), OSError):
+        탈 = 난것["탈"]
+        # ★★ **아직 없는 것은 막힌 것이 아니다.** 새 기계 첫 실행에는 창고 폴더가
+        #   없다 — VC 가 곧 만든다. 그걸 「못 읽는다」고 했더니 **처음 켜는 사람에게
+        #   겁부터 주는 꼴**이었다(실기로 잡았다 · 2026-09-24).
+        if getattr(탈, "errno", 0) == errno.ENOENT:
+            return ""
+        if getattr(탈, "errno", 0) not in (errno.EPERM, errno.EACCES):
+            return f"창고를 못 읽는다: {탈}"
+    어디 = 자리.parts[3] if len(자리.parts) > 3 else "그 폴더"
+    # ★★ **기계마다 할 말이 다르다.** 맥 설정 이름을 윈도우에서 읊으면 엉뚱한 데를
+    #   찾게 된다 — 셋(윈도우·맥·폰)을 다 쓰는 물건이라 여기서 갈라야 한다.
+    if sys.platform == "darwin":
+        길 = ("화면에 허락을 묻는 창이 떴으면 «허용»을 누르고, 안 떴으면 "
+             "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 에서 VC 를 켜라.")
+    elif os.name == "nt":
+        길 = ("그 폴더가 딴 프로그램에 잡혀 있거나(백신·클라우드 동기화) 권한이 없다. "
+             "폴더 속성 → 보안 에서 쓰기를 열거나, 창고 자리를 딴 곳으로 옮겨라.")
+    else:
+        길 = "그 폴더의 권한을 확인해라."
+    return f"「{어디}」 폴더를 못 열어 창고({자리})를 못 읽는다. " + 길
+
+
+def 일터() -> Path:
+    """프로젝트를 안 열었을 때 바깥 AI 가 설 자리.
+
+    ★★ 전에는 프로젝트가 없으면 **아무 일도 안 했다** — 「창고에 적어 둬」처럼
+       프로젝트와 상관없는 일까지 막혔다(오너가 짚었다 · 2026-09-24).
+       일할 자리는 있어야 하니 **기계 자리 안에** 빈 방을 하나 둔다.
+    ★ 창고나 `~/projects` 를 그 자리로 쓰면 AI 가 거기에 파일을 흘린다.
+    """
+    자리 = state_dir() / "workbench"
+    자리.mkdir(parents=True, exist_ok=True)
+    return 자리
+
+
 def notes_dir() -> Path:
     return data_dir() / "data" / "notes"
 
 
 def index_path() -> Path:
-    return data_dir() / "notes_index.db"
+    return 기계자리("notes_index.db")
 
 
 def store_path() -> Path:
-    return data_dir() / "eb.db"
+    return 기계자리("eb.db")
 
 
 def 휴지통자리() -> Path:
@@ -328,7 +670,7 @@ def 휴지통자리() -> Path:
 
 
 def config_path() -> Path:
-    return data_dir() / "eb_config.json"
+    return 기계자리("eb_config.json")
 
 
 def load_config() -> dict:
@@ -406,6 +748,7 @@ class 잠근연결(_sq.Connection):
 
 
 def _self_check() -> None:
+    global _가둘까      # 「쪽지가 이기는지」를 재는 구간에서만 가둠을 잠시 푼다
     import tempfile
 
     # 잠근연결: 딴 실이 잠금을 쥐면 execute 가 기다린다. 겹쳐 터지는 것은 우연이라 재현 대신 기다림을 본다.
@@ -430,8 +773,11 @@ def _self_check() -> None:
 
     assert app_dir().exists()
     # 소스로 돌 때는 지금 자리다 — 개발 중에 문서 폴더가 더럽혀지면 안 된다.
+    # ★ 단 `기록자리.txt` 가 있으면 **그것이 이긴다**(2026-09-20). 켜는 폴더마다 창고가
+    #   갈리는 것을 막으려고 쪽지로 못 박았다 — 아래 「어디서 켜도 같은 창고」 검사 참조.
     assert not frozen()
-    assert data_dir() == Path.cwd(), data_dir()
+    if _적어둔자리() is None and not 검사중인가():
+        assert data_dir() == Path.cwd(), data_dir()
     assert models_dir() == app_dir().parent / "models", models_dir()
     # 뜻 검색 모델은 **받은 것이 먼저**다. 둘 다 없으면 모델 자리 그대로 돌려준다.
     assert meaning_dir() in (models_dir(), models_dir() / "e5-base"), meaning_dir()
@@ -448,16 +794,35 @@ def _self_check() -> None:
         곁.mkdir()
         # 구운 것과 같은 모양으로 꾸민다 — 딸려 온 것은 `_internal` 에 풀린다.
         (Path(tmp) / "_internal" / "models").mkdir(parents=True)
-        옛프로즌, 옛실행 = globals()["frozen"], sys.executable
+        옛프로즌, 옛실행, 첫판 = globals()["frozen"], sys.executable, sys.platform
         globals()["frozen"] = lambda: True
         sys.executable = str(Path(tmp) / "VC.exe")
         sys._MEIPASS = str(Path(tmp) / "_internal")
+        # ★ **「exe 옆」을 재는 동안은 윈도우인 척한다.** 맥에서 돌리면 `fetched_dir()`
+        #   이 맥 분기(`Application Support`)로 빠져 이 아래가 통째로 터진다 —
+        #   검사가 윈도우에서만 맞는 모양이었다. 맥 분기는 바로 밑에서 따로 잰다.
+        sys.platform = "win32"
         try:
-            assert gguf_dir() != 곁, "빈 폴더인데 exe 옆을 골랐다"
+            속 = Path(tmp) / "_internal" / "models"
+            assert fetched_dir() == 곁, fetched_dir()
+            assert gguf_dir() == 곁, "받을 자리가 프로그램 속이다 — 판을 올리면 지워진다"
+            (속 / "옛.gguf").write_bytes(b"x")
+            assert gguf_dir() == 속, "같은 판에서 프로그램 속에 받아 둔 gguf 를 못 찾는다"
             (곁 / "아무.gguf").write_bytes(b"x")
             assert gguf_dir() == 곁, gguf_dir()
+            # 뜻 모델: 받은 큰 것은 exe 옆에서, 딸려 온 작은 것은 프로그램 속 뿌리에서 찾는다
+            for 곳 in (속, 곁 / "e5-base"):
+                곳.mkdir(exist_ok=True)
+                (곳 / "model.onnx").write_bytes(b"x")
+                (곳 / "tokenizer.json").write_bytes(b"x")
+            assert meaning_dir("e5-base") == 곁 / "e5-base", f"exe 옆에 받은 큰 모델을 못 찾는다: {meaning_dir('e5-base')}"
+            assert meaning_dir("딸려 온 것 (e5-small)") == 속, "딸려 온 것을 못 찾는다"
+            sys.platform = "darwin"
+            assert "Application Support" in str(fetched_dir()) and "VC.exe" not in str(fetched_dir()), \
+                f"맥은 받은 모델이 앱 속(VC.app/Contents/MacOS)에 들어간다: {fetched_dir()}"
         finally:
             globals()["frozen"], sys.executable = 옛프로즌, 옛실행
+            sys.platform = 첫판
             del sys._MEIPASS
 
     # **문서 폴더는 윈도우한테 물어야 한다.** 한글 윈도우면 `문서`, 옮겨 놨으면 옮긴 자리.
@@ -523,7 +888,9 @@ def _self_check() -> None:
         finally:
             del os.environ["VC_DATA"], os.environ["VC_MODELS"]
 
-    assert data_dir() == Path.cwd(), "환경 변수를 지웠는데 안 돌아왔다"
+    # 검사 중에는 **가둔 자리**로 돌아온다(진짜 창고를 안 건드린다)
+    assert data_dir() == (_가둔자리() / "기록" if 검사중인가()
+                          else (_적어둔자리() or Path.cwd())), "환경 변수를 지웠는데 안 돌아왔다"
     # C++ 런타임 붙들기. **순서가 전부다** — Qt 가 먼저 올라오면 되돌릴 수 없고,
     # 그때 onnxruntime 을 올리면 프로세스가 통째로 죽는다.
     if os.name == "nt":
@@ -541,6 +908,7 @@ def _self_check() -> None:
         쪽지 = app_dir() / SPOT
         원래 = 쪽지.read_text(encoding="utf-8") if 쪽지.is_file() else None
         환경 = os.environ.pop("VC_DATA", None)
+        _가둘까 = False      # 이 구간은 **쪽지가 이기는지**를 재는 자리다
         적기 = lambda 글: 쪽지.write_text(글, encoding="utf-8")
         try:
             # 첫 줄이 자리, 그 아래는 사람이 왜 그리 했는지 적는 자리다
@@ -597,6 +965,7 @@ def _self_check() -> None:
             적기(str(잠깐 / "기록"))
             assert data_dir() == 잠깐 / "환경", data_dir()
         finally:
+            _가둘까 = True
             os.environ.pop("VC_DATA", None)
             if 환경 is not None:
                 os.environ["VC_DATA"] = 환경
@@ -624,6 +993,198 @@ def _self_check() -> None:
         있는태그 = ""
     assert not 있는태그, (
         f"v{VERSION} 태그가 이미 있다 — 이 판은 나갔다. paths.VERSION 을 올려라")
+
+    # ★ **Qt 플러그인 자리 박기** — 경로에 한글이 있으면 Qt 가 제 자리를 못 찾는다.
+    #   `pin_qt_plugins()` 를 되돌리면 여기서 터져야 한다.
+    assert qt_plugins_dir() is None, "PyQt5 가 벌써 올라왔다 — 런타임 붙들기가 늦는다"
+    import PyQt5                                          # noqa: F401  (여기서 처음 올린다)
+    from PyQt5.QtCore import QCoreApplication, QLibraryInfo
+
+    곳 = qt_plugins_dir()
+    assert 곳 is not None and (곳 / "platforms").is_dir(), f"Qt 플러그인 폴더가 없다: {곳}"
+    assert pin_qt_plugins() and pin_qt_plugins(), "Qt 플러그인 자리를 못 박는다(두 번 불러도 돼야 한다)"
+    assert str(곳) in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
+    # Qt 가 스스로 말하는 자리는 **한글이 깨져 있을 수 있다** — 그래서 박는 것이다.
+    # 깨지지 않는 자리(영문 경로)에서는 둘이 같다. 어느 쪽이든 박은 자리는 살아 있어야 한다.
+    스스로 = QLibraryInfo.location(QLibraryInfo.PluginsPath)
+    assert "?" not in str(곳), f"우리가 박는 자리부터 깨졌다: {곳}"
+    if "?" in 스스로:
+        print(f"  (Qt 가 스스로 말하는 자리는 깨져 있다: {스스로} — 박아서 넘겼다)")
+
+    # ★★ **기계 파일은 앱 자리로, 옛 창고는 복사 → 확인 → 원본 지움**(오너 결정 2026-09-15).
+    #   소스로 돌 때는 기록 자리 그대로 · VC_DATA 를 주면 따라간다(시험 격리) · 확인 못 한 것은 원본을 남기고 옛 자리를 계속 쓴다.
+    # ★ `기록자리.txt` 를 쓰면 기계 파일은 **앱 자리**로 간다 — 오너 결정(2026-09-15):
+    #   기록 폴더는 사람이 여는 곳이라 메모만 둔다(문서 폴더는 iCloud 로 올라갈 수 있고,
+    #   그러면 열쇠·db 가 따라 올라간다). 쪽지가 없을 때만 기록 자리와 같아야 한다.
+    if 검사중인가():
+        pass          # 가둔 자리 안에서 기록·기계가 갈려 있다(바로 위에서 쟀다)
+    elif _적어둔자리() is None:
+        assert state_dir() == data_dir(), "소스로 돌 때 기계 파일 자리가 기록 자리를 떠났다 — 개발 흐름이 바뀐다"
+    else:
+        assert state_dir() == _앱자리기본(), state_dir()
+    옛판 = sys.platform
+    옛환경 = {k: os.environ.get(k) for k in ("VC_DATA", "VC_STATE", "LOCALAPPDATA")}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            기록, 앱 = Path(tmp) / "기록", Path(tmp) / "앱"
+            기록.mkdir()
+            os.environ["VC_DATA"] = str(기록)
+            os.environ.pop("VC_STATE", None)
+            assert state_dir() == data_dir() == 기록, "VC_DATA 를 주면 기계 파일도 따라가야 시험이 진짜 자리를 안 건드린다"
+            sys.platform = "darwin"
+            assert _앱자리기본() == Path.home() / "Library" / "Application Support" / APP_NAME, _앱자리기본()
+            sys.platform = "win32"
+            os.environ["LOCALAPPDATA"] = str(Path(tmp) / "로컬")
+            assert _앱자리기본() == Path(tmp) / "로컬" / APP_NAME, _앱자리기본()
+            sys.platform = 옛판
+
+            os.environ["VC_STATE"] = str(앱)
+            (기록 / "eb_config.json").write_text('{"pair_token": "t"}', encoding="utf-8")
+            _c2 = _sq.connect(str(기록 / "eb.db"))
+            _c2.execute("CREATE TABLE a (x)")
+            _c2.execute("INSERT INTO a VALUES (1)")
+            _c2.commit()
+            _c2.close()
+            (기록 / "notes_index.db").write_bytes(b"not a database at all " * 60)   # 깨진 db
+            (기록 / "data" / "artifacts").mkdir(parents=True)
+            (기록 / "data" / "artifacts" / "a.txt").write_text("결과", encoding="utf-8")
+            (기록 / "data" / "notes").mkdir(parents=True)
+            (기록 / "data" / "notes" / "글.md").write_text("글", encoding="utf-8")
+
+            결과 = 기계파일옮기기()
+            assert "eb.db" in 결과["옮김"] and not (기록 / "eb.db").exists() and (앱 / "eb.db").exists(), 결과
+            assert store_path() == 앱 / "eb.db" and config_path() == 앱 / "eb_config.json", (store_path(), config_path())
+            assert "data/artifacts" in 결과["옮김"] and (앱 / "data" / "artifacts" / "a.txt").exists(), 결과
+            assert any(x.startswith("notes_index.db") for x in 결과["남김"]), f"확인 못 한 db 를 옮겼다고 한다: {결과}"
+            assert (기록 / "notes_index.db").exists() and not (앱 / "notes_index.db").exists(), \
+                "확인 못 한 사본을 남기거나 원본을 지웠다"
+            assert index_path() == 기록 / "notes_index.db", "옮기지 못한 파일은 옛 자리를 계속 써야 한다"
+            assert (기록 / "data" / "notes" / "글.md").exists(), "글을 건드렸다 — 글은 기계 파일이 아니다"
+            다시 = 기계파일옮기기()
+            assert not 다시["옮김"] and "eb.db" not in 다시["남김"], f"두 번 부르면 달라진다: {다시}"
+    finally:
+        sys.platform = 옛판
+        for k, v in 옛환경.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    # ★★ **어디서 켜도 같은 창고를 봐야 한다**(2026-09-20). 소스로 돌 때는 `Path.cwd()`
+    #   를 창고로 삼는데, 그래서 **켜는 폴더에 따라 창고가 갈렸다** — 볼트 119장이
+    #   `VC/pc/data/notes` 에 들어갔는데 `VC/` 에서 켠 VC 는 3장짜리 창고를 보고 있었다.
+    #   「기록이 사라졌다」로 보이는 종류라, `기록자리.txt` 로 못 박고 **그것이 이기는지**를 잰다.
+    import os as _os8
+    import tempfile as _임시8
+
+    with _임시8.TemporaryDirectory() as _잠깐8:
+        옛데이터 = _os8.environ.pop("VC_DATA", None)
+        옛cwd = _os8.getcwd()
+        쪽지 = app_dir() / SPOT
+        옛쪽지 = 쪽지.read_text(encoding="utf-8") if 쪽지.exists() else None
+        try:
+            _가둘까 = False      # 이 구간만 — **쪽지가 이기는지**를 재야 한다
+            둘것 = Path(_잠깐8) / "정한자리"
+            쪽지.write_text(str(둘것), encoding="utf-8")
+            본것 = []
+            for 어디 in (_잠깐8, str(app_dir()), str(app_dir().parent)):
+                _os8.chdir(어디)
+                본것.append(str(data_dir()))
+            assert len(set(본것)) == 1, f"켜는 자리마다 창고가 다르다: {본것}"
+            assert 본것[0] == str(둘것), (본것[0], 둘것)
+        finally:
+            _가둘까 = True
+            _os8.chdir(옛cwd)
+            if 옛쪽지 is None:
+                쪽지.unlink(missing_ok=True)
+            else:
+                쪽지.write_text(옛쪽지, encoding="utf-8")
+            if 옛데이터 is not None:
+                _os8.environ["VC_DATA"] = 옛데이터
+
+    # ★★ **검사는 진짜 자리를 안 건드린다**(2026-09-21에 실제로 망가뜨리고 알았다).
+    #   `server` 검사가 진짜 `eb_config.json` 을 읽고 쓰는 사이, 떠 있던 VC 가 반쯤 쓰인
+    #   파일을 보고 **「설정이 깨졌다」며 새로 만들었다** — 자국에 「폰은 다시 짝지어야
+    #   한다」가 남았다. `eb.db` 도 「깨져서 옆에 치웠다」. **검사 한 번에 쓰던 사람의
+    #   VC 가 조용히 망가진다.** `--check` 로 도는 동안은 통째로 임시 자리에 가둔다.
+    assert 검사중인가(), "이 검사는 `--check` 로 도는데 그렇게 안 보인다"
+    진짜창고 = _적어둔자리()
+    if 진짜창고 is not None:
+        assert data_dir() != 진짜창고, "검사가 진짜 창고를 쓴다 — 쓰던 사람 기록이 위험하다"
+        assert _가둔자리() in data_dir().parents or data_dir() == _가둔자리(), data_dir()
+    assert _가둔자리() in state_dir().parents or state_dir() == _가둔자리(), state_dir()
+    assert config_path().parent == state_dir(), config_path()
+    # 같은 프로세스 안에서는 **늘 같은 자리**다 — 매번 새로 만들면 검사끼리 못 이어진다
+    assert _가둔자리() == _가둔자리()
+
+    # ★★ **막힌 창고를 재는 데서 같이 멈추면 안 된다.** 맥이 문서 폴더를 막으면
+    #   `opendir` 이 허락이 날 때까지 안 돌아온다 — 재는 쪽은 시간을 끊어야 한다
+    #   (실기로 잡았다 · 2026-09-24: 구운 앱이 0% 로 매달렸다).
+    assert 창고막혔나(Path(tempfile.gettempdir()), 2.0) == ""
+    # ★★ **아직 없는 자리는 막힌 것이 아니다** — 새 기계 첫 실행이 그 꼴이다
+    assert 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0) == ""
+    # 권한으로 막힌 것은 말한다
+    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
+    _막은곳.mkdir()
+    (_막은곳 / "안").mkdir()
+    os.chmod(_막은곳, 0o000)
+    try:
+        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
+        assert "못 읽는다" in _말막, _말막
+    finally:
+        os.chmod(_막은곳, 0o755)
+
+    import threading as _실검
+    import time as _때검
+
+    _잰때 = _실검.Event()
+    _옛스캔 = os.scandir
+
+    def _매달리는스캔(자리):
+        _잰때.wait(30)          # 영영 안 돌아오는 시스템 부름 흉내
+        return iter(())
+
+    os.scandir = _매달리는스캔
+    try:
+        _t0 = _때검.monotonic()
+        _말 = 창고막혔나(Path(tempfile.gettempdir()), 0.5)
+        _든것 = _때검.monotonic() - _t0
+        assert _든것 < 4, f"막힌 자리를 재다 같이 멈췄다({_든것:.1f}초)"
+        # ★ 기계마다 할 말이 다르다 — 맥 설정 이름을 윈도우에서 읊으면 안 된다
+        assert "못 읽는다" in _말, _말
+        if sys.platform == "darwin":
+            assert "허용" in _말 and "시스템 설정" in _말, _말
+        elif os.name == "nt":
+            assert "시스템 설정" not in _말, _말
+    finally:
+        os.scandir = _옛스캔
+        _잰때.set()
+
+    # ★ 일할 자리는 늘 있어야 한다 — 없으면 프로젝트 없이는 아무것도 못 시킨다
+    assert 일터().is_dir() and 일터().name == "workbench", 일터()
+    assert str(notes_dir()) not in str(일터()), "창고 안에 일터를 두면 AI 가 거기 흘린다"
+
+    # ★★ **앱 자리에 둔 쪽지도 먹어야 한다.** 맥에서는 `.app` 안의 쪽지가 앱을
+    #   새로 깔면 사라진다 — 창고를 NAS 에 두고 여러 기계로 이어 일할 때 걸린다.
+    _앱쪽지 = _앱자리기본() / SPOT
+    _옛앱쪽지 = _앱쪽지.read_text(encoding="utf-8") if _앱쪽지.exists() else None
+    _옛환경 = {k: os.environ.pop(k, None) for k in ("VC_DATA", "VC_STATE")}
+    with tempfile.TemporaryDirectory() as _나스자리:
+        try:
+            _앱쪽지.parent.mkdir(parents=True, exist_ok=True)
+            _앱쪽지.write_text(_나스자리 + "\n", encoding="utf-8")
+            assert _적어둔자리() == Path(_나스자리), _적어둔자리()
+            # ★ 고리가 안 생긴다 — 앱 자리는 쪽지를 안 본다
+            assert _앱자리기본() != Path(_나스자리)
+        finally:
+            if _옛앱쪽지 is None:
+                _앱쪽지.unlink(missing_ok=True)
+            else:
+                _앱쪽지.write_text(_옛앱쪽지, encoding="utf-8")
+            for k, v in _옛환경.items():
+                if v is not None:
+                    os.environ[k] = v
+    assert _적어둔자리() != Path(_나스자리), "치웠는데 아직 그 자리를 가리킨다"
 
     print("paths self-check 통과")
 

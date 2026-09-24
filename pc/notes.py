@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 import paths
+import wiki
 
 import json
 import os
@@ -36,12 +37,15 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 # [[대상]] · [[대상#소제목]] · [[대상|보이는 글자]] 를 한 번에 읽는다.
-LINK_RE = re.compile(r"\[\[([^\]\[|#]+?)(?:#([^\]\[|]+))?(?:\|([^\]\[]+))?\]\]")
+# ★ 표 안에서는 `|` 가 칸을 가르므로 옵시디언은 `[[제목\|보일 말]]` 로 적는다 — `\|` 도 받는다.
+#   안 받으면 제목 끝에 `\` 가 붙어 끊긴 링크가 됐다(제품 보유 목록 표).
+LINK_RE = re.compile(r"\[\[([^\]\[|#]+?)(?:#([^\]\[|\\]+))?(?:\\?\|([^\]\[]+))?\]\]")
 
 # ![[노트]] · ![[노트#소제목]] — 끼워 보기. 링크와 같은 꼴이라 연결로도 잡힌다.
-EMBED_RE = re.compile(r"!\[\[([^\]\[|#]+?)(?:#([^\]\[|]+))?(?:\|[^\]\[]+)?\]\]")
+EMBED_RE = re.compile(r"!\[\[([^\]\[|#]+?)(?:#([^\]\[|\\]+))?(?:\\?\|[^\]\[]+)?\]\]")
 
 # 태그 #이름. 줄 첫머리의 #은 마크다운 제목이라 뺀다(정규식 밖에서 거른다).
 # 숫자만 있는 것도 뺀다 — "#1"은 태그가 아니라 번호다.
@@ -146,21 +150,32 @@ def _앞머리풀기(글: str) -> dict:
 
 
 UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# 윈도우가 장치 이름으로 잡아 파일을 못 만드는 것들. 확장자가 붙어도 걸린다.
+윈도우예약 = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$', re.IGNORECASE)
 
 # 첨부로 보는 확장자. **첨부는 항목이 아니다** — `![[사진.png]]`을 노트 링크로 세면
 # "아직 없는 것"에 사진 이름이 끝없이 쌓이고 그래프에 유령 점이 생긴다.
-ATTACH_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".pdf"}
-ATTACH_DIR = "_첨부"
+# ★ 폰으로 남기는 모든 기록(결정 16) — 아이폰 사진은 .heic, 영상은 .mov·.mp4, 녹음은 .m4a 로 온다.
+#   그림만 받던 목록이라 폰 사진이 「받는 파일 꼴이 아니다」로 막혔다(4단계). 원본을 그대로 둔다.
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+PHONE_MEDIA_EXT = {".heic", ".heif", ".mov", ".mp4", ".m4v", ".m4a", ".aac", ".mp3", ".wav"}
+ATTACH_EXT = IMAGE_EXT | {".pdf"} | PHONE_MEDIA_EXT
+ATTACH_DIR = wiki.첨부폴더
 
 # 지난 판을 두는 곳. 점으로 시작해 **옵시디언에서 안 보인다** — 기계가 챙기는 것이지
 # 사람이 뒤적일 폴더가 아니다. 색인에서도 통째로 뺀다.
-HISTORY_DIR = ".이력"
+HISTORY_DIR = wiki.이력폴더
 HISTORY_KEEP = 20          # 항목당 남길 판 수. 20년이라도 무한정 쌓으면 안 된다
 HISTORY_GAP_SEC = 300      # 이 안에 또 저장되면 새 판을 안 만든다(치는 대로 저장이라)
 
+# 켤 때 쓸어 내는 `.tmp` 찌꺼기의 **나이**. 이보다 젊으면 누군가 쓰는 중으로 본다.
+찌꺼기나이 = 60.0
+
 # 서식(템플릿)을 두는 곳. 밑줄로 시작해 항목 목록에서 눈에 안 띄되, 사람이 열어
 # 고칠 수 있게 **보이는** 폴더로 둔다(`_첨부`와 같은 자리).
-TEMPLATE_DIR = "_서식"
+TEMPLATE_DIR = wiki.서식폴더
+# 설정 「기계 기록 보기 — 둘 다」 일 때 VC 가 요약을 적는 자리(결정 17). 기계가 쓴 글이라 항목으로 안 센다.
+VC_LOG_DIR = wiki.기록폴더
 
 # 서식 안에서 갈아 끼우는 자리. 옵시디언 표기도 같이 받는다.
 SLOT_RE = re.compile(r"\{\{\s*(날짜|시각|제목|date|time|title)\s*\}\}", re.I)          # 노트 폴더 안. `_`로 시작해 항목 폴더와 눈으로 갈린다
@@ -281,6 +296,32 @@ PIECE_RE = re.compile(r'(-?)(?:(\w+):)?(?:"([^"]*)"|(\S+))')
 
 # 좁히는 말과 그것이 걸리는 곳. 여기 없는 이름(`tag:`가 아닌 `xyz:`)은 **그냥 낱말
 # 둘**로 친다 — 값만 남기고 이름을 버리면 `결정:22` 같은 진짜 글자가 조용히 사라진다.
+def 라이크(값: str) -> str:
+    """`LIKE` 에 넣을 글자에서 **와일드카드를 막는다.**
+
+    ★★ SQL `LIKE` 에서 `_` 는 「아무 글자 하나」, `%` 는 「아무 글자들」이다. 그대로 넣으면
+      **찾는 글자가 아닌 것이 걸린다** — 실제로 `path:_정리` 가 「_정리 폴더의 1장」 대신
+      「제목에 '정리'가 든 3장」까지 **4장**을 내놓았다(폴더 칸을 만들다 잡았다).
+      창고에는 `_templates`·`_digest` 처럼 밑줄로 시작하는 폴더가 있고, 제목·태그에도 들어갈 수 있다.
+      쓰는 쪽은 반드시 `ESCAPE '\\'` 를 같이 적는다.
+    """
+    return (str(값).replace("\\", "\\\\")
+            .replace("%", "\\%").replace("_", "\\_"))
+
+
+def 앞머리값(v) -> str:
+    """앞머리 값을 **찾을 수 있는 한 줄**로 편다.
+
+    옵시디언 앞머리는 글자·숫자·참거짓뿐 아니라 목록(`tags: [a, b]`)도 온다.
+    찾을 때 필요한 건 「그 말이 들었나」이므로 목록은 사이를 띄워 붙인다.
+    """
+    if isinstance(v, (list, tuple)):
+        return " ".join(앞머리값(x) for x in v)
+    if isinstance(v, dict):
+        return " ".join(f"{k} {앞머리값(x)}" for k, x in v.items())
+    return str(v).strip()
+
+
 NARROW = {
     "tag": "태그", "태그": "태그",
     "path": "경로", "경로": "경로",
@@ -297,7 +338,7 @@ class Ask:
 
     __slots__ = ("terms", "phrases", "narrow", "minus_terms", "minus_phrases", "raw", "또는")
 
-    def __init__(self, raw: str) -> None:
+    def __init__(self, raw: str, 앞머리이름: frozenset | set | None = None) -> None:
         self.raw = raw
         # ★ **「이것 아니면 저것」도 찾을 수 있어야 한다.** 옵시디언은 `TODO OR FIXME` 가
         #   되는데 우리는 낱말을 늘 AND 로 묶어 **0건**이었다. 「하나라도 든 것」은
@@ -316,6 +357,12 @@ class Ask:
             if not word:
                 continue
             kind = NARROW.get((key or "").lower())
+            # ★★ **창고가 실제로 지닌 앞머리면 그 값으로 찾는다**(오너 2026-09-20).
+            #   볼트마다 앞머리가 달라 이름을 코드에 손으로 적어 둘 수 없다 — 창고를
+            #   보고 가른다. 없는 이름은 **지금까지처럼 낱말로** 친다(글 속의 `C:\` 나
+            #   `09:30` 을 찾을 때 0장이 되면 안 된다).
+            if kind is None and key and 앞머리이름 and key in 앞머리이름:
+                kind = "앞머리:" + key
             if kind and not minus:
                 self.narrow.append((kind, word))
                 continue
@@ -353,6 +400,29 @@ class Ask:
             out = f"({out}) NOT ({gone})" if out else ""
         return out
 HEX_COLOR = re.compile(r"(?i)[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8}")
+
+
+def 카드미리보기(몸: str, 길이: int = 140) -> str:
+    """폰 목록 카드의 두 줄 — 끼움(`![[…]]`) · 태그만 있는 줄 · 앞머리 · 목록 기호를 걷고 줄을 ` · ` 로 잇는다.
+
+    ★ 그냥 첫 줄을 쓰면 서식으로 쓴 글이 모두 「- 제품명 : …」 한 줄로만 보였다(시뮬레이터 점검 2026-09-18).
+    """
+    몸 = re.sub(r"(?s)^---\n.*?\n---\n", "", 몸)
+    몸 = re.sub(r"(?s)%%.*?%%", " ", 몸)   # 옵시디언 주석(사진 글자 등)은 안 보인다
+    몸 = re.sub(r"!\[\[[^\]]*\]\]", " ", 몸)
+    # `[[제목]]` · `[[제목#소제목|보일 말]]` 은 보일 말만 — 미리보기에 기호가 그대로 남았다(시뮬레이터 점검)
+    몸 = re.sub(r"\[\[([^\]|#]*)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]", lambda m: m.group(2) or m.group(1), 몸)
+    조각 = []
+    for 줄 in 몸.splitlines():
+        줄 = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", "", 줄).strip()
+        줄 = re.sub(r"^#+\s+", "", 줄)
+        if not 줄 or re.fullmatch(r"(?:#[^\s#]+\s*)+", 줄):
+            continue
+        조각.append(re.sub(r"\s*:\s*", ": ", 줄, count=1) if " : " in 줄 else 줄)
+        if sum(len(c) for c in 조각) > 길이:
+            break
+    글 = " · ".join(조각)
+    return 글[:길이] + ("…" if len(글) > 길이 else "")
 
 
 def is_attachment(name: str) -> bool:
@@ -406,6 +476,17 @@ CREATE TABLE IF NOT EXISTS tags (
     PRIMARY KEY (title, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags (tag);
+
+-- 앞머리 값. `status: active` 처럼 **사람이(또는 남의 볼트가) 적은 것**을 그대로 담는다.
+-- 옵시디언 볼트를 들이니 `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이
+-- 없었다** — `status:active` 가 83장을 두고 2장을 내놓았다(모르는 이름은 낱말로 쳤다).
+CREATE TABLE IF NOT EXISTS props (
+    title TEXT NOT NULL,
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (title, key)
+);
+CREATE INDEX IF NOT EXISTS idx_props_key ON props (key, value);
 
 -- 별칭. 다른 이름으로도 [[링크]]가 닿는다. 별칭은 온 저장소에서 하나뿐이다.
 CREATE TABLE IF NOT EXISTS aliases (
@@ -566,11 +647,54 @@ def 둘레(body: str, 물음: str, 폭: int = 400) -> tuple[str, bool]:
     return body[start:end], (start > 0 or end < len(body))
 
 
+_울타리 = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)")
+_홑따옴 = re.compile(r"`[^`\n]*`")
+
+
+def _코드지우기(body: str) -> str:
+    """코드 울타리와 홑따옴표 안을 **빈칸으로 지운다.**
+
+    ★★ 규칙·서식 글은 `[[링크]]` 꼴을 **예시로** 적는다. 그것을 링크로 세면
+       「가리키는데 없는 글」이 계속 잡히고(실제로 `[[링크]]`·`[[제목]]`·`[[다른이름]]`
+       6개가 그랬다), 그래프에 **아무것도 아닌 점**이 생긴다. 옵시디언도 코드 안은 안 센다.
+    """
+    지움 = _울타리.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), body)
+
+    # ★★ **링크 안의 홑따옴표는 안 지운다.** 제목에 `…` 가 든 글이 실제로 있다
+    #   (「제품 · `multilingual-e5-small` ONNX …」). 그것까지 지우면 **제목이 뭉개져**
+    #   링크가 끊기고, 「아직 없는 것」에 빈칸투성이 이름이 뜬다(재서 잡았다 · 2026-09-21).
+    #   가르는 기준은 **누가 누구를 담느냐**다:
+    #     `[[제목 `코드`]]`  링크가 코드를 담는다  → 제목이다. 그대로 둔다
+    #     `` `[[링크]]` ``   코드가 링크를 담는다  → 예시다. 지운다
+    링크자리 = [(m.start(), m.end()) for m in LINK_RE.finditer(지움)]
+
+    def _지울까(m: "re.Match") -> str:
+        담겼나 = any(s < m.start() and m.end() < e for s, e in 링크자리)
+        return m.group(0) if 담겼나 else " " * len(m.group(0))
+
+    return _홑따옴.sub(_지울까, 지움)
+
+
+def 코드밖만(패턴: "re.Pattern", 글: str, 바꿈) -> str:
+    """코드 울타리·홑따옴표 **밖에서만** 바꾼다. 안쪽에 적힌 것은 예시다.
+
+    ★★ **찾는 쪽과 고치는 쪽은 같아야 한다.** `parse_links` 가 코드를 안 세게 바꾼 날
+       (2026-09-21) 고치는 쪽을 안 옮겨서 갈라졌다 — 링크로는 안 세면서 **이름은 바꿨고**,
+       화면에서는 예시가 `[링크](<note:링크>)` 로 깨져 보였다. 그래서 여기 한 자리에 둔다.
+       `_코드지우기` 가 길이를 지키므로 **같은 자리**로 맞춰 볼 수 있다.
+    """
+    가림 = _코드지우기(글)
+    return 패턴.sub(
+        lambda m: 바꿈(m) if 가림[m.start():m.end()].strip() else m.group(0), 글)
+
+
 def parse_links(body: str) -> list[tuple[str, str]]:
     """본문에서 (대상, 소제목)을 뽑는다. 보이는 글자는 연결과 무관해서 버린다.
 
     첨부(`![[사진.png]]`)는 뺀다 — 항목이 아니라 파일이다.
+    **코드 울타리·홑따옴표 안은 안 센다** — 거기 적힌 것은 예시다.
     """
+    body = _코드지우기(body)
     # ponytail: 경로 구분자(/ \)는 안 바꾼다 — 「A/B」 제목으로 건 링크는 resolve 가 잡지만
     #   역링크 목록에서는 빠진다. 그런 제목이 흔해지면 링크 표에 맞춘 꼴을 따로 둔다.
     return [(_링크맞춤(m.group(1).strip()), (m.group(2) or "").strip())
@@ -812,6 +936,25 @@ class _덧붙이기잠금:
             self.실잠금.release()
 
 
+def _덮거나곁에(path: Path, text: str) -> None:
+    """임시 파일 길이 막혔을 때 **마지막으로** 해 보는 것.
+
+    그냥 덮어써 본다 — 남이 잠깐 반쪽을 보는 것보다 글이 통째로 사라지는 쪽이 나쁘다.
+    그것마저 막히면 글을 버리지 않고 **곁에 남기고** `WriteBlocked` 를 올린다.
+    부르는 쪽(화면)이 그걸 받아 「못 썼어」 라고 말한다.
+    """
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        # 잠긴 파일이다. 글을 버리지 않고 곁에 둔다 — 이름으로 무슨 일인지 보인다.
+        beside = path.with_name(f"{path.stem}(못 쓴 글){path.suffix}")
+        try:
+            beside.write_text(text, encoding="utf-8")
+        except OSError:
+            pass   # 폴더째 잠겼다. 여기서 더 할 수 있는 게 없다
+        raise WriteBlocked(str(path))
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """옆에 다 쓴 뒤 자리를 바꾼다. 통째로 덮어쓰면 **읽는 쪽이 반쪽을 본다.**
 
@@ -834,7 +977,16 @@ def _atomic_write(path: Path, text: str) -> None:
     """
     with _lock_for(path):
         tmp = path.with_name(f"{path.name}.{os.getpid()}-{threading.get_ident()}.tmp")
-        tmp.write_text(text, encoding="utf-8")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+        except OSError:
+            # ★★ **폴더째 잠기면 임시 파일부터 못 만든다.** 맥·리눅스의 자리 바꾸기는
+            #   파일 권한이 아니라 **폴더** 권한만 본다 — 그래서 윈도우처럼
+            #   `os.replace` 에서 걸리지 않고 여기서 먼저 걸린다. 이 자리가 안 막혀
+            #   있어서 맥에서는 `PermissionError` 가 그대로 위로 올라갔고,
+            #   **화면은 「못 썼어」 를 한마디도 못 했다**(자체점검이 그걸 잡았다).
+            _덮거나곁에(path, text)
+            return
         for wait in (0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4):
             if wait:
                 time.sleep(wait)
@@ -844,15 +996,7 @@ def _atomic_write(path: Path, text: str) -> None:
             except PermissionError:
                 continue
         try:
-            path.write_text(text, encoding="utf-8")
-        except OSError:
-            # 잠긴 파일이다. 글을 버리지 않고 곁에 둔다 — 이름으로 무슨 일인지 보인다.
-            beside = path.with_name(f"{path.stem}(못 쓴 글){path.suffix}")
-            try:
-                beside.write_text(text, encoding="utf-8")
-            except OSError:
-                pass   # 폴더째 잠겼다. 여기서 더 할 수 있는 게 없다
-            raise WriteBlocked(str(path))
+            _덮거나곁에(path, text)
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -865,6 +1009,18 @@ def _now() -> str:
 # 아예 막는다. 우리는 막지 않고 바꾼다 — AI 는 「질문? 답」 같은 제목을 흔히 짓는다.
 _전각 = str.maketrans({"?": "？", ":": "：", "/": "／", "\\": "＼", "|": "｜",
                       "*": "＊", '"': "＂", "<": "＜", ">": "＞"})
+
+
+# 위 바꿈을 **되돌리는** 표. 링크는 사람이 **원래 글자로** 적는다(`[[… → `models/`]]`) —
+# 제목은 `／` 로 저장되므로 그대로는 못 맞춘다. `∕`(U+2215)도 받는다: 옛 정리 코드가
+# 그 글자를 썼다(2026-09-21 에 `safe_title` 로 모았지만 쓰던 글이 남아 있다).
+_전각풀기 = str.maketrans({"？": "?", "：": ":", "／": "/", "＼": "\\", "｜": "|",
+                        "＊": "*", "＂": '"', "＜": "<", "＞": ">"})
+
+
+def 제목풀기(title: str) -> str:
+    """전각으로 바꿔 저장한 제목을 **원래 글자 꼴**로 되돌린다(찾을 때만 쓴다)."""
+    return (title or "").translate(_전각풀기)
 
 
 def _알림(말: str) -> None:
@@ -944,6 +1100,14 @@ def safe_title(title: str) -> str:
     (기존 파일 이름이 바뀌면 옵시디언 링크가 끊긴다).
     """
     cleaned = UNSAFE.sub("-", 제목맞춤(title)).strip().strip(".")
+    # ★★ **윈도우는 이 이름들로 파일을 못 만든다**(CON·PRN·AUX·NUL·COM1~9·LPT1~9).
+    #   장치 이름이라 `CON.md` 를 열면 콘솔이 열린다. 맥에서 그런 제목으로 글을 쓰면
+    #   **윈도우 손님이 그 글만 조용히 못 받는다** — 셋을 다 붙여 쓰는 물건이라
+    #   만드는 쪽에서 막는다(2026-09-24 · 지금 창고엔 그런 글이 없어 바뀔 이름도 없다).
+    # ★ 밑줄은 **장치 이름 바로 뒤**에 넣는다. 맨 끝에 붙이면 `NUL.md_` 가 되는데
+    #   확장자까지 규칙에 들어서 여전히 예약 이름이다(검사가 잡았다).
+    if 맞은예약 := 윈도우예약.match(cleaned):
+        cleaned = 맞은예약.group(1) + "_" + (맞은예약.group(2) or "")
     if len(cleaned) > 80:
         지문 = hashlib.sha256(title.encode("utf-8")).hexdigest()[:6]
         return cleaned[:73].rstrip() + "~" + 지문
@@ -954,7 +1118,7 @@ def safe_title(title: str) -> str:
 class Note:
     title: str
     body: str
-    kind: str = "note"
+    kind: str = wiki.기본갈래
     pinned: bool = False
     id: str = ""
     created: str = ""
@@ -1092,7 +1256,7 @@ class Note:
             edited_by=str(front.get("edited_by", "")),
             title=title,
             body=m.group(2),
-            kind=str(front.get("kind", "note")),
+            kind=str(front.get("kind", wiki.기본갈래)),
             pinned=bool(front.get("pinned", False)),
             id=str(front.get("id", "")),
             created=str(front.get("created", _now())),
@@ -1117,8 +1281,17 @@ class Notes:
         # 도는 정리 단계가 지워, 링크·태그가 조용히 0이 된다(실제로 그랬다).
         self.root = (Path(root) if root else paths.notes_dir()).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        # ★★ **쓰는 중인 임시 파일은 안 지운다.** 켤 때 찌꺼기를 쓸어 내는데, 같은 창고를
+        #   **딴 데서 열면**(창과 서버, 또는 스크립트) 그쪽이 막 만든 `.tmp` 를 지워
+        #   쓰기가 통째로 실패한다 — `_atomic_write` 의 `os.replace` 가
+        #   `FileNotFoundError` 로 터진다. 여럿이 같이 쓰는 시험에서 **6판에 한 번꼴로**
+        #   났고, 단독으로는 안 나서 「흔들리는 검사」로 보일 뻔했다(2026-09-21).
+        #   찌꺼기는 죽은 판이 남긴 것이라 늘 오래됐다 — **나이로 가른다.**
+        지금 = time.time()
         for junk in 훑어내림(self.root, (".tmp",)):
             try:
+                if 지금 - junk.stat().st_mtime < 찌꺼기나이:
+                    continue          # 누군가 지금 쓰고 있다
                 junk.unlink(missing_ok=True)  # 쓰다 죽으면 남는다. 항목으로 세면 안 된다
             except OSError:
                 pass
@@ -1142,13 +1315,52 @@ class Notes:
         self.conn.commit()
         self._heal_search()
         self._heal_vectors()
+        self._특별폴더옮기기()      # 옛 이름 폴더를 먼저 끌어온다 — 안 그러면 규칙 글이 둘이 된다
+        self._특별폴더세우기()      # 아직 안 쓴 자리도 미리 보이게 둔다
         self.write_rules()
         if index_now:
             self.reindex()
+        elif self._색인이비었나():
+            # ★★ **색인이 텅 빈 채로 남지 않게 한다.** 화면은 빨리 뜨라고 훑기를 미루는데
+            #   (`index_now=False`), 미룬 훑기는 **색인 실이 한 번 돌고 끝난다** — 그 한 번이
+            #   실패하거나 색인이 어긋나 있으면 **아무도 다시 안 훑어** 창이 빈 채로 남는다.
+            #   실제로 그랬다(2026-09-21: 기록 152장인데 색인 1줄인 채로 멈춰 있었다).
+            #   줄이 거의 없을 때만 본다 — 성한 창고에서는 SELECT 한 번이라 값이 안 든다.
+            _알림("[색인] 비어 있어 켤 때 한 번 채운다")
+            self.reindex()
+
+    # 이보다 줄이 적으면 「비었다」로 본다. 진짜로 작은 창고면 훑어도 값이 안 든다.
+    빈색인줄 = 8
+
+    def _색인이비었나(self) -> bool:
+        """색인이 **거의 비었는데 기록은 있다**면 참. 값싼 검사(SELECT 한 번 + 셈)."""
+        try:
+            줄 = self.conn.execute(
+                f"SELECT COUNT(*) c FROM (SELECT 1 FROM notes LIMIT {self.빈색인줄})"
+            ).fetchone()["c"]
+        except sqlite3.Error:
+            return False
+        if 줄 >= self.빈색인줄:
+            return False          # 넉넉히 있다 — 더 안 본다
+        몇 = 0
+        for _ in 훑어내림(self.root, (".md",)):
+            몇 += 1
+            if 몇 > 줄 + self.빈색인줄:
+                return True       # 기록이 색인보다 훨씬 많다
+        return False
 
     def _is_history(self, path: Path) -> bool:
-        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다."""
-        return HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts
+        """항목으로 세면 안 되는 자리. 지난 판과 서식은 글이지 항목이 아니다. VC 가 적는 기계 기록 요약도.
+
+        ★ 창고 맨 위의 **지도(`index.md`)·일지(`log.md`)** 도 안 센다(오너 2026-09-20 ·
+          카파시 LLM Wiki). 지도는 창고를 비추는 거울이고 일지는 계속 자란다 — 글로 세면
+          검색·그래프가 그것들로 덮이고, 일지 한 줄 적을 때마다 「글이 바뀌었다」가 된다.
+        """
+        if HISTORY_DIR in path.parts or TEMPLATE_DIR in path.parts or VC_LOG_DIR in path.parts:
+            return True
+        import wikilog
+
+        return wikilog.안세는파일(path, self.root)
 
     def _색인열기(self, index) -> None:
         """색인 파일을 열고 표 모양을 맞춘다. 깨졌으면 `sqlite3.DatabaseError` 가 난다."""
@@ -1175,6 +1387,19 @@ class Notes:
             self.conn.execute("DROP TABLE vectors")
             self.conn.execute("UPDATE notes SET vec_mtime = 0")
         self.conn.executescript(VECTOR_SCHEMA)
+        # ★★ **새 표는 만들어져도 비어 있다.** `CREATE TABLE IF NOT EXISTS` 는 표만
+        #   만들고 내용을 안 채운다 — 쓰던 색인에서는 `props` 가 텅 빈 채라
+        #   `status:active` 가 **0장**을 내놓는다. 「되기는 되는데 아무것도 안 나온다」가
+        #   제일 나쁜 꼴이다(같은 함정을 `links` 흐림 칸에서 이미 한 번 밟았다).
+        #   글이 있는데 앞머리가 하나도 없으면 **한 번 다시 훑어 채운다.**
+        self._앞머리이름 = None
+        try:
+            글있음 = self.conn.execute("SELECT 1 FROM notes LIMIT 1").fetchone() is not None
+            앞머리있음 = self.conn.execute("SELECT 1 FROM props LIMIT 1").fetchone() is not None
+            self._앞머리채울까 = bool(글있음 and not 앞머리있음)
+        except sqlite3.Error:
+            self._앞머리채울까 = False
+
         # 이미 쓰던 색인에는 이 칸이 없다. 색인은 다시 만들 수 있지만 2만 개를
         # 다시 훑게 하느니 칸 하나를 붙이는 게 싸다.
         # ★★ **칸을 더할 때는 반드시 여기에도 적는다.** `CREATE TABLE IF NOT EXISTS`
@@ -1254,10 +1479,24 @@ class Notes:
         if not always and past and time.time() - past[-1].stat().st_mtime < HISTORY_GAP_SEC:
             return
         folder.mkdir(parents=True, exist_ok=True)
-        # 밀리초까지 넣는다. 초까지만 쓰면 같은 초에 두 번 저장될 때 앞 판이 조용히
-        # 덮여 사라진다.
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
-        _atomic_write(folder / f"{stamp}.md", old)
+        # ★★ **이름이 겹치면 앞 판이 조용히 사라진다.** 초까지만 쓰다 겹쳐서 밀리초를
+        #   넣었는데, **맥에서는 밀리초도 겹쳤다** — 빠른 기계에서는 두 번 쓰기가 같은
+        #   1밀리초 안에 끝난다. 스무 번 재서 **아홉 번** 지난 판 하나가 덮여 없어졌다
+        #   (자체점검이 「같은 내용은 안 남는다」에서 걸렸다).
+        #   마이크로초까지 내리고, 그래도 겹치면 **빈 자리를 찾을 때까지** 민다.
+        #   ※ 한 번 잰 시각으로 날짜와 아래 자릿수를 같이 만든다 — 따로 부르면
+        #     그 사이에 초가 넘어가 엉뚱한 이름이 나올 수 있다.
+        #   ※ 자릿수를 고정으로 둔다. 이름순이 곧 시간순이라, 길이가 들쑥날쑥하면
+        #     가장 최근 판(`past[-1]`)을 잘못 고른다.
+        지금 = time.time()
+        while True:
+            stamp = (time.strftime("%Y%m%d-%H%M%S", time.localtime(지금))
+                     + f"-{int(지금 * 1_000_000) % 1_000_000:06d}")
+            대상 = folder / f"{stamp}.md"
+            if not 대상.exists():
+                break
+            지금 += 0.000001
+        _atomic_write(대상, old)
         for gone in sorted(folder.glob("*.md"))[:-HISTORY_KEEP]:
             gone.unlink(missing_ok=True)
 
@@ -1271,6 +1510,70 @@ class Notes:
             when = f.stem
             out.append((f"{when[:4]}-{when[4:6]}-{when[6:8]} {when[9:11]}:{when[11:13]}", f))
         return out
+
+    # --- 고정 · 보관 · 색 · 휴지통 (편의 기능 18·27·28·30번) ---------------
+
+    COLORS = ("빨강", "주황", "노랑", "초록", "파랑", "보라", "회색")
+
+    def mark(self, title: str, pinned: bool | None = None, archived: bool | None = None,
+             color: str | None = None) -> Note | None:
+        """글 하나의 표시를 바꾼다. `None` 은 그대로. 색은 `""` 이면 지운다. 없는 글이면 None.
+
+        보관·색은 앞머리(`보관: true` · `색: 노랑`)에 적는다 — 옵시디언에서도 속성으로 보인다.
+        """
+        with self._글잠금(title):
+            note = self.read(title)
+            if note is None:
+                return None
+            if pinned is not None:
+                note.pinned = pinned
+            if archived is not None:
+                if archived:
+                    note.extra["보관"] = True
+                else:
+                    note.extra.pop("보관", None)
+            if color is not None:
+                if color:
+                    if color not in self.COLORS:
+                        raise ValueError(f"모르는 색: {color}")
+                    note.extra["색"] = color
+                else:
+                    note.extra.pop("색", None)
+            self.write(note)
+            return note
+
+    def trashed(self) -> list[tuple[str, str, Path, Path]]:
+        """휴지통 — 지난 판은 있는데 글이 없는 것. `(제목, 언제, 마지막 판, 되살릴 자리)` 새것이 먼저.
+
+        지울 때 늘 한 판 남기므로(`_delete`) 휴지통을 따로 두지 않는다.
+        """
+        base = self.root / HISTORY_DIR
+        out = []
+        if not base.is_dir():
+            return out
+        for folder in {f.parent for f in base.rglob("*.md")}:
+            rel = folder.relative_to(base)
+            live = self.root / rel.parent / f"{folder.name}.md"
+            if live.exists():
+                continue
+            판 = sorted(folder.glob("*.md"))[-1]
+            when = 판.stem
+            out.append((folder.name, f"{when[:4]}-{when[4:6]}-{when[6:8]} {when[9:11]}:{when[11:13]}", 판, live))
+        return sorted(out, key=lambda x: x[1], reverse=True)
+
+    def untrash(self, snapshot: Path) -> str | None:
+        """휴지통에서 되살린다. 되살린 제목(없으면 None). 이력 폴더 밖의 파일은 안 받는다."""
+        base = (self.root / HISTORY_DIR).resolve()
+        snapshot = Path(snapshot).resolve()
+        if base not in snapshot.parents or not snapshot.is_file():
+            return None
+        for title, _, 판, live in self.trashed():
+            if 판.resolve() == snapshot:
+                note = Note.loads(title, read_text(판))
+                live.parent.mkdir(parents=True, exist_ok=True)
+                self.write(note, at=live)
+                return title
+        return None
 
     def restore(self, title: str, snapshot: Path) -> bool:
         """지난 판으로 되돌린다.
@@ -1316,60 +1619,140 @@ class Notes:
             if got is not None:
                 return got
             body = self.fill_slots(self.template("일지"), day) or f"# {day}" + chr(10)
-            note = Note(title=day, body=body, kind="note")
+            # 오늘 일지는 **제 갈래가 있다**(`wiki.갈래들` 의 「일지」). 기본갈래로 두면
+            # 지도에서 메모 수십 장 사이에 섞여 날짜 글을 못 찾는다.
+            note = Note(title=day, body=body, kind="일지")
             self.write(note)
             return note
 
     # 이 저장소를 만지는 모두(사람·AI·나중에 붙을 무엇이든)가 읽을 규칙. 항목으로는
     # 안 세는 자리(`_서식`)에 둔다.
-    RULE_FILE = "이 폴더를 만지는 규칙.md"
-    RULES = """# 이 폴더를 만지는 규칙
+    # 이 저장소를 만지는 모두(사람·AI·나중에 붙을 무엇이든)가 읽을 규칙. 항목으로는
+    # 안 세는 자리(`_서식`)에 둔다.
+    # ★★ **글을 여기 적지 않는다.** 층·갈래·앞머리·연산은 `wiki.py` 한 자리에 있고
+    #   이 글은 거기서 **지어진다** — 두 군데 적으면 갈래를 더했을 때 갈라진다
+    #   (오너 2026-09-20: 카파시 LLM Wiki 기준으로 창고를 새로 세운다).
+    RULE_FILE = "이 창고를 쓰는 법.md"
+    옛RULE_FILES = ("이 폴더를 만지는 규칙.md",)
 
-이 파일은 VC 가 처음 한 번만 만든다. 사람이 고쳐도 되고 지워도 된다 — 다시 안 만든다.
-
-## 1. 이어 주는 일은 안 해도 된다
-
-**`[[제목]]` 을 일부러 넣을 필요가 없다.** VC 가 뜻으로 가까운 것을 스스로 이어
-그래프와 「비슷한 것」 줄에 보여 준다. 그 이음선은 **파일에 안 적힌다** — 셈해서 그릴
-뿐이라 틀려도 글이 더러워지지 않는다.
-
-`[[제목]]` 은 **사람이 「이것과 저것은 이어진다」고 말하고 싶을 때만** 쓴다.
-그 선은 진하게, 짐작한 선은 흐리게 그려져 눈으로 갈린다.
-
-> 그래서 이 규칙은 **아무것도 안 하는 것이 지키는 것**이다. 무엇이 붙어도 못 어긴다.
-
-## 2. 글은 그냥 마크다운이다
-
-앞머리(`---`)는 있어도 되고 없어도 된다. 없으면 VC 가 알아서 채운다.
-`kind` 는 `agent · skill · preference · place · thing · note` 중 하나이고, 모르는 값을
-적어도 **지우지 않고 그대로 둔다.**
-
-## 3. 건드리면 안 되는 자리
-
-- `.이력/` — 지난 판. VC 가 관리한다
-- `_첨부/` — 붙임 파일
-- `_서식/` — 서식과 이 규칙. **항목으로 안 센다**
-
-## 4. 색인은 언제나 버려도 된다
-
-`.md` 가 원본이고 색인(`notes_index.db`)은 그것을 훑어 만든 것뿐이다.
-어긋난 것 같으면 `VC.exe --색인다시`. 기록은 안 건드린다.
-"""
+    # 기본 서식(결정 19) — 받고 보낸 제품을 대충 적어도 틀이 잡히게. 폰 적기 탭에서도 고른다.
+    DEFAULT_TEMPLATES = {
+        "제품": ("# {{제목}}\n\n"
+               "- 제품명 : \n"
+               "- 종류 : \n"
+               "- 받은날 : {{날짜}}\n"
+               "- 보낸 곳(업체·담당) : \n"
+               "- 보낸날 : \n"
+               "- 상태 : 보유중\n\n"
+               "## 사진\n\n"
+               "## 메모\n"),
+    }
 
     def write_rules(self) -> Path | None:
-        """규칙 파일을 **한 번만** 만든다. 이미 있으면 안 건드린다."""
+        """규칙 파일을 **한 번만** 만든다. 이미 있으면 안 건드린다.
+
+        기본 서식은 **서식마다 한 번만** 넣는다. 넣은 이름을 `_서식/.기본서식넣음` 에 적어 두어
+        ① 전부터 쓰던 창고에도 새 기본 서식이 한 번은 들어가고 ② 사람이 지우면 다시 안 생긴다.
+        ★ 규칙 파일이 있을 때 건너뛰게 두었더니 **이미 쓰던 창고에는 「제품」이 영영 안 생겼다.**
+        같은 이름 서식이 있으면 덮지 않는다.
+        """
         where = self.template_root() / self.RULE_FILE
         try:
-            if where.exists():
-                return where
             where.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write(where, self.RULES)
-        except (OSError, WriteBlocked):
+            # ★ 옛 이름(`이 폴더를 만지는 규칙.md`)이 있으면 **새로 만들지 않는다.**
+            #   사람이 고쳐 뒀을 수 있는 글을 같은 자리에 둘씩 늘리지 않는다.
+            옛것 = any((self.template_root() / 옛).exists() for 옛 in self.옛RULE_FILES)
+            # ★★ **갈래 표가 바뀌면 이 글도 따라가야 한다.** 한 번만 쓰게 두었더니
+            #   2026-09-21 에 `skill` 을 표에 더했는데 **사람이 읽는 규칙 글에는 없었다** —
+            #   기준이 둘이 되는 것이다. 그렇다고 덮어쓰면 사람이 고쳐 둔 글이 날아간다.
+            #   그래서 **VC 가 쓴 그대로일 때만** 다시 쓴다. 우리가 쓴 것의 자국을
+            #   `_서식/.규칙판` 에 남겨, 지금 글과 같으면 아무도 안 고친 것이다.
+            새규칙 = wiki.스키마글()
+            자국 = self.template_root() / ".규칙판"
+
+            def _자국찍기(글: str) -> None:
+                try:
+                    _atomic_write(자국, hashlib.sha256(글.encode("utf-8")).hexdigest())
+                except (OSError, WriteBlocked):
+                    pass          # 자국을 못 남겨도 규칙 글은 섰다
+
+            if not where.exists() and not 옛것:
+                _atomic_write(where, 새규칙)
+                _자국찍기(새규칙)
+            elif where.exists():
+                있던 = read_text(where)
+                적힌 = read_text(자국).strip() if 자국.exists() else ""
+                내가쓴것 = 적힌 == hashlib.sha256(있던.encode("utf-8")).hexdigest()
+                if 적힌 and 내가쓴것 and 있던 != 새규칙:
+                    _atomic_write(where, 새규칙)      # 표가 바뀌었다 — 따라 쓴다
+                    _자국찍기(새규칙)
+            표 = self.template_root() / ".기본서식넣음"
+            넣은것 = set(read_text(표).split()) if 표.exists() else set()
+            새로 = [이름 for 이름 in self.DEFAULT_TEMPLATES if 이름 not in 넣은것]
+            for 이름 in 새로:
+                틀 = self.template_root() / f"{이름}.md"
+                if not 틀.exists():
+                    _atomic_write(틀, self.DEFAULT_TEMPLATES[이름])
+            if 새로:
+                _atomic_write(표, chr(10).join(sorted(넣은것 | set(새로))) + chr(10))
+        except (OSError, WriteBlocked, Vanished):
             return None      # 못 써도 프로그램이 멈출 이유가 없다
         return where
 
     def template_root(self) -> Path:
         return self.root / TEMPLATE_DIR
+
+    def _특별폴더세우기(self) -> None:
+        """표에 적힌 특별 폴더를 **미리 만들어 둔다.**
+
+        ★ 쓸 때 만들게 두었더니 `_attachments`·`_vclog` 가 **아예 안 보였다**(오너가
+          「아직 안 생김 폴더도 만들라」 2026-09-21). 자리가 보여야 사람이 거기 넣는다 —
+          붙임 파일을 어디에 둘지 몰라 창고 아무 데나 두게 되는 것을 막는다.
+        ★ 빈 폴더는 **git·일부 동기화가 안 나른다.** 여기서 만드는 까닭은 이 기계에서
+          눈에 보이게 하려는 것이지, 어디로 옮겨도 따라간다는 뜻이 아니다.
+        """
+        for 이름 in wiki.특별폴더:
+            try:
+                (self.root / 이름).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass          # 못 만들어도 창고가 멈출 이유가 없다
+
+    def _특별폴더옮기기(self) -> list[str]:
+        """옛 한글 이름으로 된 **특별 폴더들**을 새 영문 이름으로 옮긴다.
+
+        ★★ 이걸 안 하면 쓰던 사람에게는 **통째로 사라진 것처럼 보인다** — 서식도,
+           규칙 글도, 정리 글도, 지난 판(되돌리기)도. 옮기는 길은 한 번만 돈다.
+        ★ 새 이름 폴더가 이미 있으면 **겹치지 않는 것만** 옮기고 옛 폴더는 남긴다 —
+          둘 다 손으로 만든 자리일 수 있어 우리가 지울 것이 아니다.
+        ★ 한 폴더가 막혀도 **나머지는 옮긴다.** 하나 때문에 다 멈추면 더 나쁘다.
+        """
+        옮긴것 = []
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            새자리 = self.root / 새이름
+            for 옛이름 in 옛이름들:
+                옛자리 = self.root / 옛이름
+                if not 옛자리.is_dir() or 옛자리 == 새자리:
+                    continue
+                try:
+                    if not 새자리.exists():
+                        옛자리.rename(새자리)
+                        옮긴것.append(f"{옛이름} → {새이름}")
+                        continue
+                    # ★★ **훑으면서 옮기면 안 된다.** `iterdir()` 은 게으른 훑기라
+                    #   옮기는 사이 훑개가 어긋나 `FileNotFoundError` 가 난다 —
+                    #   모두검사에서 한 번 터졌다(2026-09-21). 먼저 다 세어 두고 옮긴다.
+                    for 것 in list(옛자리.iterdir()):
+                        목표 = 새자리 / 것.name
+                        if not 목표.exists():
+                            것.rename(목표)
+                    if not list(옛자리.iterdir()):
+                        옛자리.rmdir()
+                    옮긴것.append(f"{옛이름} → {새이름} (겹치지 않는 것만)")
+                except FileNotFoundError:
+                    continue      # 훑는 사이 남이 지웠다 — 옮길 것이 없다
+                except OSError as e:
+                    _알림(f"[폴더 옮기기] `{옛이름}` 을 못 옮겼다 — {type(e).__name__}")
+        return 옮긴것
 
     def templates(self) -> list[str]:
         """쓸 수 있는 서식 이름들."""
@@ -1377,7 +1760,8 @@ class Notes:
         if not folder.exists():
             return []
         try:
-            return sorted(f.stem for f in folder.glob("*.md"))
+            # ★ 규칙 파일도 `_서식/` 에 산다 — 빼지 않으면 폰 서식 목록에 「이 폴더를 만지는 규칙」이 틀로 뜬다(5단계).
+            return sorted(f.stem for f in folder.glob("*.md") if f.name != self.RULE_FILE)
         except OSError:
             return []
 
@@ -1673,15 +2057,15 @@ class Notes:
 
     # --- 파일 -----------------------------------------------------------
 
-    def path_of(self, title: str, created: str = "") -> Path:
+    def path_of(self, title: str, created: str = "", kind: str = "") -> Path:
         """항목의 파일 자리.
 
         **이미 있으면 그 자리를 그대로 쓴다.** 사람이 옮겨 둔 폴더를 저장할 때마다
         되돌리면, 정리해 둔 것이 매번 흐트러진다.
 
-        새로 만드는 것은 `연/월` 폴더에 넣는다. 20년치를 한 폴더에 쌓으면 탐색기도
-        옵시디언도 버거워진다. 훑는 속도는 폴더를 나눠도 같지만(실측), 사람이 열어
-        볼 때가 다르다.
+        새로 만드는 것은 **층 아래 `연/월`** 폴더에 넣는다 — `raw/2026/09` 또는
+        `wiki/2026/09`(오너 결정 2026-09-20 · 카파시 LLM Wiki 기준). 층은 `wiki.py` 가
+        **갈래로** 정한다. 20년치를 한 폴더에 쌓으면 탐색기도 옵시디언도 버거워진다.
         """
         title = 제목맞춤(title)   # 맥(NFD)·못 쓰는 글자를 한 꼴로
         row = self.conn.execute(
@@ -1691,7 +2075,12 @@ class Notes:
             return Path(row["path"])
         stamp = (created or _now())[:7]              # YYYY-MM
         year, _, month = stamp.partition("-")
-        folder = self.root / year / month if year.isdigit() else self.root
+        if year.isdigit():
+            # 층은 갈래가 정한다. 갈래를 모르면 `wiki/` 다 — **원본은 일부러 그렇게 적어야**
+            # `raw/` 로 간다. 손 안 대는 자리에 실수로 들어가면 사람이 고치기 곤란하다.
+            folder = self.root / wiki.자리(kind or "", f"{year}/{month}")
+        else:
+            folder = self.root
         folder.mkdir(parents=True, exist_ok=True)
         이름 = safe_title(title)
         자리 = folder / f"{이름}.md"
@@ -1725,6 +2114,25 @@ class Notes:
             자리 = folder / f"{이름}~{hashlib.sha256(title.encode()).hexdigest()[:6]}.md"
         return 자리
 
+    # ★★ **바뀌면 알린다.** 훑어서 알아내지 말고 **바꾼 쪽이 말하게** 한다
+    #   (오너 2026-09-24: 「감시하지 말고 버튼 눌렀을 때 신호 전송」).
+    #   여기 하나에 걸어 두면 창이 쓰든 문이 쓰든 AI 가 쓰든 **다 걸린다** —
+    #   부르는 자리마다 알림을 넣으면 반드시 한 군데를 빠뜨린다.
+    알림걸이: Callable[[dict], None] | None = None
+
+    def _알린다(self, 무엇: str, 제목: str, 새제목: str = "") -> None:
+        """글이 바뀌었다고 밖에 말한다. **알리다 터져도 쓰기는 이미 끝났다.**"""
+        걸이 = self.알림걸이
+        if 걸이 is None:
+            return
+        것 = {"kind": "note", "what": 무엇, "title": 제목}
+        if 새제목:
+            것["new_title"] = 새제목
+        try:
+            걸이(것)
+        except Exception:
+            pass          # 알림이 실패해도 창고는 멀쩡하다
+
     def write(self, note: Note, at: str | Path = "") -> Path:
         """항목을 쓴다. **이미 있으면 신원(식별자·만든 날짜)을 물려받는다.**
 
@@ -1748,7 +2156,7 @@ class Notes:
         note.본문앞머리끌어올리기()
         note.id = note.id or f"{int(time.time() * 1000):x}"
         note.created = note.created or _now()
-        path = Path(at) if at else self.path_of(note.title, note.created)
+        path = Path(at) if at else self.path_of(note.title, note.created, note.kind)
         fresh = note.dumps()
         # 덮어쓰기 전에 지난 판을 남긴다. **내용이 같으면 안 남긴다** — 안 바뀐 저장이
         # 판만 늘리면 정작 되돌리고 싶은 지점이 밀려나 사라진다.
@@ -1782,6 +2190,7 @@ class Notes:
         self.conn.execute("UPDATE notes SET wrote = ? WHERE path = ?",
                           (_지문, str(path)))
         self.conn.commit()
+        self._알린다("write", note.title)
         return path
 
     def _남의손인가(self, path: Path, 지금글: str) -> bool:
@@ -1801,7 +2210,8 @@ class Notes:
                   else Path(str(self.index_path)).parent) / "vc-잠금"
         return _덧붙이기잠금(자리폴더, str(self.root) + "|" + 제목맞춤(title))
 
-    def append(self, title: str, text: str, kind: str = "note", pinned: bool = False) -> Path:
+    def append(self, title: str, text: str, kind: str = wiki.기본갈래,
+               pinned: bool = False) -> Path:
         """있으면 뒤에 붙이고, 없으면 새로 만든다.
 
         AI가 관찰을 쌓는 기본 방식이다. 덮어쓰기를 기본으로 하면 어제 적은 것이
@@ -1897,6 +2307,7 @@ class Notes:
             for table, col in (("links", "src"), ("tags", "title"), ("aliases", "title")):
                 self.conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (path.stem,))
             self.conn.commit()
+        self._알린다("delete", title)
         return True
 
     # --- 인덱스 ---------------------------------------------------------
@@ -1908,10 +2319,17 @@ class Notes:
         느려지면 그때 파일 감시로 바꾼다.
         """
         seen, changed = set(), 0
-        known = {
-            r["path"]: r["mtime"]
-            for r in self.conn.execute("SELECT path, mtime FROM notes")
-        }
+        # ★ 앞머리 표가 새로 생겨 비어 있으면 **이번 한 번은 전부** 다시 읽는다.
+        #   파일이 안 바뀌었으니 평소 같으면 건너뛰는데, 그러면 `status:` 가 영영 0장이다.
+        처음채우기 = getattr(self, "_앞머리채울까", False)
+        # ★★ **걷어낼 목록은 늘 진짜 색인에서 뽑는다.** 예전엔 `처음채우기` 일 때
+        #   `known` 을 통째로 비웠는데, 그러면 「바뀐 것」뿐 아니라 **「사라진 것」까지
+        #   비어** 지워진 글이 색인에 영영 남았다.
+        #   창고 하나를 여러 기계가 같이 쓸 때(NAS 꼴) 이게 바로 드러난다 —
+        #   **맥에서 지운 글이 윈도우에서 계속 보인다**(실기로 잡았다 · 2026-09-24).
+        색인에있던 = {r["path"]: r["mtime"]
+                 for r in self.conn.execute("SELECT path, mtime FROM notes")}
+        known = {} if 처음채우기 else 색인에있던
         todo = []
         for path in self.notes_files():
             # 목록을 만드는 사이에도 남이 지운다. **사라진 것은 없는 것으로 친다** —
@@ -1949,10 +2367,12 @@ class Notes:
             changed += 1
             if changed % 500 == 0:
                 self.conn.commit()
-        for gone in set(known) - seen:
+        for gone in set(색인에있던) - seen:
             self.forget(gone, commit=False)
             changed += 1
         self.conn.commit()
+        self._앞머리채울까 = False
+        self._앞머리이름 = None
         return changed
 
     def forget(self, gone: str | Path, commit: bool = True) -> None:
@@ -1999,6 +2419,40 @@ class Notes:
             name, n = f"{base} {n}{suffix}", n + 1
         (folder / name).write_bytes(data)
         return name
+
+    #: 목록 카드가 쓰는 작은 사진의 너비들. 아무 수나 받으면 폴더가 무한히 는다.
+    THUMB_W = (320, 640)
+
+    def thumbnail_path(self, name: str, w: int) -> Path | None:
+        """작은 사진을 만들어 그 자리를 준다. 못 만들면 None(부르는 쪽이 원본을 준다).
+
+        ★★ **왜 필요한가.** 폰 목록 카드가 사진마다 **원본을 통째로** 받아 갔다 —
+        `cacheWidth` 는 그린 뒤에 줄일 뿐이라 받는 양은 그대로다(몇 MB씩). 목록만 훑어도
+        데이터가 나가고, 앱을 껐다 켜면 또 받았다. 320px JPEG 면 보통 30~60KB 다.
+        ※ 한 번 만들면 `_첨부/.썸네일/<너비>/` 에 남아 다음부터는 읽기만 한다.
+        ※ HEIC 처럼 Pillow 가 못 읽는 꼴이면 None — 원본을 준다(폰이 그것을 캐시에 넣어
+          **두 번은 안 받는다**). 폰에서 올린 사진은 올릴 때 이미 폰에 있으니 받지도 않는다.
+        """
+        if w not in self.THUMB_W:
+            return None
+        원본 = self.attachment_path(name)
+        if 원본 is None or 원본.suffix.lower() not in IMAGE_EXT:
+            return None
+        자리 = self.attach_root() / ".썸네일" / str(w) / (원본.stem + ".jpg")
+        try:
+            if 자리.is_file() and 자리.stat().st_mtime >= 원본.stat().st_mtime:
+                return 자리
+            from PIL import Image
+
+            자리.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(원본) as 그림:
+                그림 = 그림.convert("RGB")
+                그림.thumbnail((w, w * 4))       # 세로로 긴 사진도 너비만 맞춘다
+                그림.save(자리, "JPEG", quality=78, optimize=True)
+            return 자리
+        except Exception:
+            # 못 만들어도 사진은 보여야 한다 — 원본으로 간다.
+            return None
 
     def attachment_path(self, name: str) -> Path | None:
         """이름으로 첨부 파일을 찾는다. 없으면 None."""
@@ -2075,6 +2529,7 @@ class Notes:
             self.conn.execute(f"DELETE FROM {table} WHERE {'src' if table == 'links' else 'title'} = ?",
                               (note.title,))
         self.conn.execute("DELETE FROM aliases WHERE title = ?", (note.title,))
+        self.conn.execute("DELETE FROM props WHERE title = ?", (note.title,))
         # ★ **AI 가 부어 넣은 글 안의 `[[ ]]` 는 「사람이 이은 것」이 아니다.**
         # 흡수한 글이 남의 항목 이름을 인용만 해도 굳은 선이 생겼다 — 상태줄의
         # 「적은 것」이 2에서 4로 늘었는데 사람은 아무것도 안 이었다.
@@ -2098,6 +2553,13 @@ class Notes:
             "INSERT OR IGNORE INTO aliases (alias, title) VALUES (?, ?)",
             [(a, note.title) for a in note.aliases if a != note.title],
         )
+        # 앞머리 값. 목록·사전은 글로 펴서 담는다 — 찾을 때는 「그 말이 들었나」면 된다.
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO props (title, key, value) VALUES (?, ?, ?)",
+            [(note.title, str(k), 앞머리값(v)) for k, v in (note.extra or {}).items()
+             if str(k).strip() and v not in (None, "")],
+        )
+        self._앞머리이름 = None      # 새 이름이 생겼을 수 있다
         if commit:
             self.conn.commit()
 
@@ -2105,22 +2567,29 @@ class Notes:
 
     #  좁히는 말이 걸리는 곳. 값 하나를 물음표로 받는다.
     _NARROW_SQL = {
-        "태그": "EXISTS (SELECT 1 FROM tags g WHERE g.title = n.title AND g.tag LIKE ?)",
-        "경로": "n.path LIKE ?",
+        "태그": ("EXISTS (SELECT 1 FROM tags g WHERE g.title = n.title "
+               "AND g.tag LIKE ? ESCAPE '\\')"),
+        "경로": "n.path LIKE ? ESCAPE '\\'",
         "종류": "n.kind = ?",
         "해": "substr(n.created, 1, 4) = ?",
-        "제목": "n.title LIKE ?",
+        "제목": "n.title LIKE ? ESCAPE '\\'",
     }
     _NARROW_ARG = {
-        "태그": lambda v: v.lstrip("#") + "%",
+        "태그": lambda v: 라이크(v.lstrip("#")) + "%",
         # ★★ **윈도우 경로는 `\` 인데 사람은 `/` 로 적는다.** `path:2026/09` 가 영영
         #   안 걸렸다 — 0장이 나오는데 왜인지도 안 보였다. 적는 대로 걸리게 바꿔 준다.
-        #   (맥·리눅스에서는 `/` 그대로라 아무 일도 안 일어난다.)
-        "경로": lambda v: "%" + v.replace("/", chr(92)) + "%",
+        #   ※ 전에는 `chr(92)` 로 **늘** 바꿔서, 「맥·리눅스에서는 아무 일도 안 일어난다」는
+        #     주석과 달리 맥에서는 `2026/09` 가 `2026\09` 가 되어 되레 0장이 됐다.
+        #     `os.sep` 를 쓰면 윈도우에서만 바뀌고 맥은 적은 그대로 간다.
+        "경로": lambda v: "%" + 라이크(v.replace("/", os.sep)) + "%",
         "종류": lambda v: v,
         "해": lambda v: v,
-        "제목": lambda v: "%" + 제목맞춤(v) + "%",
+        "제목": lambda v: "%" + 라이크(제목맞춤(v)) + "%",
     }
+
+    #  앞머리로 좁히기. 이름과 값 **둘**을 받으므로 물음표가 두 개다.
+    _앞머리SQL = ("EXISTS (SELECT 1 FROM props p WHERE p.title = n.title "
+               "AND p.key = ? AND p.value LIKE ? ESCAPE '\\')")
 
     def _narrow_sql(self, narrow: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
         """좁히는 말을 SQL 조건으로. 모르는 이름은 조용히 버린다."""
@@ -2128,12 +2597,96 @@ class Notes:
         for kind, value in narrow:
             drop = kind.startswith("빼기:")
             base = kind[3:] if drop else kind
+            if base.startswith("앞머리:"):
+                # 값은 **앞자리 일치**로 본다(태그와 같은 규칙) — `status:resolved` 가
+                # 「resolved  # 원인 확정…」처럼 뒤에 말이 붙은 값도 잡는다.
+                where.append(f"NOT ({self._앞머리SQL})" if drop else self._앞머리SQL)
+                args.extend([base[4:], 라이크(value) + "%"])
+                continue
             sql = self._NARROW_SQL.get(base)
             if sql is None:
                 continue
             where.append(f"NOT ({sql})" if drop else sql)
             args.append(self._NARROW_ARG[base](value))
         return where, args
+
+    def 앞머리모음(self, titles) -> dict:
+        """그 글들의 앞머리를 `{제목: {이름: 값}}` 으로. 좁히기 제안이 이것을 센다."""
+        titles = [t for t in titles if t]
+        if not titles:
+            return {}
+        낸다: dict = {}
+        칸 = ",".join("?" * len(titles))
+        for t, k, v in self.conn.execute(
+                f"SELECT title, key, value FROM props WHERE title IN ({칸})", titles):
+            낸다.setdefault(t, {})[k] = v
+        return 낸다
+
+    def 폴더나무(self) -> list[tuple[str, int, int]]:
+        """창고의 폴더를 `(보일 이름, 깊이, 글 수)` 로. **빈 폴더는 안 낸다.**
+
+        옵시디언의 「파일 탐색기」가 하는 일이다. VC 는 새 글을 연/월에 두지만
+        **사람이 옮겨 둔 자리는 지키므로**, 창고에는 제 나름의 폴더가 생긴다.
+        """
+        셈: dict[str, int] = {}
+        for (자리,) in self.conn.execute("SELECT path FROM notes"):
+            try:
+                안 = Path(자리).parent.relative_to(self.root).as_posix()
+            except ValueError:
+                continue
+            if 안 == "." or any(조각.startswith(".") for 조각 in Path(안).parts):
+                안 = "" if 안 == "." else 안
+                if 안 == "" :
+                    셈[""] = 셈.get("", 0) + 1
+                continue
+            셈[안] = 셈.get(안, 0) + 1
+        # 위 폴더도 세어 둔다 — 「2026」 을 눌러 그 해 전부를 볼 수 있어야 한다
+        모두: dict[str, int] = {}
+        for 안, 수 in 셈.items():
+            모두[안] = 모두.get(안, 0) + 수
+            조각 = Path(안).parts if 안 else ()
+            for i in range(1, len(조각)):
+                위 = "/".join(조각[:i])
+                모두[위] = 모두.get(위, 0) + 수
+        낸다 = []
+        for 안 in sorted(x for x in 모두 if x):
+            조각 = Path(안).parts
+            낸다.append((조각[-1], len(조각) - 1, 모두[안]))
+        if 셈.get(""):
+            낸다.insert(0, ("(맨 위)", 0, 셈[""]))
+        return 낸다
+
+    def 앞머리세기(self, 최대: int = 20) -> list[tuple[str, int]]:
+        """어떤 앞머리가 몇 장에 붙어 있나. **많은 것부터.**
+
+        옵시디언의 「속성」 칸이 하는 일이다 — 볼트가 무엇을 적어 왔는지 한눈에 본다.
+        글마다 다른 것(`들인곳`·`id`)은 세어 봐야 고르는 데 안 쓰이므로 뺀다.
+        """
+        안셈 = ("들인곳", "id", "created", "지은이")
+        빈칸 = ",".join("?" * len(안셈))
+        return [(r[0], r[1]) for r in self.conn.execute(
+            f"SELECT key, count(*) c FROM props WHERE key NOT IN ({빈칸}) "
+            "GROUP BY key ORDER BY c DESC, key LIMIT ?", (*안셈, 최대))]
+
+    def 앞머리값들(self, 이름: str, 최대: int = 20) -> list[tuple[str, int]]:
+        """그 앞머리에 어떤 값이 몇 장인지. **많은 것부터.**"""
+        낸다: dict[str, int] = {}
+        for (값,) in self.conn.execute("SELECT value FROM props WHERE key = ?", (이름,)):
+            깔끔 = str(값).split("#")[0].strip()
+            if not 깔끔:
+                continue
+            if len(깔끔) > 40:          # 긴 글귀는 고르는 말이 못 된다
+                깔끔 = 깔끔[:39] + "…"
+            낸다[깔끔] = 낸다.get(깔끔, 0) + 1
+        return sorted(낸다.items(), key=lambda kv: (-kv[1], kv[0]))[:최대]
+
+    def 앞머리이름들(self) -> frozenset:
+        """창고가 실제로 지닌 앞머리 이름들. 검색이 이것으로 `이름:값` 을 가른다."""
+        있는것 = getattr(self, "_앞머리이름", None)
+        if 있는것 is None:
+            있는것 = frozenset(r[0] for r in self.conn.execute("SELECT DISTINCT key FROM props"))
+            self._앞머리이름 = 있는것
+        return 있는것
 
     _정규식꼴 = re.compile(r"(?:(?<=\s)|^)/((?:\\/|[^/\s]|(?<=\\)\s)(?:\\/|[^/])*)/(?=\s|$)")
 
@@ -2183,7 +2736,7 @@ class Notes:
         — 사용자가 직접 말한 것은 관찰에 밀리지 않는다(결정 22).
         """
         q = unicodedata.normalize("NFC", q)           # 맥(NFD)에서 친 물음도 같게
-        ask = Ask(q)
+        ask = Ask(q, self.앞머리이름들())
         rows: list[sqlite3.Row] = []
         where, args = self._narrow_sql(ask.narrow)
         match = ask.match() if self.fts else ""
@@ -2211,9 +2764,10 @@ class Notes:
             # **아무것도 못 찾는 것보다는 낫다.** 좁히는 말이 있었다면 안 한다 —
             # `tag:없는것`이 0건인 것은 옳은 답이지 실패가 아니다.
             rows = self.conn.execute(
-                "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? "
+                "SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' "
+                "   OR body LIKE ? ESCAPE '\\' "
                 "ORDER BY pinned DESC, created DESC LIMIT ?",
-                (f"%{q}%", f"%{q}%", k),
+                (f"%{라이크(q)}%", f"%{라이크(q)}%", k),
             ).fetchall()
         # ★ 뜻으로 채우기 **전에** 낱말로 몇 개 걸렸는지 남긴다. 화면이 이것 없이
         #   「관련 N개야」라고 해서, 어느 글에도 없는 말에도 관련이 있다고 말했다(시험 쪽 9).
@@ -2320,12 +2874,12 @@ class Notes:
             got = self.conn.execute(sql, (title, *args)).fetchone()
             if got is None:
                 continue
-            갈 = got["kind"] or "note"
+            갈 = got["kind"] or wiki.기본갈래
             if 갈 not in 묶음:
                 묶음[갈], _ = [], 차례.append(갈)
             묶음[갈].append(got)
         # 낱말로 이미 든 갈래는 **한 바퀴 뒤로 민다** — 그쪽은 이미 자리를 얻었다.
-        먼저든갈래 = {r["kind"] or "note" for r in rows}
+        먼저든갈래 = {r["kind"] or wiki.기본갈래 for r in rows}
         차례.sort(key=lambda 갈: 갈 in 먼저든갈래)
         층 = 0
         while len(out) < k:
@@ -2353,14 +2907,16 @@ class Notes:
         `eb`를 다 쳤는데 `eb-stage0-decisions`가 먼저 뜨면 한 번 더 손이 간다.
         """
         part = 제목맞춤(part)   # 「질문?」 으로 쳐도 「질문？ 답」 이 걸리게
-        like = f"%{part}%"
-        head = f"{part}%"
+        like = f"%{라이크(part)}%"
+        head = f"{라이크(part)}%"
         rows = self.conn.execute(
-            "SELECT title AS name, (title = ?) AS same, (title LIKE ?) AS head, use_count "
-            "  FROM notes WHERE title LIKE ? "
+            "SELECT title AS name, (title = ?) AS same, "
+            "       (title LIKE ? ESCAPE '\\') AS head, use_count "
+            "  FROM notes WHERE title LIKE ? ESCAPE '\\' "
             "UNION ALL "
-            "SELECT alias AS name, (alias = ?) AS same, (alias LIKE ?) AS head, 0 "
-            "  FROM aliases WHERE alias LIKE ? "
+            "SELECT alias AS name, (alias = ?) AS same, "
+            "       (alias LIKE ? ESCAPE '\\') AS head, 0 "
+            "  FROM aliases WHERE alias LIKE ? ESCAPE '\\' "
             "ORDER BY same DESC, head DESC, use_count DESC, name LIMIT ?",
             (part, head, like, part, head, like, k),
         ).fetchall()
@@ -2429,6 +2985,11 @@ class Notes:
         #   `[[옛것]]` · `[[옛것#소제목]]` · `[[옛것|보일 글]]` · `![[옛것]]`(끼워넣기).
         #   글자로만 바꿀 때는 첫 꼴만 걸려 **나머지가 허공을 가리켰다**(재 보고 찾았다).
         #   같은 정규식(`LINK_RE`)으로 바꾼다 — 찾는 쪽과 고치는 쪽이 갈리면 또 새 나간다.
+        # ★★ **코드 안의 `[[…]]` 는 링크가 아니니 이름도 안 바꾼다.** 규칙·서식 글은 그
+        #   꼴을 예시로 적는다 — 「링크」라는 글을 하나 만들었다가 이름을 바꾸면
+        #   「이 창고를 쓰는 법」의 예시가 통째로 따라 바뀐다.
+        #   `parse_links` 가 코드를 안 세게 바꾼 날(2026-09-21) 여기를 같이 안 고쳐서
+        #   **찾는 쪽과 고치는 쪽이 갈렸다** — 바로 위 주석이 경고하던 그 함정이다.
         def 바꿔(m: "re.Match") -> str:
             이름, 소제목, 보일 = m.group(1), m.group(2), m.group(3)
             if 제목맞춤(이름.strip()) != 제목맞춤(old):
@@ -2452,7 +3013,7 @@ class Notes:
                     text = read_text(path)
                 except (Vanished, OSError):
                     continue
-                새글 = 고치개.sub(바꿔, text)
+                새글 = 코드밖만(고치개, text, 바꿔)
                 if 새글 != text:
                     try:
                         _atomic_write(path, 새글)
@@ -2460,6 +3021,7 @@ class Notes:
                         continue
         self.reindex()
         쪽지.unlink(missing_ok=True)      # 끝났으니 쪽지를 지운다
+        self._알린다("rename", old, new)
         return True
 
     def 이름바꾸다만것(self) -> tuple[str, str] | None:
@@ -2491,6 +3053,15 @@ class Notes:
         row = self.conn.execute("SELECT title FROM aliases WHERE alias = ?", (name,)).fetchone()
         if row:
             return row["title"]
+        # ★★ **대소문자는 안 가린다** — 옵시디언이 그렇다. 별칭은 소문자 슬러그로 들어오는데
+        #   사람은 `[[SnapStamp]]` 라고 적는다. 안 가려야 그 링크가 닿는다(6개가 끊겼었다).
+        #   정확히 맞는 것이 다 진 다음의 마지막 길이라, 제 이름으로 불린 글이 밀리지 않는다.
+        for 표, 칸 in (("notes", "title"), ("aliases", "alias")):
+            row = self.conn.execute(
+                f"SELECT title FROM {표} WHERE {칸} = ? COLLATE NOCASE "
+                "ORDER BY title LIMIT 1", (name,)).fetchone()
+            if row:
+                return row["title"]
         # 경로로 건 링크 — 옵시디언은 `[[폴더/노트]]`를 받는다. 실제 기록에 그렇게 적힌
         # 링크가 있어서, 마지막 조각으로 한 번 더 찾는다.
         if "/" in name or "\\" in name:
@@ -2500,11 +3071,20 @@ class Notes:
         return None
 
     def _names(self, title: str) -> list[str]:
-        """이 항목을 가리킬 수 있는 모든 이름 — 제목과 별칭들."""
+        """이 항목을 가리킬 수 있는 모든 이름 — 제목과 별칭들.
+
+        ★★ **원래 글자 꼴도 센다.** 제목에 `/`·`?` 가 들면 파일 이름에 못 써서 전각으로
+           바꿔 저장하는데, 링크는 **원래 글자로** 적힌다(정리 글이 그렇게 쓴다).
+           `resolve` 는 맞춰 주지만 역링크·이웃은 이름을 **정확히** 맞춰 찾으므로,
+           안 넣으면 **닿는 링크인데 역링크에는 안 뜬다**(2026-09-21 재서 잡았다).
+        """
         title = 제목맞춤(title)
         alias = [r["alias"] for r in self.conn.execute(
             "SELECT alias FROM aliases WHERE title = ?", (title,))]
-        return [title, *alias]
+        푼것 = 제목풀기(title)
+        옛빗금 = title.replace("／", "∕")      # 옛 정리 코드가 쓰던 글자
+        더 = [x for x in (푼것, 옛빗금) if x != title]
+        return [title, *alias, *더]
 
     def neighbors(self, title: str) -> list[str]:
         """그래프 화면이 쓸 연결. 나가는 링크와 들어오는 링크를 함께 준다.
@@ -2546,8 +3126,11 @@ class Notes:
             if r["src"] == title:
                 continue
             line = ""
-            for raw in (r["body"] or "").splitlines():
-                if any(m.group(1).strip() in names for m in LINK_RE.finditer(raw)):
+            # ★ 보여 줄 줄도 **코드 밖**에서 고른다. 규칙 글은 `[[…]]` 를 예시로 적는데,
+            #   그 줄을 집으면 역링크 옆에 엉뚱한 예시 문장이 붙는다.
+            몸 = r["body"] or ""
+            for raw, 가림 in zip(몸.splitlines(), _코드지우기(몸).splitlines()):
+                if any(m.group(1).strip() in names for m in LINK_RE.finditer(가림)):
                     line = raw.strip()
                     break
             out.append((r["src"], line))
@@ -2886,7 +3469,26 @@ def _self_check() -> None:
         # 사용자가 옵시디언에서 손으로 만든 파일도 받아들인다.
         (root / "손으로 쓴 것.md").write_text("프론트매터 없음 [[VC]]", encoding="utf-8")  # 평면에 손으로
         assert n.reindex() == 1
-        assert n.read("손으로 쓴 것").kind == "note"
+        # 앞머리 없이 손으로 만든 파일은 **기본갈래**가 된다. 옛 이름(`note`)을 쓰면
+        # 새 글이 창고 기준 밖에 서서, 지도에 「note」 칸이 따로 생긴다.
+        assert n.read("손으로 쓴 것").kind == wiki.기본갈래, n.read("손으로 쓴 것").kind
+
+        # ★★ **새 글이 나는 자리가 넷이다.** 하나라도 옛 갈래(`note`)로 새면 창고 기준
+        #   밖에 서고, 지도에 「note」 칸이 따로 생긴다 — 실제로 넷 중 넷이 샜다(2026-09-21).
+        #   여기서 한 번에 막는다: 갈래를 안 준 글 · `append` · 오늘 일지 · 손으로 만든 파일.
+        n.write(Note(title="갈래 안 준 글", body=""))
+        n.append("쌓는 글", "관찰 하나")
+        일지 = n.daily("2026-01-02")
+        났다 = {"갈래 안 준 글": n.read("갈래 안 준 글").kind,
+              "append": n.read("쌓는 글").kind,
+              "오늘 일지": 일지.kind,
+              "손으로": n.read("손으로 쓴 것").kind}
+        assert not [v for v in 났다.values() if v in wiki.옛갈래], f"옛 갈래로 샌다: {났다}"
+        assert all(wiki.아는갈래(v) for v in 났다.values()), f"규칙에 없는 갈래: {났다}"
+        # 일지는 **제 갈래**를 갖는다 — 메모 수십 장 사이에 섞이면 날짜 글을 못 찾는다
+        assert 일지.kind == "일지", 일지.kind
+        for t in ("갈래 안 준 글", "쌓는 글", "2026-01-02"):
+            n.delete(t)
         assert "손으로 쓴 것" in n.neighbors("VC")
 
         # 인덱스는 언제든 파일에서 다시 만들 수 있다 — 복구 수단이 항상 있다.
@@ -2946,6 +3548,16 @@ def _self_check() -> None:
         assert n.resolve("직장") == "회사" and n.resolve("사무실") == "회사"
         assert n.resolve("회사") == "회사"
         assert n.resolve("없는이름") is None
+        # ★★ **대소문자는 안 가린다** — 볼트 별칭은 소문자 슬러그(`snapstamp`)로 들어오는데
+        #   사람은 `[[SnapStamp]]` 라고 적는다. 안 가려야 닿는다(실제로 6개가 끊겼었다).
+        n.write(Note(title="SnapStamp (프로젝트 4번)", body="네 번째.", aliases=["snapstamp"]))
+        assert n.resolve("SnapStamp") == "SnapStamp (프로젝트 4번)", n.resolve("SnapStamp")
+        assert n.resolve("SNAPSTAMP") == "SnapStamp (프로젝트 4번)"
+        # 정확히 맞는 것이 늘 먼저다 — 대소문자 무시가 제 이름을 빼앗으면 안 된다
+        n.write(Note(title="snapstamp", body="딴 글이다."))
+        assert n.resolve("snapstamp") == "snapstamp", n.resolve("snapstamp")
+        n.delete("snapstamp")
+        n.delete("SnapStamp (프로젝트 4번)")
         assert n.neighbors("아침") == ["회사"], n.neighbors("아침")
         assert n.neighbors("회사") == ["아침"], "별칭으로 온 역링크를 놓친다"
         # ★ **열기도 별칭으로 돼야 한다.** 링크만 닿고 `read` 는 404 였다 —
@@ -3141,12 +3753,22 @@ def _self_check() -> None:
 
         # ★★ **자기 자신을 가리키는 연결 폴더**가 있으면 훑기가 끝없이 따라 들어가다 멈추고
         #   뒤 글이 조용히 빠졌다. 정션을 만들 수 있는 자리에서만 잰다.
+        import os as _os0                  # 이 함수 뒤쪽의 `import os` 보다 앞이라 딴 이름을 쓴다
         import subprocess as _sp
 
         (n.root / "고리 앞").mkdir(exist_ok=True)
         (n.root / "고리 앞" / "고리 뒤 글.md").write_text("고리 뒤에도 있다", encoding="utf-8")
         고리 = n.root / "고리 앞" / "되돌이"
-        _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+        # ★ **맥·리눅스에는 `cmd` 가 없다.** 그냥 부르면 `FileNotFoundError: 'cmd'` 로
+        #   검사가 통째로 터진다(맥에서 실제로 그랬다). 되돌이를 만드는 방법만 다르고
+        #   재려는 것은 같다 — 윈도우는 정션, 그 밖은 심볼릭 링크.
+        if _os0.name == "nt":
+            _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+        else:
+            try:
+                _os0.symlink(n.root, 고리, target_is_directory=True)
+            except OSError:
+                pass                  # 링크를 못 만드는 자리면 이 검사만 건너뛴다
         if 고리.exists():
             try:
                 import time as _t2
@@ -3157,7 +3779,8 @@ def _self_check() -> None:
                 assert n.conn.execute(
                     "SELECT count(*) FROM notes WHERE title = '고리 뒤 글'").fetchone()[0] == 1,                     "연결 폴더를 따라가 같은 글을 여러 번 셌다"
             finally:
-                고리.rmdir()          # 정션만 지운다(가리키는 곳은 그대로)
+                # 고리만 지운다(가리키는 곳은 그대로). 정션은 `rmdir`, 심볼릭 링크는 `unlink`.
+                고리.rmdir() if _os0.name == "nt" else 고리.unlink()
 
         # ★★ **260자 넘는 경로의 글도 세어야 한다.** 윈도우 긴 경로가 꺼진 PC 에서 조용히 빠졌다.
         import os as _os                    # 이 함수 뒤쪽에 `import os` 가 있어 `os` 가 지역 이름이다
@@ -3489,8 +4112,99 @@ def _self_check() -> None:
         assert got.links() == [("회사", "")], got.links()      # 첨부는 링크가 아니다
         assert got.embeds() == [], "첨부가 항목 끼움으로 샜다"
         assert name not in dict(n.unresolved()), "첨부가 미해결 링크로 샜다"
+        # --- 작은 사진(썸네일) — 목록 카드가 원본을 통째로 받지 않게 ---
+        import io as _io
+
+        from PIL import Image as _Image
+
+        큰것 = _io.BytesIO()
+        _Image.new("RGB", (1600, 1200), (200, 60, 40)).save(큰것, "JPEG", quality=95)
+        사진 = n.save_attachment(큰것.getvalue(), ".jpg", "큰 사진")
+        작은 = n.thumbnail_path(사진, 320)
+        assert 작은 is not None and 작은.is_file(), "작은 사진을 못 만든다"
+        with _Image.open(작은) as _t:
+            assert _t.width == 320, _t.size
+        원본크기 = n.attachment_path(사진).stat().st_size
+        assert 작은.stat().st_size * 4 < 원본크기, (작은.stat().st_size, 원본크기)
+        # 두 번째는 다시 안 만든다 — 같은 파일을 그대로 준다
+        먼저 = 작은.stat().st_mtime_ns
+        assert n.thumbnail_path(사진, 320).stat().st_mtime_ns == 먼저, "썸네일을 매번 다시 만든다"
+        # 아무 너비나 받지 않는다(폴더가 무한히 는다) · 못 읽는 꼴이면 None(원본으로 간다)
+        assert n.thumbnail_path(사진, 321) is None
+        assert n.thumbnail_path(name, 320) is None, "깨진 png 로 썸네일을 만들었다고 한다"
+        assert n.thumbnail_path("없는사진.png", 320) is None
+
         assert n.attachment_path("없는사진.png") is None
         assert not is_attachment("그냥 항목")
+        # 표 안 링크 `[[제목\|보일 말]]` — 제목 끝에 `\` 가 붙으면 끊긴 링크다
+        assert parse_links("| [[제품 · a-1\\|a-1]] | [[회의#8월\\|보기]] |") == [("제품 · a-1", ""), ("회의", "8월")]
+        # ★★ **코드 안의 `[[…]]` 는 링크가 아니다** — 규칙 글은 그 꼴을 예시로 적는다
+        assert parse_links("앞 `[[링크]]` 뒤") == [], parse_links("앞 `[[링크]]` 뒤")
+        assert parse_links("```\n[[예시]]\n```\n[[진짜]]") == [("진짜", "")], \
+            parse_links("```\n[[예시]]\n```\n[[진짜]]")
+        assert parse_links("~~~md\n[[예시]]\n~~~") == []
+        # 울타리가 안 닫혀도 끝까지 코드로 본다 — 반만 지우면 뒤가 제멋대로다
+        assert parse_links("```\n[[예시]]") == []
+        # ★★ **제목에 홑따옴표가 든 글**의 링크를 갉아먹으면 안 된다 — 창고에 실제로 있다
+        긴이름 = "제품 · `multilingual-e5-small` ONNX 118MB"
+        assert parse_links(f"목록: [[{긴이름}]]") == [(긴이름, "")], parse_links(f"[[{긴이름}]]")
+        # 그래도 홑따옴표가 **링크를 담으면** 그건 예시다
+        assert parse_links(f"[[{긴이름}]] 과 `[[링크]]`") == [(긴이름, "")], \
+            parse_links(f"[[{긴이름}]] 과 `[[링크]]`")
+
+        # ★★ **제목에 `/` 가 들면 전각(`／`)으로 저장되는데 링크는 원래 글자로 적힌다.**
+        #   `resolve` 만 맞춰 주고 역링크가 안 잡히면 **닿는 링크인데 안 뜬다**(재서 잡았다).
+        with tempfile.TemporaryDirectory() as tmp빗금:
+            n빗금 = Notes(Path(tmp빗금) / "notes")
+            n빗금.write(Note(title="모델 → `models/`", body="몸"))
+            n빗금.write(Note(title="목록", body="- [[모델 → `models/`]]"))
+            n빗금.reindex()
+            제목 = [r["title"] for r in n빗금.conn.execute("SELECT title FROM notes")
+                  if r["title"].startswith("모델")][0]
+            assert "／" in 제목, repr(제목)
+            assert n빗금.resolve("모델 → `models/`") == 제목
+            assert [s for s, _ in n빗금.backlinks(제목)] == ["목록"], n빗금.backlinks(제목)
+            assert n빗금.neighbors("목록") == [제목], n빗금.neighbors("목록")
+            # 옛 정리 코드가 쓰던 `∕`(U+2215)로 적힌 링크도 받는다
+            n빗금.write(Note(title="옛 목록", body="- [[모델 → `models∕`]]"))
+            n빗금.reindex()
+            assert "옛 목록" in [s for s, _ in n빗금.backlinks(제목)], n빗금.backlinks(제목)
+            n빗금.conn.close()
+        # ★★ **찾는 쪽과 고치는 쪽은 같아야 한다.** 코드 안을 링크로 안 세게 바꾼 날
+        #   `rename` 을 같이 안 고쳐서, 링크로는 안 세면서 **이름은 바꿨다**(2026-09-21).
+        with tempfile.TemporaryDirectory() as tmp코드:
+            n코드 = Notes(Path(tmp코드) / "notes")
+            n코드.write(Note(title="링크", body="본체"))
+            n코드.write(Note(title="쓰는 법", body=(
+                "예시:\n\n```\n[[링크]] 처럼 적는다\n```\n\n홑따옴 `[[링크]]` 도.\n\n"
+                "진짜로 [[링크]] 를 가리킨다.")))
+            n코드.reindex()
+            n코드.rename("링크", "이음")
+            몸 = n코드.read("쓰는 법").body
+            assert "```\n[[링크]] 처럼" in 몸, f"코드 울타리 안의 예시를 바꿨다:\n{몸}"
+            assert "`[[링크]]`" in 몸, f"홑따옴 안의 예시를 바꿨다:\n{몸}"
+            assert "진짜로 [[이음]] 를" in 몸, f"진짜 링크를 안 바꿨다:\n{몸}"
+            n코드.conn.close()
+        # 고정 · 보관 · 색 · 휴지통(편의 기능 18·27·28·30번)
+        n.write(Note(title="표시 시험", body="몸"))
+        g = n.mark("표시 시험", pinned=True, archived=True, color="노랑")
+        assert g.pinned and n.read("표시 시험").extra.get("보관") is True and n.read("표시 시험").extra.get("색") == "노랑"
+        n.mark("표시 시험", archived=False, color="")
+        assert "보관" not in n.read("표시 시험").extra and "색" not in n.read("표시 시험").extra and n.read("표시 시험").pinned
+        try:
+            n.mark("표시 시험", color="검정")
+            raise AssertionError("모르는 색을 받았다")
+        except ValueError:
+            pass
+        assert n.mark("없는 글", pinned=True) is None
+        n.delete("표시 시험")
+        휴 = [x for x in n.trashed() if x[0] == "표시 시험"]
+        assert 휴, "지운 글이 휴지통에 없다"
+        assert n.untrash(휴[0][2]) == "표시 시험" and n.read("표시 시험").body.strip() == "몸", "못 되살렸다"
+        assert not [x for x in n.trashed() if x[0] == "표시 시험"], "되살렸는데 휴지통에 남았다"
+        assert n.untrash(n.root / "표시 시험.md") is None, "이력 밖 파일을 되살리기로 받았다"
+        # 사진 글자 주석은 미리보기에 안 나오고, 찾기에는 걸린다
+        assert 카드미리보기("정수기 받음\n\n%%\n사진 글자 (a.jpg):\n송장 7788\n%%") == "정수기 받음"
 
         # --- 폴더 ---
         #
@@ -3550,6 +4264,70 @@ def _self_check() -> None:
         assert got('"정확한 구절"') == {"검색 모듈"}, got('"정확한 구절"')
         assert got('"구절 정확한"') == set(), "구절은 순서가 맞아야 한다"
         assert got("tag:없는것ZZZ") == set(), "좁혔는데 없으면 0건이 옳은 답이다"
+
+        # ★★ **`_` 와 `%` 가 와일드카드로 새면 안 된다**(2026-09-20 · 폴더 칸을 만들다 잡았다).
+        #   SQL `LIKE` 에서 `_` 는 「아무 글자 하나」다. 그대로 넣었더니 `path:_정리` 가
+        #   「`_정리` 폴더의 1장」 대신 **「제목에 '정리'가 든 3장」까지 4장**을 내놓았다.
+        #   창고에는 `_templates`·`_digest` 처럼 밑줄로 시작하는 폴더가 있다.
+        밑줄방 = n.root / wiki.정리폴더
+        밑줄방.mkdir(exist_ok=True)
+        n.write(Note(title="정리함 글", body="여기 있다"), at=밑줄방 / "정리함 글.md")
+        n.write(Note(title="딴 곳의 정리 글", body="제목에 정리가 들었을 뿐"))
+        n.write(Note(title="퍼센트 글", body="몸", extra={"status": "100%끝"}))
+        # ★ `%` 를 안 막으면 「100 + 아무거나 + 끝」 이 되어 **이것까지 걸린다**
+        n.write(Note(title="퍼센트 아닌 글", body="몸", extra={"status": "100아무거나끝"}))
+        n.reindex()
+        찾을말 = f"path:{wiki.정리폴더}"        # 밑줄로 시작하는 폴더 — `_` 가 와일드카드다
+        assert got(찾을말) == {"정리함 글"}, got(찾을말)
+        assert got("status:100%끝") == {"퍼센트 글"}, got("status:100%끝")
+        assert 라이크("a_b%c") == r"a\_b\%c", 라이크("a_b%c")
+
+        # ★ **폴더 나무는 위 폴더도 센다** — 「2019」 를 눌러 그해 전부를 볼 수 있어야 한다.
+        n.write(Note(title="나무 시험 글", body="몸", created="2019-04-07T09:00:00Z"))
+        n.reindex()
+        나무 = n.폴더나무()
+        # 층(`wiki/`) 아래에 연/월이 선다 — 그래서 한 단계 깊다(오너 결정 2026-09-20)
+        assert ("wiki", 0, 1) in [(t, d, c) for t, d, c in 나무 if t == "wiki"] or \
+               any(t == "wiki" and d == 0 for t, d, c in 나무), 나무
+        assert ("2019", 1, 1) in 나무, 나무
+        assert ("04", 2, 1) in 나무, 나무
+        assert [x for x in 나무 if x[0] == wiki.정리폴더], 나무
+
+        # ★★ **앞머리 값으로도 찾는다**(오너 2026-09-20). 옵시디언 볼트를 들이니
+        #   `status` 가 101장, `source` 가 97장이었는데 **그 값으로 찾을 길이 없었다** —
+        #   `status:active` 가 83장을 두고 **2장**을 내놓았다(모르는 이름은 낱말로 쳤다).
+        #   0장이 아니라 2장이라, 사람은 그게 전부인 줄 안다. 그런 답이 제일 나쁘다.
+        n.write(Note(title="앞머리 가", body="몸", extra={"status": "active", "source": "오너 지시"}))
+        n.write(Note(title="앞머리 나", body="몸", extra={"status": "draft"}))
+        n.write(Note(title="앞머리 다", body="몸",
+                     extra={"status": "resolved  # 원인 확정", "tags": ["급함", "배포"]}))
+        n.reindex()
+        assert got("status:active") == {"앞머리 가"}, got("status:active")
+        assert got("status:draft") == {"앞머리 나"}, got("status:draft")
+        # 값은 앞자리로 본다 — 뒤에 주석이 붙어도 걸린다
+        assert got("status:resolved") == {"앞머리 다"}, got("status:resolved")
+        assert got("source:오너") == {"앞머리 가"}, got("source:오너")
+        # 목록 값도 펴서 담는다
+        assert "앞머리 다" in got("tags:급함"), got("tags:급함")
+        # 빼기도 된다
+        assert "앞머리 가" not in got("-status:active status:draft OR status:active"), "빼기가 안 먹는다"
+        # ★ **창고에 없는 이름은 지금까지처럼 낱말로 친다.** 글 속의 `09:30` 이나
+        #   `C:` 를 찾을 때 0장이 되면 안 된다 — 되던 것이 조용히 막히는 쪽이 더 나쁘다.
+        n.write(Note(title="시각 메모", body="회의는 09:30 에 시작한다"))
+        n.reindex()
+        assert got("09:30") == {"시각 메모"}, got("09:30")
+        assert "status" in n.앞머리이름들() and "09" not in n.앞머리이름들(), sorted(n.앞머리이름들())
+
+        # ★★ **쓰던 색인에도 채워져야 한다.** `CREATE TABLE IF NOT EXISTS` 는 표만
+        #   만들고 내용을 안 채운다 — 표만 생기고 비면 `status:` 가 **0장**이 되는데
+        #   「되기는 되는데 아무것도 안 나온다」가 제일 나쁜 꼴이다.
+        n.conn.execute("DELETE FROM props")
+        n.conn.commit()
+        n._앞머리이름 = None
+        n._앞머리채울까 = True       # 색인을 열 때 이 상태가 된다
+        n.reindex()
+        assert got("status:active") == {"앞머리 가"}, "쓰던 색인에 앞머리가 안 채워진다"
+        assert not n._앞머리채울까, "한 번 채우고 나서도 매번 전부 다시 읽는다"
         assert got("path:notes") >= {"배포 준비"}, got("path:notes")
         # ★★ **사람은 `/` 로 적는데 윈도우 경로는 `\` 다.** `path:2026/09` 가 영영
         #   안 걸렸다 — 0장이 나오는데 왜인지도 안 보였다. 적는 대로 걸려야 한다.
@@ -3676,7 +4454,7 @@ def _self_check() -> None:
         (forms / "일지.md").write_text("# {{날짜}}" + chr(10) * 2 + "- [ ] ", encoding="utf-8")
         (forms / "회의록.md").write_text("# {{제목}} / {{시각}} / {{모르는것}}", encoding="utf-8")
         # 규칙 파일도 그 폴더에 있다. 서식 목록에서 빼고 본다.
-        assert [t for t in n.templates() if t != Path(n.RULE_FILE).stem]             == ["일지", "회의록"], n.templates()
+        assert [t for t in n.templates() if t != Path(n.RULE_FILE).stem]             == ["일지", "제품", "회의록"], n.templates()
         today = time.strftime("%Y-%m-%d")
         first = n.daily()
         assert first.title == today
@@ -3693,6 +4471,27 @@ def _self_check() -> None:
         n.reindex()
         assert n.read("일지") is None
         assert n.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == 1
+        # VC 가 적는 기계 기록 요약(`_VC기록/`, 결정 17)도 항목이 아니다 — 기록 폴더는 메모만.
+        (n.root / VC_LOG_DIR).mkdir(exist_ok=True)
+        (n.root / VC_LOG_DIR / "상태.md").write_text("# VC 상태\n\n- 서버 열었다\n", encoding="utf-8")
+        n.reindex()
+        assert n.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == 1, "기계 기록 요약을 항목으로 센다"
+        # 5단계 — 규칙 파일은 서식 목록에 안 뜨고, 기본 「제품」 서식은 처음 한 번만 생긴다.
+        assert Notes.RULE_FILE[:-3] not in n.templates(), n.templates()
+        with tempfile.TemporaryDirectory() as 새:
+            처음 = Notes(Path(새) / "창고")
+            assert "제품" in 처음.templates(), 처음.templates()
+            assert "{{날짜}}" in 처음.template("제품") and "받은날" in 처음.template("제품"), 처음.template("제품")
+            (처음.template_root() / "제품.md").unlink()   # 사람이 지웠다
+            처음.write_rules()
+            assert "제품" not in 처음.templates(), "지운 기본 서식이 다시 생긴다"
+            # ★ 전부터 쓰던 창고(규칙 파일은 있고 표시가 없음)에도 한 번은 들어간다
+            옛창고 = Path(새) / "옛창고"
+            (옛창고 / TEMPLATE_DIR).mkdir(parents=True)
+            (옛창고 / TEMPLATE_DIR / Notes.RULE_FILE).write_text("# 옛 규칙\n", encoding="utf-8")
+            옛 = Notes(옛창고)
+            assert "제품" in 옛.templates(), "이미 쓰던 창고에는 기본 서식이 영영 안 생긴다"
+            assert read_text(옛창고 / TEMPLATE_DIR / Notes.RULE_FILE) == "# 옛 규칙\n", "사람이 고친 규칙을 덮었다"
 
     # --- 뜻으로 찾기 ---
     # **모델 없이 검사한다.** 자체점검이 모델 파일에 매이면, 모델이 없는 PC에서는
@@ -3867,6 +4666,60 @@ def _self_check() -> None:
         # 규칙 파일은 **항목이 아니다** — 서식 자리에 있으니 색인이 안 센다.
         n.reindex()
         assert n.read(Path(n.RULE_FILE).stem) is None, "규칙 파일이 항목으로 셌다"
+
+        # ★★ **규칙 글은 `wiki.py` 표에서 지어진다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   코드와 글 두 군데에 적으면 갈래를 더했을 때 갈라진다 — 사람과 AI 가 다른
+        #   목록을 보게 되는데, 그건 기준이 없는 것과 같다.
+        # 갓 만든 창고로 잰다 — 이 검사가 도는 창고에는 옛 이름 규칙 글이 있을 수 있다
+        with tempfile.TemporaryDirectory() as _새창고:
+            _새 = Notes(Path(_새창고) / "notes")
+            _새.write_rules()
+            규칙글 = read_text(_새.template_root() / _새.RULE_FILE)
+            _새.conn.close()
+        for 갈 in wiki.갈래들:
+            assert f"`{갈}`" in 규칙글, f"갈래 「{갈}」 이 창고의 규칙 글에 없다"
+        for 일 in wiki.연산들:
+            assert f"**{일}**" in 규칙글, f"일 「{일}」 이 창고의 규칙 글에 없다"
+        assert 규칙글 == wiki.스키마글(), "창고에 적힌 규칙이 wiki.py 와 다르다 — 갈라졌다"
+
+        # ★★ **층은 갈래가 정한다**(오너 2026-09-20 · 카파시 LLM Wiki 기준).
+        #   `원본` 은 `raw/` 에, 나머지는 `wiki/` 에. 그 아래에 연/월이 선다.
+        with tempfile.TemporaryDirectory() as _층창고:
+            _층 = Notes(Path(_층창고) / "notes")
+            난것 = {}
+            for 갈, 제 in (("원본", "원본 글"), ("결정", "결정 글"), ("", "갈래 없는 글")):
+                자리 = _층.write(Note(title=제, body="몸", kind=갈,
+                                    created="2026-09-07T09:00:00Z"))
+                난것[제] = 자리.relative_to(_층.root).as_posix()
+            assert 난것["원본 글"].startswith("raw/2026/09/"), 난것
+            assert 난것["결정 글"].startswith("wiki/2026/09/"), 난것
+            # ★ 갈래를 모르면 **`wiki/`** 다 — 손 안 대는 `raw/` 에 실수로 들어가면
+            #   「고치지 않는 자리」에 사람 글이 섞여 규칙이 무너진다. 일부러 적어야 raw 다.
+            assert 난것["갈래 없는 글"].startswith("wiki/2026/09/"), 난것
+            # 사람이 옮겨 둔 자리는 그대로 지킨다 — 층이 생겼다고 되돌리지 않는다
+            옮긴곳 = _층.root / "내가정리한곳"
+            옮긴곳.mkdir()
+            옛자리 = _층.root / 난것["결정 글"]
+            옛자리.replace(옮긴곳 / 옛자리.name)
+            _층.reindex()
+            글2 = _층.read("결정 글")
+            assert 글2 is not None and _층.write(글2).parent.name == "내가정리한곳", "옮긴 자리를 되돌렸다"
+            _층.conn.close()
+
+        # ★ **옛 이름 규칙 글이 있으면 새로 만들지 않는다.** 사람이 고쳐 뒀을 수 있는 글을
+        #   같은 자리에 둘씩 늘리면 어느 것이 규칙인지 알 수 없게 된다.
+        with tempfile.TemporaryDirectory() as _옛창고:
+            _옛 = Notes(Path(_옛창고) / "notes")
+            _옛.template_root().mkdir(parents=True, exist_ok=True)
+            # 창고를 열면 생성자가 이미 규칙 글을 만든다 — **옛 창고를 새 VC 로 여는 꼴**을
+            # 만들려면 그것을 치우고 옛 이름 글만 남겨야 한다.
+            (_옛.template_root() / _옛.RULE_FILE).unlink(missing_ok=True)
+            (_옛.template_root() / _옛.옛RULE_FILES[0]).write_text("# 내가 고친 규칙\n", encoding="utf-8")
+            _옛.write_rules()
+            assert not (_옛.template_root() / _옛.RULE_FILE).exists(), (
+                "옛 이름 규칙 글이 있는데 새 이름으로 또 만들었다")
+            assert read_text(_옛.template_root() / _옛.옛RULE_FILES[0]) == "# 내가 고친 규칙\n"
+            _옛.conn.close()
 
         # 낱말로 찾은 차례는 **안 흔들린다.** 뜻은 뒤에 붙기만 한다.
         plain = [r["title"] for r in n.search("사과", k=8)]
@@ -4060,7 +4913,14 @@ def _self_check() -> None:
         locked = root / "잠김.md"
         locked.write_text("건드리지 마", encoding="utf-8")
         n = Notes(root)
+        # ★★ **「잠근다」가 운영체제마다 다르다.** 윈도우는 읽기 전용이면 자리 바꾸기가
+        #   막히는데, **맥·리눅스는 안 막힌다** — 원자적 쓰기는 `os.replace` 라 파일이
+        #   아니라 **폴더** 권한만 보기 때문이다. 맥에서 그대로 재니 잠근 글이 그냥
+        #   덮여 썼다. 맥에서 사람이 실제로 잠그는 길(Finder 「잠금」)은 `uchg` 플래그라,
+        #   그걸 쓴다 — 덮어쓰기도 바꿔치기도 막히면서 **폴더는 그대로라 곁에는 남는다.**
         os.chmod(locked, stat.S_IREAD)
+        if os.name != "nt":
+            os.chflags(locked, stat.UF_IMMUTABLE)
         try:
             try:
                 n.write(Note(title="잠김", body="바꿔보기"))
@@ -4071,6 +4931,8 @@ def _self_check() -> None:
             beside = list(root.rglob("*못 쓴 글*"))
             assert beside and "바꿔보기" in beside[0].read_text(encoding="utf-8"),                 "쓰던 글을 잃었다"
         finally:
+            if os.name != "nt":
+                os.chflags(locked, 0)
             os.chmod(locked, stat.S_IWRITE)
 
     # --- 동시에 만지기 ---
@@ -4498,6 +5360,190 @@ def _self_check() -> None:
                 "SELECT count(*) FROM links WHERE 흐림 = 1").fetchone()[0] >= 0
         finally:
             n.conn.close()
+
+    # ★★ **갈래 표가 바뀌면 규칙 글도 따라가야 한다.** 한 번만 쓰게 두었더니 2026-09-21
+    #   `skill` 을 표에 더했는데 사람이 읽는 글에는 없었다 — 기준이 둘이 된다.
+    #   그렇다고 덮어쓰면 사람이 고쳐 둔 글이 날아간다. **VC 가 쓴 그대로일 때만** 다시 쓴다.
+    with tempfile.TemporaryDirectory() as tmp규칙:
+        뿌리 = Path(tmp규칙) / "notes"
+        첫 = Notes(뿌리)
+        규칙자리 = 첫.template_root() / Notes.RULE_FILE
+        assert 규칙자리.exists(), "규칙 글이 안 섰다"
+        assert (첫.template_root() / ".규칙판").exists(), "자국을 안 남겼다"
+        첫.conn.close()
+        원래스키마 = wiki.스키마글
+        try:
+            wiki.스키마글 = lambda: 원래스키마() + chr(10) + "새로 더한 갈래 줄" + chr(10)
+            Notes(뿌리).conn.close()
+            assert "새로 더한 갈래 줄" in 규칙자리.read_text(encoding="utf-8"), \
+                "표가 바뀌었는데 규칙 글이 안 따라간다"
+            # 사람이 고친 뒤에는 **안 건드린다**
+            규칙자리.write_text("# 내가 고친 규칙" + chr(10), encoding="utf-8")
+            wiki.스키마글 = lambda: 원래스키마() + chr(10) + "또 다른 줄" + chr(10)
+            Notes(뿌리).conn.close()
+            assert 규칙자리.read_text(encoding="utf-8") == "# 내가 고친 규칙" + chr(10), \
+                "사람이 고친 규칙 글을 덮었다"
+        finally:
+            wiki.스키마글 = 원래스키마
+
+    # ★★ **옛 이름(`_서식`) 폴더를 따라 옮긴다.** 안 옮기면 쓰던 사람에게는 제품 서식도
+    #   규칙 글도 폰 서식 목록도 **통째로 사라진 것처럼 보인다**(2026-09-21 영문 이름으로 옮김).
+    with tempfile.TemporaryDirectory() as tmp서식:
+        뿌리 = Path(tmp서식) / "notes"
+        옛자리 = 뿌리 / wiki.특별폴더[wiki.서식폴더][0]
+        옛자리.mkdir(parents=True)
+        (옛자리 / "제품.md").write_text("# 옛 서식" + chr(10), encoding="utf-8")
+        (옛자리 / Notes.RULE_FILE).write_text("# 옛 규칙" + chr(10), encoding="utf-8")
+        n서식 = Notes(뿌리)
+        새자리 = n서식.template_root()
+        assert 새자리.name == wiki.서식폴더 == "_templates", 새자리.name
+        assert not 옛자리.exists(), "옛 이름 폴더가 남았다"
+        assert (새자리 / "제품.md").read_text(encoding="utf-8") == "# 옛 서식" + chr(10), \
+            "서식을 안 따라 옮겼다"
+        assert (새자리 / Notes.RULE_FILE).read_text(encoding="utf-8") == "# 옛 규칙" + chr(10), \
+            "사람이 고쳤을 수 있는 규칙 글을 덮었다"
+        assert "제품" in n서식.templates(), n서식.templates()
+        # 서식은 **항목으로 안 센다** — 옮긴 뒤에도 그대로여야 한다
+        n서식.reindex()
+        assert n서식.read("제품") is None, "서식이 항목이 됐다"
+        n서식.conn.close()
+
+        # 두 이름이 다 있으면 **겹치지 않는 것만** 끌어오고 옛 폴더는 안 지운다
+        옛자리.mkdir(parents=True)
+        (옛자리 / "제품.md").write_text("# 나중 것" + chr(10), encoding="utf-8")
+        (옛자리 / "명함.md").write_text("# 명함" + chr(10), encoding="utf-8")
+        n둘 = Notes(뿌리)
+        assert (새자리 / "제품.md").read_text(encoding="utf-8") == "# 옛 서식" + chr(10), \
+            "이미 있는 서식을 덮었다"
+        assert (새자리 / "명함.md").exists(), "겹치지 않는 것을 안 끌어왔다"
+        assert 옛자리.exists(), "겹친 것이 남았는데 옛 폴더를 지웠다"
+        n둘.conn.close()
+
+    # ★★ **표에 적힌 폴더를 다 옮긴다.** 서식만 옮기고 말면 **정리 글과 지난 판이
+    #   사라진 것처럼 보인다** — 되돌리기가 통째로 없어지는 것이다.
+    with tempfile.TemporaryDirectory() as tmp표:
+        뿌리 = Path(tmp표) / "notes"
+        뿌리.mkdir(parents=True)
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            옛 = 뿌리 / 옛이름들[0]
+            옛.mkdir()
+            (옛 / "표시.md").write_text(f"# {옛이름들[0]}" + chr(10), encoding="utf-8")
+        n표 = Notes(뿌리)
+        남은옛것 = [옛이름들[0] for 옛이름들 in wiki.특별폴더.values()
+                 if (뿌리 / 옛이름들[0]).exists()]
+        assert not 남은옛것, f"옛 이름 폴더가 남았다: {남은옛것}"
+        for 새이름, 옛이름들 in wiki.특별폴더.items():
+            표시 = 뿌리 / 새이름 / "표시.md"
+            assert 표시.exists(), f"`{옛이름들[0]}` 의 속을 안 옮겼다 → {새이름}"
+            assert 표시.read_text(encoding="utf-8").strip() == f"# {옛이름들[0]}"
+        n표.conn.close()
+
+    # ★ 표에 적힌 특별 폴더는 **쓰기 전에도 보여야 한다**(오너 2026-09-21).
+    with tempfile.TemporaryDirectory() as tmp세움:
+        n세움 = Notes(Path(tmp세움) / "notes")
+        안선것 = [이름 for 이름 in wiki.특별폴더 if not (n세움.root / 이름).is_dir()]
+        assert not 안선것, f"특별 폴더가 안 섰다: {안선것}"
+        n세움.reindex()
+        assert n세움.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"] == 0, \
+            "빈 특별 폴더가 항목으로 셌다"
+        n세움.conn.close()
+
+    # ★★ **쓰는 중인 임시 파일을 남이 지우면 안 된다.** 같은 창고를 딴 데서 여는 것만으로
+    #   상대의 쓰기가 터졌다(`os.replace` → FileNotFoundError). 여럿이 쓰는 시험에서
+    #   6판에 한 번꼴로 났다 — 단독으로는 안 나서 「흔들리는 검사」로 보일 뻔했다.
+    with tempfile.TemporaryDirectory() as tmp찌꺼기:
+        뿌리 = Path(tmp찌꺼기) / "notes"
+        첫 = Notes(뿌리)
+        첫.conn.close()
+        갓난 = 뿌리 / "wiki" / "쓰는중.md.12345.tmp"
+        갓난.parent.mkdir(parents=True, exist_ok=True)
+        갓난.write_text("쓰는 중", encoding="utf-8")
+        늙은 = 뿌리 / "wiki" / "죽다남긴.md.999.tmp"
+        늙은.write_text("찌꺼기", encoding="utf-8")
+        import os as _os찌꺼기
+
+        옛시각 = time.time() - 찌꺼기나이 - 10
+        _os찌꺼기.utime(늙은, (옛시각, 옛시각))
+        둘째 = Notes(뿌리)          # 남이 창고를 연다
+        assert 갓난.exists(), "쓰는 중인 임시 파일을 지웠다 — 남의 쓰기가 터진다"
+        assert not 늙은.exists(), "죽은 판이 남긴 찌꺼기를 안 치운다"
+        둘째.conn.close()
+
+    # ★★ **색인이 텅 빈 채로 남지 않는다.** 화면을 빨리 띄우려고 훑기를 미루는데,
+    #   미룬 훑기는 한 번 돌고 끝난다 — 그 한 번이 어긋나면 **아무도 다시 안 훑어**
+    #   창이 빈 채로 남았다(2026-09-21: 기록 152장인데 색인 1줄로 멈춰 있었다).
+    with tempfile.TemporaryDirectory() as tmp빈색인:
+        뿌리 = Path(tmp빈색인) / "notes"
+        색인 = str(Path(tmp빈색인) / "idx.db")
+        n빈 = Notes(뿌리, 색인)
+        for i in range(30):
+            n빈.write(Note(title=f"글{i}", body=f"몸 {i}"))
+        n빈.reindex()
+        assert n빈.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"] == 30
+        n빈.conn.execute("DELETE FROM notes WHERE title != '글0'")
+        n빈.conn.commit()
+        n빈.conn.close()
+        # **훑기를 미룬 채** 열어도 비어 있으면 채운다
+        다시 = Notes(뿌리, 색인, index_now=False)
+        몇 = 다시.conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"]
+        assert 몇 == 30, f"빈 색인을 안 채웠다: {몇}"
+        다시.conn.close()
+        # 성한 색인은 **안 훑는다** — 켤 때마다 다 읽으면 느려진다
+        성한 = Notes(뿌리, 색인, index_now=False)
+        assert not 성한._색인이비었나(), "성한 색인을 비었다고 한다"
+        성한.conn.close()
+
+    # ★★ **바뀌면 알린다** — 훑어서 알아내지 말고 바꾼 쪽이 말하게 한다.
+    #   걸이를 한 군데(`write`/`_delete`/`_rename`)에만 두었으니, 창이 쓰든 문이
+    #   쓰든 AI 가 쓰든 다 걸려야 한다.
+    with tempfile.TemporaryDirectory() as _알림tmp:
+        _들은것: list[dict] = []
+        _알림n = Notes(Path(_알림tmp) / "창고", ":memory:")
+        _알림n.알림걸이 = _들은것.append
+        _알림n.write(Note(title="알림 글", kind="메모", body="ㄱ"))
+        assert _들은것[-1] == {"kind": "note", "what": "write", "title": "알림 글"}, _들은것
+        _알림n.rename("알림 글", "이름 바꾼 글")
+        assert _들은것[-1]["what"] == "rename" and _들은것[-1]["new_title"] == "이름 바꾼 글", _들은것
+        _알림n.delete("이름 바꾼 글")
+        assert _들은것[-1] == {"kind": "note", "what": "delete", "title": "이름 바꾼 글"}, _들은것
+        # ★ **알리다 터져도 창고는 멀쩡해야 한다** — 신호가 쓰기를 망치면 안 된다
+        def _터지는걸이(것):
+            raise RuntimeError("신호 못 보냈다")
+
+        _알림n.알림걸이 = _터지는걸이
+        _알림n.write(Note(title="그래도 써진다", kind="메모", body="ㄴ"))
+        assert _알림n.read("그래도 써진다") is not None, "알림이 터지자 쓰기까지 망했다"
+        _알림n.conn.close()
+
+    # ★★ **창고 하나를 여러 기계가 같이 쓴다(NAS 꼴).** 한쪽에서 지운 글이 다른
+    #   기계 색인에 남아 있으면 안 된다 — 「맥에서 지웠는데 윈도우에서 계속 보인다」가
+    #   된다. `처음채우기` 일 때 걷어낼 목록까지 비워서 실제로 그랬다(2026-09-24).
+    with tempfile.TemporaryDirectory() as _나스:
+        _한쪽 = Notes(Path(_나스) / "창고", str(Path(_나스) / "A.db"))
+        _한쪽.write(Note(title="같이 쓰는 글", kind="메모", body="A 가 적었다"))
+        _한쪽.reindex()
+        _딴쪽 = Notes(Path(_나스) / "창고", str(Path(_나스) / "B.db"))
+        _딴쪽.reindex()
+        assert _딴쪽.read("같이 쓰는 글") is not None, "딴 기계가 쓴 글이 안 보인다"
+        # 한쪽이 지우면 딴쪽 색인에서도 빠져야 한다 — **처음채우기 중이어도** 그렇다
+        _한쪽.delete("같이 쓰는 글")
+        _딴쪽._앞머리채울까 = True
+        _딴쪽.reindex()
+        _남은 = [r["title"] for r in _딴쪽.conn.execute("SELECT title FROM notes")]
+        assert "같이 쓰는 글" not in _남은, f"지운 글이 딴 기계 색인에 남았다: {_남은}"
+        _한쪽.conn.close()
+        _딴쪽.conn.close()
+
+    # ★★ **셋(윈도우·맥·폰)이 같은 창고를 본다** — 맥에서만 되는 이름을 만들면
+    #   윈도우 손님이 그 글만 조용히 못 받는다.
+    for 금지 in ('<', '>', ':', '"', '/', '\\', '|', '?', '*'):
+        assert 금지 not in safe_title(f"가{금지}나"), (금지, safe_title(f"가{금지}나"))
+    for 예약 in ("CON", "con", "NUL.md", "COM1", "LPT9", "AUX", "PRN"):
+        난것 = safe_title(예약)
+        assert not 윈도우예약.match(난것), (예약, 난것)
+    # 비슷하지만 예약이 아닌 것은 안 건드린다 — 멀쩡한 이름을 바꾸면 링크가 끊긴다
+    assert safe_title("CONCERT") == "CONCERT"
+    assert safe_title("COM10") == "COM10"
 
     print("notes self-check 통과")
 

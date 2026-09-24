@@ -7,11 +7,23 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 import sys
 
 앞말 = "VC:"
+
+# ★★ **맥 `security` 는 ASCII 가 아닌 값을 16진수로 찍는다.** `-w` 로 꺼내면
+#   「sk-시험-deadbeef」가 `736b2dec…6566` 로 나와 **넣은 값과 다르다** —
+#   넣기는 되는데 꺼내기가 안 되니 「보관소에 넣은 키를 못 꺼낸다」로 터졌고,
+#   평문 키 옮기기가 조용히 실패해 **API 키가 설정 파일에 평문으로 남았다.**
+#   (영문 키만 쓰면 안 드러난다. 자체점검이 한글 키를 써서 잡혔다.)
+#
+#   16진수인지 아닌지를 눈으로 가르려 하면 **진짜 16진수 글자로 된 키와 구별이 안 된다.**
+#   그래서 넣을 때부터 **ASCII 로만 적는다** — base64 로 싸고 앞에 표를 붙인다.
+#   표가 없는 값은 예전 방식으로 넣은 것이니 그대로 돌려준다.
+_맥표 = "b64:"
 
 
 def _win():
@@ -48,8 +60,9 @@ def put(name: str, value: str) -> bool:
                           CredentialBlob=buf, Persist=2, UserName="VC")   # 1 = GENERIC, 2 = LOCAL_MACHINE
         return bool(adv.CredWriteW(ctypes.byref(cred), 0))
     if sys.platform == "darwin":
+        싼것 = _맥표 + base64.b64encode(value.encode("utf-8")).decode("ascii")
         return subprocess.run(["security", "add-generic-password", "-U", "-a", "VC",
-                               "-s", 앞말 + name, "-w", value], capture_output=True).returncode == 0
+                               "-s", 앞말 + name, "-w", 싼것], capture_output=True).returncode == 0
     return False
 
 
@@ -67,7 +80,15 @@ def get(name: str) -> str | None:
     if sys.platform == "darwin":
         r = subprocess.run(["security", "find-generic-password", "-a", "VC", "-s", 앞말 + name, "-w"],
                            capture_output=True, text=True)
-        return r.stdout.rstrip("\n") if r.returncode == 0 else None
+        if r.returncode != 0:
+            return None
+        나온것 = r.stdout.rstrip("\n")
+        if not 나온것.startswith(_맥표):
+            return 나온것          # 예전 방식(또는 사람이 손으로 넣은 것)
+        try:
+            return base64.b64decode(나온것[len(_맥표):], validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return None            # 싼 것이 깨졌다 — 엉뚱한 글자를 키라고 내주지 않는다
     return None
 
 

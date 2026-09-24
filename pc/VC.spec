@@ -84,6 +84,10 @@ ort_datas, ort_bins, ort_hidden = collect_all("onnxruntime")
 #
 #   (한 줄로 이어서 친다. PyPI 에는 미리 구운 휠이 없어 `--extra-index-url` 이 있어야
 #    받아진다 — 없으면 「No matching distribution found」 로 끝난다.)
+MAC = sys.platform == "darwin"
+# 맥: CUDA 가 없어 그 사슬 문제가 없다. pip 로 깐 llama-cpp-python(Metal)을 그대로 담는다 — build_mac.sh
+if MAC and not (ENGINE / "llama_cpp").is_dir():
+    ENGINE = Path(__import__("site").getsitepackages()[0])
 if not (ENGINE / "llama_cpp").is_dir():
     raise SystemExit(chr(10).join([
         f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'}",
@@ -97,7 +101,7 @@ llama_bins = [b for b in llama_bins if not b[0].lower().endswith(".lib")]
 큰것 = [d[0] for d in llama_datas + llama_bins if "cuda" in d[0].lower()]
 if 큰것:
     raise SystemExit(f"[VC.spec] CUDA 판을 집었다: {큰것[:3]}")
-print(f"[VC.spec] 대화 엔진 CPU 판 담음 — 자료 {len(llama_datas)}개 "
+print(f"[VC.spec] 대화 엔진 {'Metal' if MAC else 'CPU'} 판 담음 — 자료 {len(llama_datas)}개 "
       f"· 이진 {len(llama_bins)}개")
 
 
@@ -112,11 +116,17 @@ a = Analysis(
         "sounddevice", "segno", "piper",
         # 우리 모듈이지만 eb.py 가 늦게 부르는 것들. 안 적으면 빌드는 되고
         # **실행할 때** 없다고 죽는다.
-        "paths", "report", "ui", "server", "voice", "brain", "notes", "panels", "theme",
+        "paths", "report", "ui", "server", "vcmcp", "mesh", "update", "phone_app", "phone_relay", "voice", "brain", "notes", "panels", "theme",
         "graph3d", "logo", "store", "talklog", "orchestrator", "modules",
         "skills", "engine", "backends", "remote", "phone_relay",
         "product_search", "models_config", "model_store", "eb_protocol",
         "ingest", "gate", "settings", "keystore", "connectors", "selflearn", "google_auth",
+        # 창고의 네 가지 일과 2단계(헤르메스). 늦게 불러 쓰므로 여기 없으면 구운 판에서 죽는다.
+        "wiki", "wikilog", "synth", "audit", "query", "consolidate",
+        "hermes", "codefiles", "vibe", "skillgen", "agentcli",
+        # 아래 열하나는 **전부터 빠져 있던 것들**이다(검사를 넣고서야 드러났다).
+        "ai_fill", "demo", "facets", "mic_tune", "mirror", "orders", "piles",
+        "plugins", "tailnet", "transcribe", "vault",
     ] + ort_hidden + llama_hidden,
     hookspath=[],
     runtime_hooks=[],
@@ -162,8 +172,9 @@ exe = EXE(
     strip=False,
     upx=False,          # 압축은 오탐을 부른다
     console=False,      # 창 프로그램이다. 검은 콘솔이 같이 뜨면 안 된다
-    icon=str(HERE / "vc.ico"),
-    version=str(HERE / "version.txt"),
+    # 맥은 .ico·버전 파일을 안 쓴다 — 아이콘은 BUNDLE 이 .png 를 .icns 로 바꿔 담는다(Pillow)
+    icon=None if MAC else str(HERE / "vc.ico"),
+    version=None if MAC else str(HERE / "version.txt"),
 )
 
 coll = COLLECT(
@@ -174,3 +185,35 @@ coll = COLLECT(
     upx=False,
     name="VC",
 )
+
+if MAC:
+    sys.path.insert(0, str(HERE))
+    import paths as _paths
+
+    app = BUNDLE(
+        coll,
+        name="VC.app",
+        icon=str(HERE / "vc_mac.png") if (HERE / "vc_mac.png").is_file() else None,
+        bundle_identifier="com.unknown8563.vc",
+        version=_paths.VERSION,
+        info_plist={
+            "CFBundleDisplayName": "VC",
+            "CFBundleShortVersionString": _paths.VERSION,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+            # 말로 시키기(받아쓰기). 문구가 없으면 맥이 마이크를 묻지도 않고 막는다
+            "NSMicrophoneUsageDescription": "VC 에게 말로 시키려고 마이크를 쓴다",
+            # 폰 앱·같은 공유기 기기가 붙는 서버(8765)
+            "NSLocalNetworkUsageDescription": "같은 와이파이의 폰 앱이 VC 창고에 붙는다",
+            # ★★ **창고가 `~/Documents/VC` 다.** 맥은 Documents 를 권한으로 막는데,
+            #   문구가 없으면 **묻지도 않고 그냥 매달린다** — Finder 로 띄운 앱이
+            #   `os.scandir` 에서 굳어 서버도 창도 안 떴다(실기로 잡았다 · 2026-09-24).
+            #   터미널로 돌릴 때는 터미널의 허락을 물려받아 잘 돌아서, **구운 것으로만
+            #   나던 탈**이다. 문구를 넣어야 맥이 물어보고, 오너가 허락할 수 있다.
+            "NSDocumentsFolderUsageDescription":
+                "VC 의 기록 창고가 문서 폴더의 VC 안에 있다",
+            # 창고를 딴 자리로 옮겨 둔 경우까지 — 물어볼 자리를 미리 열어 둔다
+            "NSDesktopFolderUsageDescription": "창고를 바탕화면에 두었을 때만 쓴다",
+            "NSDownloadsFolderUsageDescription": "받은 모델·글을 들일 때만 쓴다",
+        },
+    )

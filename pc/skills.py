@@ -24,6 +24,16 @@ from notes import Note, Notes
 MIN_EVIDENCE = 3  # 이만큼 반복돼야 제안한다. 한두 번은 우연이다.
 
 
+# ★★ **쓰는 이름과 읽는 이름을 한 자리에 둔다.** 2026-09-21 에 갈래 이름을 옮겨 보다가
+#   쓰는 쪽만 바꾸고 **읽는 질의(`WHERE kind = …`)를 안 바꿔서** 솜씨가 통째로 안 실렸다
+#   (검사가 잡았다). 이름은 `skill` 로 되돌렸지만(오너 지시) 이 자리는 남긴다 —
+#   다음에 또 옮길 때 **여기 한 줄만** 고치면 쓰는 쪽과 읽는 쪽이 같이 움직인다.
+#   첫째가 쓰는 이름, 나머지는 옛 글을 받는 이름이다.
+import wiki
+
+갈래들 = ("skill",)
+
+
 @dataclass
 class Skill:
     """선언문. 실행기는 이 데이터만 보고 모듈을 부른다."""
@@ -37,6 +47,10 @@ class Skill:
     start_tier: str | None = None  # 정해두면 이 단계부터 시작한다(결정 5 매핑 조정)
     version: int = 1
     previous: dict[str, Any] | None = None  # 되돌리기용 직전 버전(결정 18)
+    # 어느 프로젝트에서 배운 스킬인가. 비면 어디에도 안 매인 일반 스킬이다.
+    # ★ 매어 두면 헤르메스가 그 프로젝트 맥락을 꺼낼 때 **스킬도 같이 뜬다** —
+    #   안 매면 배워 놓고 다시 못 찾는다.
+    project: str = ""
 
     def to_note(self) -> Note:
         body = [
@@ -50,10 +64,12 @@ class Skill:
             body.append(f"- {i}단계: [[{s['module']}]] {json.dumps(s.get('params', {}), ensure_ascii=False)}")
         if self.start_tier:
             body.append(f"- 시작 단계: {self.start_tier}")
+        if self.project:
+            body += ["", f"프로젝트: [[{self.project}]]"]
         return Note(
             title=self.name,
             body="\n".join(body),
-            kind="skill",
+            kind=갈래들[0],
             declaration=asdict(self),
         )
 
@@ -114,7 +130,9 @@ class SkillStore:
 
     def all(self) -> list[Skill]:
         out = []
-        for row in self.notes.conn.execute("SELECT title FROM notes WHERE kind = 'skill'"):
+        구멍 = ",".join("?" * len(갈래들))
+        for row in self.notes.conn.execute(
+                f"SELECT title FROM notes WHERE kind IN ({구멍})", 갈래들):
             s = self.load(row["title"])
             if s:
                 out.append(s)
@@ -261,6 +279,27 @@ def _self_check() -> None:
         s = skills.save(Skill(name="출근 준비", triggers=["출근 준비"],
                               steps=[{"module": "navigate", "params": {"to": "회사"}}]))
         assert s.version == 1 and s.previous is None
+
+        # ★★ **쓰는 이름을 옮겼으면 읽는 쪽도 같이 옮겨야 한다.** 2026-09-21 에
+        #   이름을 옮겨 보다가 쓰는 쪽만 바꿨더니 **솜씨가 통째로 안 실렸다.**
+        #   쓰는 갈래는 `갈래들[0]`, 읽는 질의도 같은 `갈래들` 을 본다.
+        import pathlib as _길
+        t = _길.Path(__file__).read_text(encoding="utf-8")
+        assert s.to_note().kind == 갈래들[0], s.to_note().kind
+        assert wiki.아는갈래(갈래들[0]), f"쓰는 갈래가 규칙 표에 없다: {갈래들[0]}"
+        assert "WHERE kind IN" in t and "'skill'" not in t.split("def all")[-1], \
+            "읽는 질의가 갈래 이름을 제 손으로 적는다 — 옮길 때 또 갈린다"
+        for 갈 in 갈래들:
+            것 = Skill(name=f"{갈} 글", triggers=["x"],
+                     steps=[{"module": "navigate", "params": {"to": "집"}}]).to_note()
+            것.kind = 갈
+            notes.write(것)
+        notes.reindex()
+        assert len(skills.all()) == 1 + len(갈래들), \
+            f"갈래들에 적힌 이름을 다 안 읽는다: {[x.name for x in skills.all()]}"
+        for 갈 in 갈래들:
+            notes.delete(f"{갈} 글")
+        notes.reindex()
 
         # ★★ **스킬은 코드가 아니라 데이터다 — 나쁜 선언문이 와도 안 깨져야 한다.**
         #   밖에서 손으로 고칠 수 있는 자리라(옵시디언에서 연다) 뭐든 들어온다.

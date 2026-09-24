@@ -18,7 +18,7 @@ from typing import Callable
 
 from PyQt5.QtCore import (QBuffer, QEvent, QIODevice, QPointF, QStringListModel, Qt, QThread, QTimer, QUrl,
                           pyqtSignal)
-from PyQt5.QtGui import (QBrush, QFont, QImage, QPainter, QPalette, QPen,
+from PyQt5.QtGui import (QBrush, QFont, QFontMetrics, QImage, QPainter, QPalette, QPen,
                          QTextCharFormat, QTextCursor, QTextDocument)
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -79,7 +79,21 @@ class Legend(QWidget):
         super().__init__()
         self.setFixedHeight(14)
         # 기본 sizeHint는 0에 가까워 옆에 stretch를 두면 폭이 안 잡히고 아무것도 안 그려진다.
-        self.setMinimumWidth(430)
+        # ★★ **폭을 숫자로 박으면 갈래가 늘 때 잘린다.** 430px 은 갈래가 여섯이던 때
+        #   값이라, 열둘이 된 뒤 화면에서 **`일지`·`메모` 가 통째로 안 보였다**
+        #   (창을 찍어 보고 알았다 · 2026-09-21). 이제 **재서** 정한다.
+        self.setMinimumWidth(self._잰폭())
+
+    def _잰폭(self) -> int:
+        """지금 갈래를 다 그리는 데 드는 폭. 글꼴이 바뀌어도 따라간다."""
+        font = QFont()
+        font.setPointSize(7)
+        재개 = QFontMetrics(font)
+        return int(sum(14 + 재개.width(theme.KIND_LABEL[k]) + 10 for k in self.ORDER)) + 4
+
+    def sizeHint(self):
+        from PyQt5.QtCore import QSize
+        return QSize(self._잰폭(), 14)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -194,26 +208,92 @@ class NoteView(QTextBrowser):
         """
         return "<" + 글.replace("<", "%3C").replace(">", "%3E") + ">"
 
+    #: 바깥으로 여는 주소들. 우리끼리 쓰는 이름표(`note:`·`tag:`)와 갈라야 한다.
+    바깥꼴 = ("http", "https", "mailto")
+
+    @classmethod
+    def 바깥주소인가(cls, raw: str) -> bool:
+        """브라우저·메일 앱으로 열 주소인가. `note:`·`tag:` 는 우리 것이라 아니다."""
+        return str(raw).split(":", 1)[0].lower() in cls.바깥꼴
+
+    def 바깥열기(self, raw: str) -> None:
+        """기본 브라우저로 연다. 시험에서는 이 함수를 갈아 끼운다."""
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(str(raw)))
+
+    def 링크메뉴(self, 주소: str):
+        """우클릭 메뉴에 얹을 것. 바깥 주소가 아니면 `None`.
+
+        ★ 누르면 바로 열리지만 **우클릭 길도 둔다** — 새 창에 열거나 주소만 복사하고
+          싶을 때가 있고, 잘못 눌러 브라우저가 뜨는 것이 싫은 사람도 있다(오너 2026-09-20).
+        """
+        if not self.바깥주소인가(주소):
+            return None
+        from PyQt5.QtWidgets import QMenu
+
+        메뉴 = QMenu(self)
+        메뉴.addAction("브라우저로 열기", lambda: self.바깥열기(주소))
+        메뉴.addAction("주소 복사", lambda: self._주소복사(주소))
+        return 메뉴
+
+    @staticmethod
+    def _주소복사(주소: str) -> None:
+        from PyQt5.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(str(주소))
+
+    def contextMenuEvent(self, event) -> None:
+        """링크 위에서 우클릭하면 **열기·복사**를 맨 위에 붙인다."""
+        주소 = self.anchorAt(event.pos())
+        메뉴 = self.링크메뉴(주소) if 주소 else None
+        if 메뉴 is None:
+            return super().contextMenuEvent(event)
+        기본 = self.createStandardContextMenu(event.pos())
+        메뉴.addSeparator()
+        for act in 기본.actions():
+            메뉴.addAction(act)
+        메뉴.exec_(event.globalPos())
+
     def _went(self, url) -> None:
         raw = url.toString()
+        # ★★ **인터넷 주소는 브라우저로 연다**(오너 2026-09-20). 전에는 `setOpenLinks(False)` 로
+        #   전부 막아 두고 우리 이름표(`note:`·`tag:`)만 다뤄서, 글에 남긴 주소를 눌러도
+        #   **아무 일도 안 났다** — 링크를 남겨 두는 뜻이 없었다.
+        if self.바깥주소인가(raw):
+            return self.바깥열기(raw)
         kind, _, rest = raw.partition(":")
         if kind == "tag":
             self.tag_clicked.emit(rest)
         elif kind == "note":
             name, _, heading = rest.partition("#")
             self.link_clicked.emit(name, heading)
+        elif kind == "file":
+            # 📎 첨부 고리(영상·녹음·heic·pdf) — 컴퓨터의 기본 앱으로 연다.
+            from PyQt5.QtGui import QDesktopServices
+            QDesktopServices.openUrl(url)
+
+    # `- 제품명 : vcis-689` 같은 항목 줄 — 목록 점 대신 **굵은 이름 · 값** 으로(2026-09-18 창 점검)
+    _항목꼴 = re.compile(r"^[ \t]*[-*][ \t]+([^:：\n\[\]]{1,24}?)[ \t]*[:：][ \t]*(.*)$", re.M)
 
     def to_markdown(self, body: str) -> str:
         """우리 표기를 마크다운으로 바꾼다. 순서가 중요하다 — 끼움이 링크를 품는다.
 
         첨부는 **진짜 그림**으로 넣는다. 이름만 보여주면 사진을 붙인 의미가 없다.
         """
+        body = re.sub(r"(?s)%%.*?%%", "", body)   # 옵시디언 주석(사진 글자)은 안 보인다
+        body = self._항목꼴.sub(lambda m: f"**{m.group(1).strip()}** · {m.group(2).strip() or '—'}  ", body)
         def embed(m):
             name, head = m.group(1).strip(), (m.group(2) or "").strip()
             if notes.is_attachment(name):
                 path = self.find_file(name) if self.find_file else None
                 if path is None:
                     return f"⟨없는 첨부: {name}⟩"
+                # ★ 그림만 그림으로 넣는다. 폰 사진(.heic)·영상·녹음·pdf 를 그림 칸에 넣으면 **깨진 그림**이 뜬다 —
+                #   고리로 두고 누르면 컴퓨터의 기본 앱이 연다(4단계).
+                if Path(name).suffix.lower() not in notes.IMAGE_EXT:
+                    return f"[📎 {name}]({Path(path).as_uri()})"
                 return f"![{name}]({Path(path).as_uri()})"
             label = f"{name}#{head}" if head else name
             고리 = f"[⟨{label}⟩]({self._주소('note:' + label)})"
@@ -238,8 +318,10 @@ class NoteView(QTextBrowser):
             겨냥 = "note:" + name + ("#" + head if head else "")
             return f"[{shown}]({self._주소(겨냥)})"
 
-        out = notes.EMBED_RE.sub(embed, body)
-        out = notes.LINK_RE.sub(link, out)
+        # ★ 코드 울타리·홑따옴표 안은 **예시**다. 안 가리면 규칙 글의 `[[링크]]` 가
+        #   화면에서 `[링크](<note:링크>)` 로 깨져 보인다(2026-09-21 재서 봤다).
+        out = notes.코드밖만(notes.EMBED_RE, body, embed)
+        out = notes.코드밖만(notes.LINK_RE, out, link)
         # 블록 이름(`^a1b2`)은 **가리키는 표지**지 읽을 글이 아니다. 옵시디언도 안 보여 준다.
         # 지우지 말고 화면에서만 감춘다 — 원본 파일에는 그대로 있어야 링크가 닿는다.
         out = chr(10).join(notes.BLOCK_RE.sub("", 줄) for 줄 in out.splitlines())
@@ -699,6 +781,22 @@ def _꾸밈벗기기(글: str) -> str:
     return 글
 
 
+def 줄제목(단추) -> str:
+    """결과 줄 단추가 **진짜로 가리키는 제목.**
+
+    ★ 보이는 글자만 보면 안 된다 — 긴 제목은 칸에 맞춰 `…` 로 줄여 그리므로
+      `text()` 는 제목의 앞부분일 뿐이다. 누르면 열리는 것은 여기 적힌 제목이다.
+    """
+    있는것 = 단추.property("vc_title")
+    return str(있는것) if 있는것 else 번호뗀말(단추.text())
+
+
+def 번호뗀말(말: str) -> str:
+    """줄 앞에 붙인 번호(`3. `)를 뗀 **제목 그대로**. 번호는 보여 주려고만 붙인다."""
+    앞, 점, 뒤 = 말.partition(". ")
+    return 뒤 if 앞.isdigit() and 뒤 else 말
+
+
 class Results(QWidget):
     """찾은 것 목록. 제목과 **걸린 자리 한 줄**을 같이 보여준다.
 
@@ -709,9 +807,13 @@ class Results(QWidget):
     picked = pyqtSignal(str)
     picked_at = pyqtSignal(str)   # 그 파일을 콕 집어 열 때(제목이 겹칠 수 있다)
 
-    def __init__(self, limit: int = 8) -> None:
+    def __init__(self, limit: int = 8, 번호매김: bool = False) -> None:
         super().__init__()
         self.limit = limit
+        # ★ 찾은 것 목록만 줄 앞에 번호를 적는다(오너 2026-09-20 · 마우스 없이 쓰기).
+        #   `Ctrl+1`~`9` 로 바로 여는데 **번호가 안 보이면 줄을 세어야 한다** — 그럼 안 쓴다.
+        #   최근 목록에는 안 적는다: 거기 숫자키는 아무 데도 안 걸려서 거짓말이 된다.
+        self.번호매김 = 번호매김
         self.rows = QVBoxLayout(self)
         self.rows.setContentsMargins(2, 0, 2, 0)
         self.rows.setSpacing(1)
@@ -765,16 +867,32 @@ class Results(QWidget):
                   width: int = 46) -> None:
         for w in self.items:
             self.rows.removeWidget(w)
+            # ★★ **먼저 감춘다.** 보이는 위젯의 부모를 떼면 그 순간 **독립 창**이 된다 —
+            #   `deleteLater` 가 돌기 전까지 화면에 조각 창으로 떠 있다(검사가 잡았다).
+            w.hide()
             w.setParent(None)
             w.deleteLater()
         self.items = []
-        for hit in hits[:self.limit]:
+        for 몇, hit in enumerate(hits[:self.limit]):
             # 파일 자리까지 온 것은 **그 파일**을 연다. 제목만 보고 다시 찾으면
             # 같은 이름이 둘일 때 엉뚱한 쪽이 열린다.
             title, body, where = (tuple(hit) + ("", ""))[:3]
             갈래 = (tuple(hit) + ("", "", "", ""))[3]
-            b = QPushButton(title)
+            # 번호는 아홉까지만 — 열째부터는 누를 키가 없으니 적지 않는다(없는 길을 알리지 않는다)
+            보일말 = f"{몇 + 1}. {title}" if self.번호매김 and 몇 < 9 else title
+            b = QPushButton(보일말)
             b.setObjectName("quiet")
+            # ★★ **긴 제목이 칸을 밀어내지 않게 한다.** 단추는 줄바꿈을 못 해서
+            #   `minimumSizeHint` 로 **제목 전체 폭**을 요구한다. 옵시디언 볼트를 들이고
+            #   나서야 드러났다 — 제목이 길어지자 속 최소폭이 144 → 455 로 뛰어
+            #   칸(348)을 넘겼고, 오른쪽 칸 글자가 **112px 씩 창 밖으로 잘려 나갔다.**
+            #   최소폭을 풀고, 보이는 글자는 칸에 맞춰 `…` 로 줄인다(아래 `줄임다시`).
+            #   ※ 크기 정책을 `Ignored` 로도 바꿔 봤는데 **재 보니 아무 차이가 없었다**(275 그대로).
+            #     줄인 글자는 `sizeHint` 자체가 작아지므로 최소폭을 따로 풀 것이 없다. 뺐다.
+            b.setMinimumWidth(1)
+            b.설명 = 보일말                # 줄이기 전 온전한 글자
+            b.setProperty("vc_title", title)   # 누르면 열리는 진짜 제목
+            b.setToolTip(title)
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet("text-align:left; padding:2px 6px;")
             if where:
@@ -795,6 +913,30 @@ class Results(QWidget):
             for w in (b, line):
                 self.rows.addWidget(w)
                 self.items.append(w)
+        self.줄임다시()
+
+    def 줄임다시(self) -> None:
+        """줄 글자를 칸 폭에 맞춰 `…` 로 줄인다. **뚝 끊기면 무슨 글인지 모른다.**
+
+        Qt 는 단추 글자를 저절로 줄여 주지 않는다 — 폭이 모자라면 그냥 잘라서
+        「신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴」 처럼 말끝이 사라진다.
+        """
+        # ★ 줄 자신의 폭이 아니라 **칸 폭**으로 잰다. 줄은 칸에 맞춰 늘어나므로 갓 만든
+        #   줄은 아직 옛 폭을 들고 있다 — 그걸 믿으면 칸이 좁아져도 안 줄어든다.
+        쓸폭 = max(40, self.width() - 16)
+        for w in self.items:
+            온말 = getattr(w, "설명", None)
+            if 온말 is None:
+                continue
+            w.setText(w.fontMetrics().elidedText(온말, Qt.ElideRight, 쓸폭))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.줄임다시()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.줄임다시()      # 처음 보일 때 칸 폭이 정해진다
 
 
 class Indexer(QThread):
@@ -1403,6 +1545,14 @@ def _self_check() -> None:
     assert legend.height() > 0
     # 표시줄과 콤보의 차례가 같아야 한다 — 같은 것을 두 군데 적어 두면 갈린다.
     assert Legend.ORDER == tuple(theme.KIND_LABEL), Legend.ORDER
+    # ★★ **갈래가 늘어도 다 보여야 한다.** 폭을 430px 로 박아 뒀더니 갈래가 열둘이 된 뒤
+    #   `일지`·`메모` 가 화면에서 통째로 안 보였다(찍어 보고 알았다 · 2026-09-21).
+    import wiki as _위키범례
+
+    assert set(Legend.ORDER) == set(_위키범례.갈래들), "범례가 갈래 표와 다르다"
+    필요 = legend._잰폭()
+    assert legend.minimumWidth() >= 필요, f"범례가 잘린다: {legend.minimumWidth()} < {필요}"
+    assert legend.sizeHint().width() >= 필요
 
     import tempfile
     from pathlib import Path as _Path
@@ -1435,6 +1585,32 @@ def _self_check() -> None:
     assert len(years.buttons) == 1, "다시 그렸는데 옛 단추가 남았다"
     # 빈칸이 쌓이면 단추가 왼쪽에 안 붙고 가운데로 밀린다.
     assert years.grid.count() == 2, f"빈칸이 쌓였다: {years.grid.count()}"
+
+    # ★★ **글에 남긴 인터넷 주소는 눌러서 브라우저로 연다**(오너 2026-09-20).
+    #   전에는 `setOpenLinks(False)` 로 전부 막아 두고 우리 이름표만 다뤄 **눌러도 아무 일이 없었다**.
+    _뷰 = NoteView()
+    열린것 = []
+    _뷰.바깥열기 = 열린것.append
+    assert _뷰.바깥주소인가("https://example.com/a?b=1")
+    assert _뷰.바깥주소인가("http://100.1.2.3:8765") and _뷰.바깥주소인가("mailto:a@b.c")
+    # 우리끼리 쓰는 이름표는 바깥으로 안 나간다 — 나가면 글 열기·태그 고르기가 브라우저로 샌다
+    assert not _뷰.바깥주소인가("note:회의록") and not _뷰.바깥주소인가("tag:할일")
+    assert not _뷰.바깥주소인가("file:/tmp/a.png") and not _뷰.바깥주소인가("회의록")
+    from PyQt5.QtCore import QUrl as _QUrl
+
+    _뷰._went(_QUrl("https://example.com/글"))
+    assert 열린것 == ["https://example.com/글"], 열린것
+    _뷰._went(_QUrl("note:회의록"))          # 이건 안 열린다(글 열기 신호로 간다)
+    assert len(열린것) == 1, 열린것
+    # 우클릭 메뉴 — 링크 위에서만 「열기·복사」가 붙는다
+    메뉴 = _뷰.링크메뉴("https://example.com")
+    assert 메뉴 is not None and [a.text() for a in 메뉴.actions()] == ["브라우저로 열기", "주소 복사"], 메뉴
+    assert _뷰.링크메뉴("note:회의록") is None and _뷰.링크메뉴("") is None
+    메뉴.actions()[0].trigger()
+    assert 열린것[-1] == "https://example.com", 열린것
+    # 민 주소도 Qt 가 링크로 그린다 — 마크다운을 안 써도 눌린다
+    _뷰.setMarkdown(_뷰.to_markdown("여기 https://quasarzone.com/bbs/qn_hardware/views/2065297 참고"))
+    assert "<a href" in _뷰.toHtml() and "quasarzone" in _뷰.toHtml()
 
     view = NoteView()
     src = "제목 [[가#머리]] 와 [[나|보임]] 와 ![[다]] 와 #태그/하위"
@@ -1511,6 +1687,22 @@ def _self_check() -> None:
         md2 = v2.to_markdown("현장 ![[사진.png]] 과 ![[없는것.png]]")
         assert "![사진.png](file:" in md2, md2
         assert "없는 첨부" in md2, md2
+        # ★ 폰 사진(.heic)·영상·녹음은 그림 칸에 넣으면 깨진다 — 📎 고리로(4단계).
+        영상 = Path(_d) / "IMG_0001.mov"
+        영상.write_bytes(b"mov")
+        v3 = NoteView(find_file=lambda nm: 영상 if nm == "IMG_0001.mov" else None)
+        md3 = v3.to_markdown("받은 제품 ![[IMG_0001.mov]]")
+        assert "[📎 IMG_0001.mov](file:" in md3 and "![IMG_0001.mov]" not in md3, md3
+        # 항목 줄은 목록 점 대신 굵은 이름 · 값(2026-09-18 창 점검)
+        md4 = v3.to_markdown("- 제품명 : vcis-689\n- 보낸날 : \n- [[회의]] 보기")
+        assert "**제품명** · vcis-689" in md4 and "**보낸날** · —" in md4, md4
+        assert "송장" not in v3.to_markdown("받음\n%%\n사진 글자: 송장 7788\n%%"), "숨은 글자가 보인다"
+        # ★★ **코드 안의 `[[…]]` 는 예시다.** 안 가리면 「이 창고를 쓰는 법」 같은 규칙 글이
+        #   화면에서 `[링크](<note:링크>)` 로 깨져 보인다(2026-09-21 재서 봤다).
+        깨짐 = v3.to_markdown("```\n[[링크]] 처럼 적는다\n```\n\n홑따옴 `[[링크]]` 도.\n\n진짜 [[VC]].")
+        assert "```\n[[링크]] 처럼" in 깨짐, f"코드 울타리 안의 예시를 고쳤다:\n{깨짐}"
+        assert "`[[링크]]`" in 깨짐, f"홑따옴 안의 예시를 고쳤다:\n{깨짐}"
+        assert "[VC](<note:VC>)" in 깨짐, f"진짜 링크를 안 고쳤다:\n{깨짐}"
 
         # 큰 사진은 칸 폭에 맞춰 줄인다. 원래 크기로 두면 칸을 뚫고 나간다.
         v2.resize(320, 240)
@@ -1738,6 +1930,36 @@ def _self_check() -> None:
     읽몸.setMarkdown("첫 줄" + chr(10) * 2 + "- 둘째 항목 이다" + chr(10) * 2 + "끝")
     읽몸.go_to_heading("둘째 항목")
     assert 읽몸.textCursor().block().text().strip().startswith("둘째 항목"), "읽기 화면이 덩이 첫 줄로 안 간다"
+
+    # ★★ **긴 제목이 칸을 밀어내면 안 된다**(오너 2026-09-20 · 볼트를 들이고 드러났다).
+    #   단추는 줄바꿈을 못 해 제목 전체 폭을 최소폭으로 요구했다. 옵시디언 볼트 119장이
+    #   들어오자 오른쪽 칸 최소폭이 144 → 455 로 뛰어 칸(348)을 넘겼고, **칸 전체가
+    #   창 밖으로 112px 밀려 글자가 잘렸다.** 실기 화면을 찍어 보고서야 알았다.
+    긴제목 = "신규 대형 프로젝트 착수 — AR-AI 에이전트 (그릴링 진행 중, 미결) 그리고 더 긴 꼬리"
+    목록 = Results(번호매김=True)
+    목록.resize(200, 300)
+    목록.show()          # 보여야 레이아웃이 돈다 — 안 그러면 줄이 칸 폭을 못 본다
+    목록.show_hits([(긴제목, "몸", "", "dev-task"), ("짧은 글", "몸", "", "")], "")
+    app9 = QApplication.instance()
+    for _ in range(5):
+        if app9 is not None:
+            app9.processEvents()
+    단추들 = 목록.findChildren(QPushButton)
+    assert 단추들, "줄이 안 그려졌다"
+    긴것 = 단추들[0]
+    # **줄여 그리되 진짜 제목은 온전해야 한다** — 누르면 열리는 것이 이것이다
+    assert 줄제목(긴것) == 긴제목, f"진짜 제목이 안 남았다: {줄제목(긴것)}"
+    assert 긴것.text().endswith("…"), f"긴 제목이 안 줄었다({긴것.width()}px): {긴것.text()}"
+    assert len(긴것.text()) < len(긴제목), "줄인 티가 안 난다"
+    # 폭 요구를 안 하는지 — 이게 칸을 밀어내던 것이다
+    assert 목록.minimumSizeHint().width() <= 200, (
+        f"줄이 칸보다 넓은 폭을 요구한다: {목록.minimumSizeHint().width()}")
+    # 칸이 넓어지면 **다시 온전히** 보인다 — 줄인 채로 굳으면 안 된다
+    목록.resize(900, 300)
+    for _ in range(5):
+        if app9 is not None:
+            app9.processEvents()
+    assert not 단추들[0].text().endswith("…"), f"넓어졌는데 그대로 줄어 있다: {단추들[0].text()}"
 
     print("panels self-check 통과")
 

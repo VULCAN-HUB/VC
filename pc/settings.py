@@ -10,11 +10,43 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import paths
 from notes import Note, Notes, WriteBlocked
 
 MODES = ("창", "최대화", "전체화면")
+
+# 손을 안 댄 채 이만큼 지나면 VC 표식이 저절로 화면 한가운데로 돌아온다.
+# 화면 가운데는 항목들을 감싸는 네모의 중심이라, 항목이 한쪽으로 몰리면 표식이
+# 구석으로 밀린다 — 두 번 눌러 되돌릴 수는 있지만 **가운데가 아닌 줄도 모르고**
+# 그냥 쓰게 된다(오너 지시 2026-09-15). 기본은 30초.
+되돌리기때 = (("끔", 0), ("10초", 10), ("30초", 30), ("1분", 60), ("3분", 180), ("10분", 600))
+되돌리기기본 = 30
+
+
+def 되돌리기초() -> int:
+    """설정에 적힌 「표식 되돌리기」 초. 값이 없거나 깨졌으면 기본값. 0이면 끔.
+
+    설정 한 줄이 깨졌다고 창이 안 뜨면 안 된다 — 아는 값만 받고 나머지는 기본으로 돌린다.
+    """
+    try:
+        값 = int(paths.load_config().get("표식되돌리기초", 되돌리기기본))
+    except (TypeError, ValueError):
+        return 되돌리기기본
+    return 값 if 값 in [초 for _, 초 in 되돌리기때] else 되돌리기기본
+
+
+# 기계 기록(자국·죽음·상태)을 어디서 보나(결정 17). 원본은 늘 앱 자리다.
+# 「둘 다」면 사람이 읽는 요약을 기록 폴더 `_VC기록/` 에도 적는다 — VC 가 꺼져도 폰 파일 앱·옵시디언에서 보인다.
+기록보기때 = (("한 곳 + VC 화면", "한곳"), ("둘 다 — 기록 폴더 _VC기록/ 에도 요약", "둘다"))
+기록보기기본 = "한곳"
+
+
+def 기록보기() -> str:
+    """설정의 「기계 기록 보기」. 모르는 값이면 기본(한 곳)."""
+    값 = paths.load_config().get("기계기록보기", 기록보기기본)
+    return 값 if 값 in [v for _, v in 기록보기때] else 기록보기기본
 PROFILE_TITLE = "나에 대해"
 
 QUESTIONS: dict[str, list[str]] = {
@@ -301,13 +333,23 @@ def _dialog_css(theme) -> str:
         QComboBox#pick {{ min-height: 22px; }}
         QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}   /* 안 입히면 체크무늬로 그려졌다 */
         QLabel#note {{ color: {css(T.DIM, 0.45)}; font-size:{글자(10)}; }}
+        /* ★★ **켜고 끄는 네모를 그린다.** 안 그리면 켠 것만 ✓ 로 보이고 **꺼진 줄에는 아무
+           표시가 없어** 여기가 누르는 자리인지 모른다(맥에서 눈으로 보고 잡았다). */
+        QCheckBox {{ color: {T.TEXT.name()}; font-size:{글자(12)}; spacing: 8px; padding: 2px 0; }}
+        QCheckBox::indicator {{ width: 13px; height: 13px; border-radius: 3px;
+                                border: 1px solid {css(T.ACCENT, 0.40)}; background: {css(T.ACCENT, 0.05)}; }}
+        QCheckBox::indicator:hover {{ border-color: {T.ACCENT.name()}; background: {css(T.ACCENT, 0.12)}; }}
+        QCheckBox::indicator:checked {{ background: {T.ACCENT.name()}; border-color: {T.ACCENT.name()}; }}
+        QCheckBox::indicator:disabled {{ border-color: {css(T.DIM, 0.35)}; background: transparent; }}
+        /* 못 실은 확장 · 「코드가 돈다」 경고 — 흐린 설명 색이면 안 읽고 켠다(경고색으로) */
+        QCheckBox[vc_bad="true"], QLabel[vc_bad="true"] {{ color: {T.WARN.name()}; }}
         QLabel#say {{ color: {T.TEXT.name()}; font-size:{글자(11)}; padding: 8px 12px;
                       background: {css(T.ACCENT, 0.05)}; border-left: 2px solid {T.ACCENT.name()}; }}
     """
 
 
 def open_dialog(win, notes: Notes):
-    from PyQt5.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                  QListWidget, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
                                  QVBoxLayout, QWidget)
 
@@ -356,6 +398,21 @@ def open_dialog(win, notes: Notes):
     지금 = "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
     창.방식.setCurrentText(paths.load_config().get("화면방식", 지금) if 지금 == "창" else 지금)
     줄(화면틀, "화면 방식", 창.방식)
+
+    # 표식이 가운데에서 밀렸을 때 저절로 돌아오기까지의 시간. 표식을 두 번 누르면 바로 온다.
+    창.되돌리기 = QComboBox()
+    창.되돌리기.setObjectName("pick")
+    for 보일, 초 in 되돌리기때:
+        창.되돌리기.addItem(보일, 초)
+    창.되돌리기.setCurrentIndex(max(0, 창.되돌리기.findData(되돌리기초())))
+    줄(화면틀, "표식이 가운데로 돌아오기까지 (손 안 댄 시간)", 창.되돌리기)
+    # 기계 기록 보기(결정 17). 기록 폴더는 메모만 — 「둘 다」일 때만 요약 한 장을 `_VC기록/` 에 둔다.
+    창.기록보기 = QComboBox()
+    창.기록보기.setObjectName("pick")
+    for 보일, 값 in 기록보기때:
+        창.기록보기.addItem(보일, 값)
+    창.기록보기.setCurrentIndex(max(0, 창.기록보기.findData(기록보기())))
+    줄(화면틀, "기계 기록(자국·오류) 보기", 창.기록보기)
     화면틀.addStretch(1)
 
     # ── 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
@@ -470,6 +527,377 @@ def open_dialog(win, notes: Notes):
     연결틀.addLayout(구글줄)
     연결틀.addStretch(1)
 
+    # ── 폰 연결 — 폰 브라우저가 PC 서버의 /app 을 연다. 열쇠는 QR 주소의 # 뒤에만 실어 서버에 안 간다.
+    import phone_app
+    import phone_relay
+
+    폰틀, _ = 쪽("폰 연결", "폰 VC 앱 「QR 찍기」(또는 폰 카메라 → 브라우저)로 QR 을 찍으면 폰에서 이 창고를 보고, "
+                         "폰에서 적은 것이 여기 저장된다. 폰과 이 컴퓨터 둘 다 테일스케일이 켜져 있으면 어디서나 붙는다.")
+    import tailnet
+
+    # ★★ QR 에는 테일스케일 주소를 담는다(결정 18). 집 와이파이 주소를 담으면 폰이 다른 망으로 옮기는 순간 못 닿는다.
+    #   시험이 바꿔 끼울 수 있게 창에 달아 둔다.
+    창.테일주소 = tailnet.tailscale_ip
+    _테일 = 창.테일주소()
+    폰주소 = QLabel(f"폰 주소: {phone_app.app_url(_테일)}" if _테일
+                    else "폰 주소: 테일스케일이 꺼져 있다 — 이 컴퓨터에서 켜고 창을 다시 연다")
+    폰주소.setObjectName("ask_label")
+    from PyQt5.QtCore import Qt
+
+    폰주소.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    폰틀.addWidget(폰주소)
+    폰풀이 = QLabel("QR 에는 이 컴퓨터의 열쇠가 들어 있다 — 남이 찍지 않게 2분 뒤 사라진다. "
+                  "안 열리면 폰과 이 컴퓨터의 테일스케일이 같은 계정으로 켜져 있는지, 방화벽이 VC 를 막지 않는지 본다.")
+    폰풀이.setObjectName("note")
+    폰풀이.setWordWrap(True)
+    폰틀.addWidget(폰풀이)
+    창.폰QR = QLabel()
+    창.폰QR.hide()
+    폰단추 = QPushButton("QR 보이기")
+    폰단추.setObjectName("primary")
+
+    창.폰경고 = QLabel("")
+    창.폰경고.setObjectName("note")
+    창.폰경고.setWordWrap(True)
+    창.폰경고.hide()
+    폰집단추 = QPushButton("집 와이파이 주소로 보이기")
+    폰집단추.hide()
+
+    # QR 이 언제 사라지는지 세어 보인다 — 「왜 안 찍히지」의 첫째 까닭이 **2분이 지난 것**이었다.
+    창.폰남은 = QLabel("")
+    창.폰남은.setObjectName("note")
+    QR살이 = 120
+
+    def _QR그리기(주소: str) -> None:
+        from PyQt5.QtCore import QTimer
+        from PyQt5.QtGui import QPixmap
+
+        그림 = QPixmap()
+        그림.loadFromData(phone_app.qr_png(phone_app.pair_url(주소, paths.load_config()["pair_token"])))
+        창.폰QR.setPixmap(그림)
+        창.폰QR.show()
+        # 폰 대화창에 뜰 주소를 **여기서도** 보인다 — 남이 띄운 QR 을 찍지 않았는지 맞춰 본다.
+        #   (열쇠는 QR 에만 있다. 글자로는 절대 안 보인다.)
+        창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · 2:00 뒤 사라짐")
+        창.폰남은.show()
+        남음 = [QR살이]
+
+        def 한칸():
+            남음[0] -= 1
+            if 남음[0] <= 0:
+                창.폰QR.clear()
+                창.폰QR.hide()
+                창.폰남은.setText("QR 이 사라졌다 — 「QR 보이기」를 다시 누른다")
+                return
+            창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · "
+                           f"{남음[0] // 60}:{남음[0] % 60:02d} 뒤 사라짐")
+            QTimer.singleShot(1000, 한칸)
+
+        QTimer.singleShot(1000, 한칸)
+
+    def QR보이기() -> None:
+        테일 = 창.테일주소()
+        if not 테일:
+            # ★ 조용히 집 주소로 넘어가지 않는다(결정 21) — 알리고, 사람이 알고 고르게 한다
+            창.폰QR.clear()
+            창.폰QR.hide()
+            창.폰경고.setText("테일스케일이 꺼져 있다 — 이 컴퓨터와 폰에서 켜고 다시 누른다. "
+                            "급하면 아래 단추로 집 와이파이 주소를 보인다(같은 와이파이에서만 붙는다).")
+            창.폰경고.show()
+            폰집단추.show()
+            return
+        창.폰경고.hide()
+        폰집단추.hide()
+        _QR그리기(테일)
+
+    def 집QR보이기() -> None:
+        _QR그리기(phone_relay.local_ip())
+        창.폰경고.setText("집 와이파이 주소로 보였다 — 폰이 같은 와이파이일 때만 붙는다.")
+        창.폰경고.show()
+
+    폰단추.clicked.connect(QR보이기)
+    폰집단추.clicked.connect(집QR보이기)
+    창.폰단추 = 폰단추
+    창.폰집단추 = 폰집단추
+    폰틀.addWidget(폰단추)
+    폰틀.addWidget(창.폰남은)
+    폰틀.addWidget(창.폰경고)
+    폰틀.addWidget(폰집단추)
+    폰틀.addWidget(창.폰QR)
+    폰틀.addStretch(1)
+
+    # ── 딴 PC 와 잇기(오너 결정 30). **메인 하나 · 나머지는 사본**.
+    사본틀, _ = 쪽("딴 PC", "이 VC 가 메인인지, 메인의 사본인지. 사본은 글을 통째로 내려받아 두므로 "
+                        "메인이 못 쓰게 돼도 여기서 이어 갈 수 있다(그때 「이 VC 를 메인으로」).")
+    쓰던사본 = paths.load_config().get("사본") or {}
+    창.사본역할 = QComboBox()
+    창.사본역할.setObjectName("pick")
+    for 보일, 값 in (("메인 — 진짜 창고가 여기 있다", "메인"), ("손님 — 메인의 사본을 둔다", "손님")):
+        창.사본역할.addItem(보일, 값)
+    창.사본역할.setCurrentIndex(max(0, 창.사본역할.findData(쓰던사본.get("역할") or "메인")))
+    줄(사본틀, "이 VC 의 자리", 창.사본역할)
+
+    창.사본주소 = QLineEdit(쓰던사본.get("main_url", ""))
+    창.사본주소.setObjectName("field")
+    창.사본주소.setPlaceholderText("메인 주소 — http://100.x.x.x:8765 (테일스케일 주소)")
+    줄(사본틀, "메인 주소 (손님일 때)", 창.사본주소)
+
+    창.사본열쇠 = QLineEdit()
+    창.사본열쇠.setObjectName("field")
+    창.사본열쇠.setEchoMode(QLineEdit.Password)
+    창.사본열쇠.setPlaceholderText("메인의 열쇠 — 비우면 쓰던 것 그대로")
+    줄(사본틀, "메인 열쇠", 창.사본열쇠)
+
+    # ── 기기끼리 신호(오너 2026-09-24). **훑지 말고 바뀐 쪽이 말하게 한다.**
+    그물틀, _ = 쪽("기기끼리 신호", "저장·지움을 누르면 붙어 있는 다른 기기에 바로 알린다. "
+                           "주소는 안 적는다 — 테일스케일로 서로 찾는다. "
+                           "모든 기계에 **같은 열쇠**를 넣어라(영문·숫자만).")
+    쓰던그물 = paths.load_config().get("그물") or {}
+    쓰던그물 = 쓰던그물 if isinstance(쓰던그물, dict) else {}
+    창.그물열쇠 = QLineEdit(str(쓰던그물.get("열쇠") or ""))
+    창.그물열쇠.setPlaceholderText("비우면 이 기계는 혼자 쓴다")
+    줄(그물틀, "그물 열쇠", 창.그물열쇠)
+    만들기 = QPushButton("새 열쇠 만들기")
+    만들기.setToolTip("여기서 만든 값을 다른 기계에도 똑같이 넣는다")
+    만들기.clicked.connect(
+        lambda: 창.그물열쇠.setText(__import__("secrets").token_urlsafe(24)))
+    줄(그물틀, "", 만들기)
+
+    사본말 = QLabel("")
+    사본말.setObjectName("note")
+    사본말.setWordWrap(True)
+    사본틀.addWidget(사본말)
+
+    def _사본저장() -> None:
+        역할 = 창.사본역할.currentData()
+        cfg = paths.load_config()
+        옛 = cfg.get("사본") or {}
+        열쇠 = 창.사본열쇠.text().strip() or 옛.get("main_token", "")
+        # ★★ **열쇠는 영문·숫자만.** HTTP 머리말은 latin-1 이라 한글이 섞이면
+        #   붙을 때 통째로 깨진다 — 실기에서 그 덫에 걸렸다(2026-09-24).
+        그물값 = 창.그물열쇠.text().strip()
+        if 그물값 and not 그물값.isascii():
+            그물값 = ""
+        새것 = {"역할": 역할, "main_url": 창.사본주소.text().strip(), "main_token": 열쇠}
+        paths.save_config({**cfg, "사본": 새것, "그물": {"열쇠": 그물값}})
+        # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다
+        try:
+            import server as _서버
+
+            if _서버.RUNNING is not None:
+                _서버.RUNNING.cfg["사본"] = 새것
+        except Exception:
+            pass
+        if 역할 == "메인":
+            사본말.setText("이 VC 가 메인이다. 딴 PC 는 여기를 보고 사본을 쌓는다.")
+        elif not (새것["main_url"] and 새것["main_token"]):
+            사본말.setText("손님으로 두려면 **메인 주소와 열쇠**가 둘 다 있어야 한다.".replace("**", ""))
+        else:
+            사본말.setText(f"손님이다. {새것['main_url']} 과 1분마다 주고받는다.")
+
+    def _지금주고받기() -> None:
+        _사본저장()
+        try:
+            import server as _서버
+
+            사본말.setText(_서버.RUNNING.사본한판() if _서버.RUNNING else "VC 서버가 안 떠 있어 못 한다.")
+        except Exception as e:
+            사본말.setText(f"주고받다 막혔어 — {type(e).__name__}")
+
+    사본단추줄 = QHBoxLayout()
+    사본저장단추 = QPushButton("저장")
+    사본지금단추 = QPushButton("지금 주고받기")
+    사본지금단추.setObjectName("primary")
+    사본저장단추.clicked.connect(lambda: _사본저장())
+    사본지금단추.clicked.connect(lambda: _지금주고받기())
+    for 단추 in (사본저장단추, 사본지금단추):
+        사본단추줄.addWidget(단추)
+    사본단추줄.addStretch(1)
+    사본틀.addLayout(사본단추줄)
+    창.사본저장 = _사본저장
+    창.사본지금 = _지금주고받기
+    사본틀.addStretch(1)
+
+    # ── 확장(오너 결정 23 · 편의 기능 31번). **기본은 다 꺼짐** — 켜는 일은 이 컴퓨터 앞에서만 한다.
+    확장틀, _ = 쪽("확장", "확장 하나 = 앱 자리 `plugins/이름/` 폴더(`plugin.json` + `main.py`). "
+                        "켠 것만 돌고, 하나가 터져도 VC 는 그 확장만 끄고 계속 산다.")
+    import plugins as 확장들
+
+    확장경고 = QLabel("⚠ 확장은 이 컴퓨터에서 코드로 돈다. 만든 사람을 알거나 직접 읽어 본 것만 켠다. "
+                   "폰 앱에서는 확장이 돌지 않는다(폰에서 코드를 돌리지 않는다는 안전 원칙).")
+    확장경고.setObjectName("note")
+    확장경고.setProperty("vc_bad", True)     # 흐린 설명 색이면 이 줄을 안 읽고 켠다
+    확장경고.setWordWrap(True)
+    확장틀.addWidget(확장경고)
+
+    창.확장칸들: dict[str, QCheckBox] = {}
+    확장목록 = QVBoxLayout()
+    확장목록.setSpacing(6)
+    확장틀.addLayout(확장목록)
+    확장안내 = QLabel("")
+    확장안내.setObjectName("note")
+    확장안내.setWordWrap(True)
+    확장틀.addWidget(확장안내)
+
+    def _확장켜기(이름: str, 켬: bool) -> None:
+        확장들.enable(이름, 켬)
+        # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다.
+        말 = "켰다" if 켬 else "껐다"
+        try:
+            import server as _서버
+
+            if _서버.RUNNING is not None:
+                _서버.RUNNING.reload_plugins()
+                말 += " — 저장 알림·명령은 지금부터, 지시에 반응하는 부품은 VC 를 다시 켤 때 붙는다"
+            else:
+                말 += " — VC 를 다시 켜면 돈다"
+        except Exception as e:      # 서버가 없는 채로 창만 띄운 때(시험·--no-server)
+            말 += f" — 지금은 못 실었다({type(e).__name__}) · 다시 켜면 돈다"
+        확장안내.setText(f"「{이름}」 을 {말}.")
+
+    def _확장그리기() -> None:
+        for 칸 in 창.확장칸들.values():
+            칸.setParent(None)
+        창.확장칸들.clear()
+        찾음 = 확장들.find()
+        for 정보 in 찾음:
+            꼬리 = f" · v{정보.version}" if 정보.version else ""
+            칸 = QCheckBox(f"{정보.name}{꼬리} — {정보.note or '설명 없음'}")
+            칸.setChecked(정보.enabled)
+            if 정보.error:
+                칸.setEnabled(False)
+                칸.setText(f"{정보.name}{꼬리} — 못 실었다: {정보.error}")
+                칸.setProperty("vc_bad", True)
+            else:
+                칸.toggled.connect(lambda 켬, 이=정보.name: _확장켜기(이, 켬))
+            창.확장칸들[정보.name] = 칸
+            확장목록.addWidget(칸)
+        확장안내.setText("" if 찾음 else
+                      f"확장이 없다. 「예제 깔기」를 누르면 {확장들.root()} 에 예제 하나가 생긴다(꺼진 채로).")
+
+    확장단추줄 = QHBoxLayout()
+    확장폴더단추 = QPushButton("확장 폴더 열기")
+    확장예제단추 = QPushButton("예제 깔기")
+    확장다시단추 = QPushButton("다시 읽기")
+    확장예제단추.setObjectName("primary")
+
+    def _확장폴더() -> None:
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+
+        자리 = 확장들.root()
+        자리.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(자리)))
+
+    def _확장예제() -> None:
+        자리 = 확장들.write_sample()
+        _확장그리기()
+        확장안내.setText(f"예제를 깔았다 — {자리} · 꺼진 채로 있다. 열어 읽어 보고 켠다.")
+
+    확장폴더단추.clicked.connect(lambda: _확장폴더())
+    확장예제단추.clicked.connect(lambda: _확장예제())
+    확장다시단추.clicked.connect(lambda: _확장그리기())
+    for 단추 in (확장폴더단추, 확장예제단추, 확장다시단추):
+        확장단추줄.addWidget(단추)
+    확장단추줄.addStretch(1)
+    확장틀.addLayout(확장단추줄)
+    확장틀.addStretch(1)
+    창.확장그리기 = _확장그리기
+    창.확장예제깔기 = _확장예제
+    _확장그리기()
+
+    # ── 폴더 들이기(오너 2026-09-20). 옵시디언 볼트처럼 **이미 정리된 창고**를 통째로 들인다.
+    #   ★★ **먼저 보여 주고 나서 들인다.** 한 번에 백 장이 움직이는 일이라, 무엇이 들어가는지
+    #   모르고 누르면 되돌릴 마음도 안 생긴다. 그래서 「살펴보기」와 「들이기」를 갈라 뒀고
+    #   들인 것은 **한꺼번에 뺄 수 있다**(글마다 온 곳을 적어 둔다).
+    들임틀, _ = 쪽("폴더 들이기", "옵시디언 볼트 같은 폴더를 글 하나 = 글 하나로 들인다. "
+                          "제목은 본문 표제, 파일 이름은 별칭이라 [[링크]]가 그대로 이어진다.")
+    import vault as 볼트
+
+    창.들임폴더 = QLineEdit()
+    창.들임폴더.setPlaceholderText("들일 폴더 (예: ~/…/Second Brain)")
+    고르기줄 = QHBoxLayout()
+    고르기줄.addWidget(창.들임폴더, 1)
+    찾아보기 = QPushButton("찾아보기…")
+    고르기줄.addWidget(찾아보기)
+    줄(들임틀, "폴더", QWidget())
+    들임틀.addLayout(고르기줄)
+
+    # ★ QLabel 은 마크다운을 안 그린다 — `**굵게**` 라고 쓰면 별표가 글자로 보인다(찍어 보고 잡았다).
+    들임말 = QLabel("폴더를 고르고 「살펴보기」를 누른다. 창고는 그때 안 건드린다.")
+    들임말.setObjectName("note")
+    들임말.setWordWrap(True)
+    들임틀.addWidget(들임말)
+    창.들임말 = 들임말
+    창.들임본것 = None
+
+    def _폴더고르기() -> None:
+        from PyQt5.QtWidgets import QFileDialog
+
+        고른 = QFileDialog.getExistingDirectory(창, "들일 폴더", 창.들임폴더.text().strip() or str(Path.home()))
+        if 고른:
+            창.들임폴더.setText(고른)
+
+    def _살펴보기() -> None:
+        어디 = 창.들임폴더.text().strip()
+        if not Path(어디).is_dir():
+            들임말.setText("그런 폴더가 없어. 자리를 다시 봐 줘.")
+            return
+        try:
+            본것 = 볼트.살펴보기(어디, notes)
+        except OSError as e:
+            들임말.setText(f"폴더를 못 읽었어 — {e}")
+            return
+        창.들임본것 = 본것
+        if not 본것.것들:
+            들임말.setText("들일 글이 없어. `.md` 파일이 있는 폴더인지 봐 줘.")
+            return
+        말 = [본것.한줄()]
+        if 본것.이미있음:
+            말.append("창고에 같은 제목이 있는 것은 건드리지 않는다 — 그대로 둔다.")
+        if 본것.끊긴링크:
+            말.append(f"끊긴 링크 {len(본것.끊긴링크)}개는 그대로 들어간다 "
+                     "(VC 는 없는 이름을 따라가면 그 자리에서 만든다).")
+        말.append("보기: " + " · ".join(것.제목 for 것 in 본것.것들[:3]))
+        들임말.setText(chr(10).join(말))
+
+    def _들이기() -> None:
+        본것 = 창.들임본것
+        if 본것 is None:
+            들임말.setText("먼저 「살펴보기」를 눌러 줘 — 무엇이 들어가는지 보고 나서 들인다.")
+            return
+        난것 = 볼트.들이기(notes, 본것)      # 색인은 `write` 가 글마다 바로 고친다
+        말 = [f"{len(난것['넣음'])}장 들였다."]
+        if 난것["건너뜀"]:
+            말.append(f"같은 제목이 이미 있어 건드리지 않은 것 {len(난것['건너뜀'])}장.")
+        if 난것["터짐"]:
+            말.append(f"못 쓴 것 {len(난것['터짐'])}장 — {난것['터짐'][0][0]}")
+        말.append(f"잘못됐으면 「되돌리기」로 한꺼번에 뺄 수 있다(이 폴더에서 온 것만).")
+        들임말.setText(chr(10).join(말))
+
+    def _되돌리기() -> None:
+        어디 = 창.들임폴더.text().strip()
+        이름 = Path(어디).name if 어디 else ""
+        if not 이름:
+            들임말.setText("어느 폴더에서 들인 것을 뺄지 자리를 적어 줘.")
+            return
+        뺀것 = 볼트.되돌리기(notes, 이름)
+        들임말.setText(f"「{이름}」 에서 들인 {len(뺀것)}장을 뺐다. "
+                    "뒤에 내가 적은 글은 그대로 있다.")
+
+    찾아보기.clicked.connect(lambda: _폴더고르기())
+    들임단추줄 = QHBoxLayout()
+    for 글, 함 in (("살펴보기", _살펴보기), ("들이기", _들이기), ("되돌리기", _되돌리기)):
+        단추 = QPushButton(글)
+        단추.clicked.connect(lambda _=False, f=함: f())
+        들임단추줄.addWidget(단추)
+    들임단추줄.addStretch(1)
+    들임틀.addLayout(들임단추줄)
+    들임틀.addStretch(1)
+    창.들임살펴보기 = _살펴보기
+    창.들임들이기 = _들이기
+    창.들임되돌리기 = _되돌리기
+
     # ── 내 정보 갈래들
     옛 = notes.read(PROFILE_TITLE)
     답, _옛남2 = from_body(옛.body if 옛 else "")
@@ -543,8 +971,15 @@ def open_dialog(win, notes: Notes):
             창.안내.setText("못 저장했어 — 기록 폴더가 잠겼거나 읽기 전용이야. 적은 것은 창에 그대로 있어.")
             return
         방식 = 창.방식.currentText()
-        paths.save_config({**paths.load_config(), "화면방식": 방식})
+        되돌림 = int(창.되돌리기.currentData())
+        paths.save_config({**paths.load_config(),
+                           "화면방식": 방식, "표식되돌리기초": 되돌림,
+                           "기계기록보기": str(창.기록보기.currentData())})
         apply_screen(win, 방식)
+        # **바로 먹게 한다.** 다시 켜야 적용되면 골라 놓고도 그대로인 줄 안다.
+        그래프 = getattr(win, "graph", None)
+        if 그래프 is not None:
+            그래프.자동제자리초 = float(되돌림)
         for 이름, 칸 in 창.연결칸.items():
             if 칸.text().strip():
                 틀림 = save_connection(이름, 칸.text())
@@ -634,6 +1069,7 @@ def _self_check() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt5.QtWidgets import QApplication, QWidget
 
+    paths.pin_qt_plugins()      # 한글 경로면 `offscreen` 조차 못 찾는다
     app = QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory() as tmp:
         옛자리 = os.environ.get("VC_DATA")
@@ -647,6 +1083,13 @@ def _self_check() -> None:
             창.칸들["AI에게"]["__줄더하기"]("부를 때 붙일 말")
             창.칸들["AI에게"]["부를 때 붙일 말"].setText("없음")
             창.방식.setCurrentText("전체화면")
+            # ★ 표식이 저절로 가운데로 돌아오기까지의 시간도 여기서 고른다.
+            창.되돌리기.setCurrentIndex(창.되돌리기.findData(60))
+            # 기계 기록 보기(결정 17): 기본은 「한 곳」, 여기서 「둘 다」로 바꿔 저장한다.
+            assert 창.기록보기.currentData() == "한곳", 창.기록보기.currentData()
+            창.기록보기.setCurrentIndex(창.기록보기.findData("둘다"))
+            # 값이 바로 먹는지 보려고 그래프인 척하는 것을 하나 달아 둔다.
+            win.graph = type("가짜그래프", (), {"자동제자리초": 0.0})()
             창.저장()
             글 = n.read(PROFILE_TITLE)
             assert not 글.pinned and 글.kind == "preference", (글.pinned, 글.kind)
@@ -654,12 +1097,131 @@ def _self_check() -> None:
             assert "옵시디언에서 적은 줄" in 글.body, "밖에서 적은 칸을 지웠다"
             assert paths.load_config().get("화면방식") == "전체화면"
             assert win.isFullScreen(), "저장한 화면 방식이 안 먹는다"
+
+            # ★★ **고른 시간이 저장되고 곧바로 먹어야 한다.** 다시 켜야 적용되면
+            #   골라 놓고도 그대로인 줄 안다.
+            assert paths.load_config().get("표식되돌리기초") == 60, paths.load_config()
+            assert 되돌리기초() == 60, 되돌리기초()
+            assert win.graph.자동제자리초 == 60.0, "고른 시간이 그래프에 바로 안 먹는다"
+            assert 기록보기() == "둘다", paths.load_config().get("기계기록보기")
+            paths.save_config({**paths.load_config(), "기계기록보기": "엉뚱"})
+            assert 기록보기() == 기록보기기본, "모르는 값을 그대로 받는다"
+            paths.save_config({**paths.load_config(), "기계기록보기": "둘다"})
+            # 설정 한 줄이 깨져도 창이 죽으면 안 된다 — 아는 값만 받고 나머지는 기본으로.
+            for 엉뚱 in ("스물", None, -5, 7):
+                paths.save_config({**paths.load_config(), "표식되돌리기초": 엉뚱})
+                assert 되돌리기초() == 되돌리기기본, f"{엉뚱!r} 를 그대로 받는다"
+            paths.save_config({**paths.load_config(), "표식되돌리기초": 60})
             다시 = open_dialog(win, n)
             assert 다시.칸들["음식"]["좋아하는 음식"].text() == "국수", "다시 열면 답이 안 보인다"
             assert "부를 때 붙일 말" in 다시.칸들["AI에게"], "더한 질문이 다시 열면 사라진다"
             다시.칸들["음식"]["좋아하는 음식"].setText("")
             다시.저장()
             assert "좋아하는 음식" not in n.read(PROFILE_TITLE).body, "비운 답이 남는다"
+            # ★★ 딴 PC 와 잇기(결정 30): 메인/손님을 고르고, 손님이면 주소·열쇠가 **둘 다** 있어야 한다.
+            사본창 = open_dialog(win, n)
+            assert "딴 PC" in 사본창.갈래이름, 사본창.갈래이름
+            사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("손님"))
+            사본창.사본주소.setText("http://100.1.2.3:8765")
+            사본창.사본열쇠.setText("key-main")
+            사본창.사본저장()
+            적힌 = paths.load_config().get("사본") or {}
+            assert 적힌 == {"역할": "손님", "main_url": "http://100.1.2.3:8765", "main_token": "key-main"}, 적힌
+            # 열쇠를 비우면 **쓰던 것 그대로** — 주소만 고치려는데 열쇠를 다시 치게 하면 안 된다
+            사본창.사본열쇠.setText("")
+            사본창.사본주소.setText("http://100.1.2.9:8765")
+            사본창.사본저장()
+            assert (paths.load_config()["사본"])["main_token"] == "key-main", paths.load_config()["사본"]
+            # 메인으로 돌리면 주소가 남아 있어도 손님이 아니다(승격 · 결정 30 ⑤)
+            사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("메인"))
+            사본창.사본저장()
+            assert (paths.load_config()["사본"])["역할"] == "메인"
+            사본창.deleteLater()
+
+            # ★ 첫 연결(결정 18·21): QR 을 띄우면 **붙을 주소와 남은 시간**을 같이 보인다 —
+            #   「왜 안 찍히지」의 첫째 까닭이 2분 지난 QR 이었고, 남이 띄운 QR 인지 맞춰 볼 것도 없었다.
+            paths.save_config({**paths.load_config(), "pair_token": "시험열쇠-ABC"})
+            폰창 = open_dialog(win, n)
+            폰창.테일주소 = lambda: "100.101.2.3"      # 테일스케일이 켜진 셈 친다
+            폰창.폰단추.click()
+            assert 폰창.폰QR.pixmap() is not None and not 폰창.폰QR.pixmap().isNull(), "QR 이 안 그려진다"
+            말 = 폰창.폰남은.text()
+            assert "100.101.2.3:8765" in 말 and "2:00" in 말, 말
+            assert paths.load_config()["pair_token"] not in 말, "열쇠가 글자로 샌다"
+            폰창.deleteLater()
+
+            # ★★ 확장(결정 23 · 편의 기능 31번) — **깔아도 꺼진 채**고, 켜면 설정에 남는다.
+            import plugins as 확장들
+
+            확장창 = open_dialog(win, n)
+            assert not 확장창.확장칸들, "빈 창고에 확장이 있다고 나온다"
+            확장창.확장예제깔기()
+            assert list(확장창.확장칸들) == ["글자수"], list(확장창.확장칸들)
+            칸 = 확장창.확장칸들["글자수"]
+            assert 칸.isEnabled() and not 칸.isChecked(), "깔자마자 켜져 있다 — 코드가 묻지 않고 돈다"
+            assert not 확장들.enabled_names(), 확장들.enabled_names()
+            칸.setChecked(True)      # 사람이 눌렀을 때와 같은 길
+            assert 확장들.enabled_names() == {"글자수"}, paths.load_config().get("확장")
+            칸.setChecked(False)
+            assert not 확장들.enabled_names(), "끈 것이 설정에 남는다"
+            # 깨진 확장은 목록에 뜨지만 **못 켠다** — 까닭이 이름 자리에 적힌다
+            (확장들.root() / "깨진것").mkdir(parents=True, exist_ok=True)
+            (확장들.root() / "깨진것" / "plugin.json").write_text("{깨진", encoding="utf-8")
+            확장창.확장그리기()
+            깨진 = 확장창.확장칸들["깨진것"]
+            assert not 깨진.isEnabled() and "못 실었다" in 깨진.text(), 깨진.text()
+            # ★ **꺼진 줄에도 네모가 보여야 한다** — 안 그리면 켠 것만 ✓ 로 보여 누르는 자리인 줄
+            #   모른다(맥에서 눈으로 보고 잡았다). 옷에 네모가 들었는지 여기서 지킨다.
+            assert "QCheckBox::indicator" in _dialog_css(__import__("theme")), "켜고 끄는 네모를 안 그린다"
+            확장창.deleteLater()
+
+            # ★★ 폴더 들이기(오너 2026-09-20) — **살펴보기 없이 들이기를 누르면 안 들어간다.**
+            #   한 번에 백 장이 움직이는 일이라, 무엇이 들어가는지 보기 전에는 창고를 안 건드린다.
+            볼트자리 = Path(tmp) / "내볼트"
+            (볼트자리 / "wiki").mkdir(parents=True, exist_ok=True)
+            (볼트자리 / "wiki" / "2026-06-12-a.md").write_text(
+                "---\ntype: error\ndate: 2026-06-12\n---\n# 첫 글\n\n[[2026-06-12-b]]\n",
+                encoding="utf-8")
+            (볼트자리 / "wiki" / "2026-06-12-b.md").write_text(
+                "---\ntype: decision\ndate: 2026-06-12\n---\n# 둘째 글\n\n본문.\n",
+                encoding="utf-8")
+            들임창 = open_dialog(win, n)
+            assert "폴더 들이기" in 들임창.갈래이름, 들임창.갈래이름
+            들임창.들임폴더.setText(str(볼트자리))
+            들임창.들임들이기()          # 살펴보기를 건너뛰고 눌렀다
+            assert n.read("첫 글") is None, "살펴보지도 않고 창고에 넣었다"
+            assert "살펴보기" in 들임창.들임말.text(), 들임창.들임말.text()
+            # ★ 안내문에 마크다운 별표가 글자로 새면 안 된다 — QLabel 은 그것을 안 그린다
+            assert "**" not in 들임창.들임말.text(), f"별표가 글자로 보인다: {들임창.들임말.text()}"
+            # 살펴보면 **무엇이 들어가는지 숫자로** 보인다 — 창고는 아직 그대로다
+            들임창.들임살펴보기()
+            본말 = 들임창.들임말.text()
+            # 갈래는 **새 기준 이름**으로 옮겨져 들어온다(2026-09-21) —  가 아니라 
+            assert "2장" in 본말 and "오류" in 본말, 본말
+            assert n.read("첫 글") is None, "살펴보기가 창고를 건드렸다"
+            들임창.들임들이기()
+            assert "2장 들였다" in 들임창.들임말.text(), 들임창.들임말.text()
+            assert "**" not in 들임창.들임말.text(), f"별표가 글자로 보인다: {들임창.들임말.text()}"
+            들어온 = n.read("첫 글")
+            assert 들어온 is not None and 들어온.kind == "오류", 들어온
+            # ★ 별칭으로 열린다 = 볼트의 [[링크]]가 이어진다
+            assert n.read("2026-06-12-b") is not None and n.read("2026-06-12-b").title == "둘째 글"
+            # ★★ **들인 뒤 곧바로 찾아져야 한다.** 파일만 놓고 색인을 안 고치면 글은
+            #   창고에 있는데 검색에 안 나온다 — 사람 눈에는 「안 들어왔다」로 보인다.
+            찾은 = [r["title"] for r in n.search("첫 글", k=5)]
+            assert "첫 글" in 찾은, f"들이자마자 못 찾는다: {찾은}"
+            # 없는 폴더는 **말해 준다** — 조용히 0장 들였다고 하면 안 된다
+            들임창.들임폴더.setText(str(Path(tmp) / "없는폴더"))
+            들임창.들임살펴보기()
+            assert "그런 폴더가 없어" in 들임창.들임말.text(), 들임창.들임말.text()
+            # 한꺼번에 되돌린다 — 뒤에 사람이 적은 글은 남는다
+            n.write(Note(title="내가 적은 글", body="남아야 한다"))
+            들임창.들임폴더.setText(str(볼트자리))
+            들임창.들임되돌리기()
+            assert n.read("첫 글") is None and n.read("둘째 글") is None, "되돌렸는데 남았다"
+            assert n.read("내가 적은 글") is not None, "사람이 적은 글까지 뺐다"
+            들임창.deleteLater()
+
             # 저장이 막히면 창을 안 닫고 알린다 — 적은 것이 사라지지 않게
             막힘 = open_dialog(win, n)
             막힘.칸들["음식"]["좋아하는 음식"].setText("라면")
@@ -764,6 +1326,13 @@ def _self_check() -> None:
                 구글창.deleteLater()
             finally:
                 google_auth.login = _옛로그인
+            # ★ 폰 연결 — QR 은 단추를 눌러야 뜨고, 담긴 주소는 열쇠를 # 뒤에만 싣는다
+            paths.save_config({**paths.load_config(), "pair_token": "폰열쇠시험"})
+            폰창 = open_dialog(win, n)
+            assert "폰 연결" in 폰창.갈래이름 and 폰창.폰QR.isHidden(), "QR 이 단추 없이 떠 있다"
+            폰창.폰단추.click()
+            assert not 폰창.폰QR.isHidden() and not 폰창.폰QR.pixmap().isNull(), "QR 을 못 그렸다"
+            폰창.deleteLater()
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"
