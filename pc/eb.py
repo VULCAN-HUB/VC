@@ -437,10 +437,10 @@ def main(argv: list[str] | None = None) -> int:
     #   창이 다 선 뒤에 말한다 — 짓는 중에 말하면 첫 인사에 덮인다.
     from PyQt5.QtCore import QTimer as _때알림
 
-    _때알림.singleShot(1200, win.모델없으면알리기)
+    _때알림.singleShot(1200, lambda: win.모델없으면알리기())
     # ★★ **켤 때 새 판이 있는지 본다.** 딴 실에서 묻고, 있으면 말한다 —
     #   조용히 갈아 끼우지 않는다(오너 2026-09-24).
-    _때알림.singleShot(3000, win.새판찾기)
+    _때알림.singleShot(3000, lambda: win.새판찾기())
     if 화면상태:
         _화면상태재기(app, win)
     code = app.exec_()
@@ -497,7 +497,7 @@ def _화면상태재기(app, win, 기다림_ms: int = 9000) -> None:
 
     # 창 관리자가 최소에서 막는다 — 멈춘 자리가 사람이 끌어서 닿는 최소다.
     QTimer.singleShot(기다림_ms - 1500, lambda: win.resize(1, 1))
-    QTimer.singleShot(기다림_ms, 적기)
+    QTimer.singleShot(기다림_ms, lambda: 적기())
 
 
 def _나를(*인자: str, 기한: int = 900) -> tuple[int | None, float, str]:
@@ -1056,6 +1056,70 @@ def _self_check() -> None:
     #   모듈을 하나 더할 때마다 사람이 그 목록을 기억해야 하는데, 오늘 여섯을 빠뜨렸다.
     #   그래서 **세지 않고 검사가 잡는다**(2026-09-21).
     _자리스펙 = pathlib.Path(__file__).resolve().parent
+
+    # ★★ **한글 이름 함수를 `singleShot` 에 그대로 물리면 윈도우에서 죽는다.**
+    #   PyQt 가 슬롯 이름을 아스키로 바꾸려다 `UnicodeEncodeError` 를 낸다 —
+    #   맥에서는 안 나서 여기서 **네 번** 걸렸다(2026-09-25 에 네 번째).
+    #   마지막 것은 `singleShot(1200, win.모델없으면알리기)` 였고 **창이 아예 안 떴다.**
+    #   자체점검은 `eb.main()` 을 안 지나 못 잡았다. 고칠 때마다 사람이 기억할 일이
+    #   아니라서 여기서 잡는다. `lambda: 함수()` 로 감싸면 이름을 안 넘긴다.
+    #
+    #   ★ **본 것만 막는다.** `connect` 도 같은 병인지는 **안 겪었다** — 오히려
+    #     한글 이름을 물린 `settings` 가 윈도우에서 통과한다. 그래서 `connect` 는
+    #     글로 막지 않고 **아래에서 실제로 재 본다**. 겪지도 않은 것을 막으면
+    #     멀쩡한 코드를 뜯어고치게 되고, 진짜 위험이 어느 것인지 흐려진다.
+    #   ★ 글이 아니라 **문법 나무**로 본다 — 주석·문자열에 든 같은 글자를 잘못 잡지
+    #     않고, 줄바꿈으로 흩어 놓은 것도 놓치지 않는다. `sqlite3.connect` 같은
+    #     남의 `connect` 와도 안 헷갈린다(PyQt 를 부르는 파일만 본다).
+    import ast as _나무
+
+    _한글걸린것 = []
+    for _파일 in sorted(_자리스펙.glob("*.py")):
+        _글판 = _파일.read_text(encoding="utf-8", errors="replace")
+        if "PyQt5" not in _글판:
+            continue
+        try:
+            _뿌리 = _나무.parse(_글판)
+        except SyntaxError:
+            continue
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Call) and isinstance(_마디.func, _나무.Attribute)
+                    and _마디.func.attr == "singleShot"):
+                continue
+            for _인자 in _마디.args[1:]:      # 첫 인자는 기다릴 시간이다
+                _이름 = (_인자.attr if isinstance(_인자, _나무.Attribute) else
+                       _인자.id if isinstance(_인자, _나무.Name) else "")
+                if any("가" <= _자 <= "힣" for _자 in _이름):
+                    _한글걸린것.append(f"{_파일.name}:{_마디.lineno} → {_이름}")
+    assert not _한글걸린것, (
+        "한글 이름을 singleShot 에 그대로 물렸다 — 윈도우에서 UnicodeEncodeError 로 죽는다. "
+        "`lambda: 함수()` 로 감싼다: " + " · ".join(_한글걸린것))
+
+    # ★ `connect` 는 정말 괜찮은지 **여기서 직접 재 본다.** 괜찮다고 믿고 넘어가면,
+    #   어느 날 PyQt 가 바뀌어 같은 병이 나도 창이 안 뜰 때까지 모른다.
+    #   깨지면 위 막이를 `connect` 까지 넓히고 물린 자리를 감싸야 한다는 뜻이다.
+    try:
+        from PyQt5.QtCore import QObject, pyqtSignal
+
+        class _신호집(QObject):
+            # ★ 신호 **이름**은 영문이어야 한다(그건 딴 규칙이고 이미 안다).
+            #   여기서 재는 것은 **받는 쪽 이름**이 한글이어도 되느냐 하나다.
+            rang = pyqtSignal()
+
+        _온것 = []
+
+        def 받는이():                      # 일부러 한글 이름이다
+            _온것.append(1)
+
+        _집 = _신호집()
+        _집.rang.connect(받는이)
+        _집.rang.emit()
+        assert _온것 == [1], "한글 이름이 신호를 못 받았다"
+    except UnicodeEncodeError as _탈:
+        raise AssertionError(
+            "`connect` 도 한글 이름을 못 받는다 — 위 막이를 connect 까지 넓히고 "
+            f"물린 자리를 `lambda:` 로 감싸야 한다: {_탈}") from None
+
     _스펙 = _자리스펙 / "VC.spec"
     if _스펙.exists():
         _스펙글 = _스펙.read_text(encoding="utf-8", errors="replace")

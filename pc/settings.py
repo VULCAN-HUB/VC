@@ -591,9 +591,9 @@ def open_dialog(win, notes: Notes):
                 return
             창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · "
                            f"{남음[0] // 60}:{남음[0] % 60:02d} 뒤 사라짐")
-            QTimer.singleShot(1000, 한칸)
+            QTimer.singleShot(1000, lambda: 한칸())
 
-        QTimer.singleShot(1000, 한칸)
+        QTimer.singleShot(1000, lambda: 한칸())
 
     def QR보이기() -> None:
         테일 = 창.테일주소()
