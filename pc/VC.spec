@@ -33,12 +33,26 @@ ENGINE = HERE.parent / "빌드전용"
 # **딸려 보내는 것은 늘 작은 쪽(e5-small)이다.** 큰 것(e5-base 279MB)은 앱 안에서
 # 받는다 — 상자를 가볍게 두기로 한 결정이고, 받으면 `paths.meaning_dir()` 이 알아서
 # 그쪽을 먼저 쓴다.
-bundle = [
-    (str(MODELS / "model.onnx"), "models"),
-    (str(MODELS / "tokenizer.json"), "models"),
-]
+# ★★ **없으면 안 넣고 굽는다 — 다만 크게 알린다.** 예전에는 꼭 있어야 했고, 없으면
+#   PyInstaller 가 「Unable to find model.onnx」로 굽기를 통째로 멈췄다. 그런데
+#   저장소에는 모델을 안 두기로 했고(쓰는 사람이 VC 안에서 받는다), 그러면 새 기계나
+#   CI 에서는 **아예 구울 수가 없다**(실제로 CI 맥이 여기서 멈췄다 · 2026-09-25).
+#   ★ 「꺼진 줄도 모른다」던 걱정은 이제 앱이 맡는다 — 켤 때 모델이 없으면 VC 가
+#     말해 주고 받는 자리를 띄운다(`모델없으면알리기`). 굽기가 막을 일이 아니다.
+bundle = []
+_빠진것 = []
+for _이름 in ("model.onnx", "tokenizer.json"):
+    if (MODELS / _이름).exists():
+        bundle.append((str(MODELS / _이름), "models"))
+    else:
+        _빠진것.append(_이름)
 if (MODELS / "piper").exists():
     bundle.append((str(MODELS / "piper"), "models/piper"))
+else:
+    _빠진것.append("piper")
+if _빠진것:
+    print(f"[VC.spec] !! 모델이 없어 안 담았다: {', '.join(_빠진것)}  ({MODELS})")
+    print("[VC.spec]    깔고 처음 켜면 VC 가 알려 주고 그 자리에서 받는다 — 굽기는 막지 않는다")
 
 # 안 넣는 것. 넣으면 상자가 몇 GB가 되고, 정작 없어도 기록 프로그램으로는 다 돌아간다.
 DROP = [

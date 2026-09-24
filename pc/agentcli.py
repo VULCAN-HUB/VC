@@ -293,7 +293,16 @@ class 가짜(손):
         # ★ 지시를 **따옴표 안에 그대로 박으면 안 된다.** 여러 줄·따옴표가 든 지시가
         #   오면 스크립트가 깨진다(협업 리뷰 지시가 실제로 그랬다). `repr` 로 감싼다.
         한줄 = " ".join((지시 or "").split())[:60]
-        조각 = ["import sys", f"print('가짜 손이 돌았다: ' + {한줄!r})"]
+        # ★★ **자식이 UTF-8 로 찍게 한다.** 안 그러면 콘솔 코드페이지를 따르는데,
+        #   영어권 윈도우는 cp1252 라 한글에서 `UnicodeEncodeError` 로 죽는다
+        #   (CI 윈도우에서 열 번 중 아홉 번 · 2026-09-25). 한국어 윈도우(cp949)에서는
+        #   안 나서 여태 몰랐다. `--모두검사` 로 돌리면 부모가 `PYTHONIOENCODING` 을
+        #   물려줘 가려졌고, `python ui.py --check` 를 곧바로 돌리면 났다 —
+        #   **사람이 손으로 돌리는 바로 그 길**이다.
+        조각 = ["import sys",
+              "sys.stdout.reconfigure(encoding='utf-8')",
+              "sys.stderr.reconfigure(encoding='utf-8')",
+              f"print('가짜 손이 돌았다: ' + {한줄!r})"]
         if self.고칠파일 and not 읽기전용:
             조각.append(
                 f"open({self.고칠파일!r}, 'w', encoding='utf-8').write({self.새글!r})")
