@@ -12,9 +12,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 START=$(date +%s)
 
-PYBIN=$(command -v python3.12 || true)
+# ★ 파이썬을 밖에서 정해 줄 수 있게 한다(`VC_PY=... bash build_mac.sh`).
+#   CI 기계에는 `python3.12` 라는 이름이 PATH 에 없을 수 있는데, 그렇다고
+#   brew 로 다시 까는 것은 십 분짜리다. 이름 하나에 매이지 않게 둔다.
+PYBIN=${VC_PY:-$(command -v python3.12 || true)}
 if [ -z "$PYBIN" ]; then
-  echo "python3.12 가 없다 — brew install python@3.12"
+  echo "python3.12 가 없다 — brew install python@3.12 (또는 VC_PY 로 자리를 준다)"
   exit 1
 fi
 
@@ -53,7 +56,9 @@ echo "== 굽는 중"
 VER=$("$PY" -c "import paths; print(paths.VERSION)")
 "$PY" -m PyInstaller VC.spec --noconfirm --clean
 codesign --force --deep --sign - dist/VC.app
-OUTDIR="../../_빌드파일"
+# ★ 낼 자리도 밖에서 정해 줄 수 있게 한다(`VC_OUT=... bash build_mac.sh`) —
+#   CI 는 제 작업 폴더 밖으로 나간 것을 못 거둬 간다.
+OUTDIR="${VC_OUT:-../../_빌드파일}"
 mkdir -p "$OUTDIR"
 ZIP="$OUTDIR/VC-mac-v$VER.zip"
 rm -f "$ZIP"

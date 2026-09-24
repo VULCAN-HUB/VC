@@ -1,0 +1,119 @@
+# 판 표(v0.5.20 같은 것)를 붙이면 **윈도우 설치 파일과 맥 .dmg 를 굽고 릴리스에 올린다.**
+# VC 는 켤 때 깃허브 릴리스를 보므로, 여기 올라가는 순간 쓰는 기계들이 새 판을 알게 된다.
+#
+# ★ 평소 올릴 때는 굽지 않는다 — 검사만 3분이면 끝나는데 굽기까지 하면 10분이 넘고,
+#   굽는 데서만 나는 탈이 섞여 어느 줄이 깨뜨렸는지 흐려진다. 굽기는 낼 때만 한다.
+#
+# ★ 이름·표현식은 영문으로 쓴다. 보여 주는 글만 한글이다.
+name: 굽기
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:      # 손으로도 구워 볼 수 있게 (이때는 릴리스에 안 올린다)
+
+permissions:
+  contents: write         # 릴리스에 올리려면 쓰기가 있어야 한다
+
+jobs:
+  windows:
+    name: 윈도우 설치 파일
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: pc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ★★ **판 표와 코드의 판이 어긋나면 여기서 멈춘다.** 어긋난 채로 올라가면
+      #    VC 가 「새 판이 있다」고 하고 받아도 판 번호가 그대로라, 쓰는 사람은
+      #    업데이트가 안 된 줄 안다.
+      - name: 판 표와 코드의 판이 같은지
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $Ver = python -c "import paths; print(paths.VERSION)"
+          if ("${{ github.ref_name }}" -ne "v$Ver") {
+            throw "판 표(${{ github.ref_name }})와 코드의 판(v$Ver)이 다르다"
+          }
+
+      # build.ps1 은 **VC 전용 자리**를 스스로 찾는다. 설치 문서와 같은 길로 만든다 —
+      # 그래야 문서가 틀리면 여기서도 깨져서 바로 안다.
+      - name: VC 전용 파이썬 자리
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -U pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements-win.txt
+
+      - name: Inno Setup 깔기
+        run: choco install innosetup -y --no-progress
+
+      # ★ 백신 검사는 건너뛴다(-SkipScan). 기계마다 백신 상태가 달라 여기서 본 것이
+      #   쓰는 사람 기계에서 그대로가 아니고, 몇 분을 더 쓴다. 손으로 구울 때는 돈다.
+      - name: 굽기 (자체점검 57개를 먼저 돈다)
+        run: .\build.ps1 -OutDir "${{ github.workspace }}\out" -SkipScan
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  macos:
+    name: 맥 .dmg
+    runs-on: macos-latest
+    timeout-minutes: 60      # llama-cpp-python 을 Metal 로 소스에서 굽는다 — 오래 걸린다
+    defaults:
+      run:
+        working-directory: pc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # build_mac.sh 가 정한 판
+
+      - name: 판 표와 코드의 판이 같은지
+        if: github.ref_type == 'tag'
+        run: |
+          VER=$(python -c "import paths; print(paths.VERSION)")
+          [ "${{ github.ref_name }}" = "v$VER" ] || {
+            echo "판 표(${{ github.ref_name }})와 코드의 판(v$VER)이 다르다"; exit 1; }
+
+      # ★ 서명은 임시(ad-hoc)다. 유료 개발자 계정이 없으면 공증을 못 한다 —
+      #   받는 사람은 처음 열 때 오른쪽 클릭 → 열기 를 해야 한다(README 에 적혀 있다).
+      - name: 굽기 (자체점검 57개를 먼저 돈다)
+        run: VC_PY=$(which python) VC_OUT="${{ github.workspace }}/out" bash build_mac.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: 릴리스에 올리기
+    needs: [windows, macos]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # ★ 변수 이름은 영문이다 — bash 는 한글 이름을 변수로 못 읽는다(세 번 걸렸다).
+          TAG="${{ github.ref_name }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --title "VC $TAG" --notes "윈도우 설치 파일과 맥 .dmg. 셈(sha256)도 함께 올린다."
+          # 파일 이름에 한글이 있다 — 널로 넘겨야 안 깨진다
+          find artifacts -type f -print0 \
+            | xargs -0 gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber

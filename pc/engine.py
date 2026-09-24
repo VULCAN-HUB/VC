@@ -125,8 +125,28 @@ def detect_hardware() -> dict[str, Any]:
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
 
-    tier, note = next((t, n) for t, floor, n in TIERS if vram >= floor)
+    tier, note = 등급매기기(vram, bool(name) and platform.system() == "Darwin"
+                          and platform.machine() == "arm64")
     return {"gpu": name, "vram_mb": vram, "tier": tier, "note": note}
+
+
+def 등급매기기(vram_mb: int, 애플실리콘: bool) -> tuple[str, str]:
+    """잰 메모리로 등급을 매긴다. **재는 쪽과 나누는 쪽을 갈라 뒀다** — 갈라야
+    「메모리가 이만큼일 때 어떻게 되나」를 기계 없이 재 볼 수 있다.
+
+    ★★ **애플 실리콘은 `cpu` 등급으로 안 내려간다.** 등급은 메모리로 매기는데,
+    메모리가 적은 맥(8GB 맥북에어 같은 것)이 `cpu` 로 떨어져 **Metal 을 한 겹도
+    안 쓰고 돌았다** — 2026-09-21 에 잡은 그 병이 낮은 등급에 그대로 남아 있었다.
+    통합 메모리라 Metal 은 메모리가 적어도 쓸 수 있다. 적으면 **작은 모델**을
+    쓰는 것이지 CPU 로 밀 일이 아니다.
+
+    CI 의 맥 기계가 7GB 라 여기서 걸려 나왔다(2026-09-25, CI 를 얹은 첫판).
+    쓰는 사람 중에 8GB 맥을 쓰는 사람이 그대로 밟을 자리였다.
+    """
+    tier, note = next((t, n) for t, floor, n in TIERS if vram_mb >= floor)
+    if tier == "cpu" and 애플실리콘:
+        return "low", "애플 실리콘 — 메모리가 적어 작은 모델만, 그래도 Metal 은 쓴다"
+    return tier, note
 
 
 # 등급별 권장값. **모델 이름을 코드에 박지 않는다** — 권장 크기와 조건만 적고,
@@ -491,6 +511,17 @@ def _self_check() -> None:
     #   늘 `cpu` 등급이었다 — 같은 물음이 직접 부르면 11초, 서버를 거치면 60초였다
     #   (2026-09-21 재서 잡았다). 통합 메모리라 시스템 메모리로 등급을 매긴다.
     import platform as _플랫폼
+
+    # ★★ **메모리가 적은 맥도 GPU 를 쓴다.** 기계 없이 여기서 잰다 — 이 맥이
+    #   64GB 라 위 검사만으로는 낮은 등급 길을 한 번도 안 지난다. 실제로 CI 의
+    #   7GB 맥에서 `cpu` 로 떨어져 나왔다.
+    for _잰것 in (0, 1000, 3584, 3999):
+        _등급, _말 = 등급매기기(_잰것, 애플실리콘=True)
+        assert ADVICE[_등급]["gpu_layers"] == -1, f"{_잰것}MB 애플 실리콘이 CPU 로 밀렸다: {_등급}"
+        assert "Metal" in _말, _말
+    # 애플 실리콘이 아니면 그대로 cpu 로 떨어져야 한다 — 없는 GPU 를 쓰겠다고 하면 안 된다
+    assert 등급매기기(0, 애플실리콘=False)[0] == "cpu"
+    assert 등급매기기(20000, 애플실리콘=False)[0] == "high"
 
     난것 = detect_hardware()
     if _플랫폼.system() == "Darwin" and _플랫폼.machine() == "arm64":

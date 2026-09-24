@@ -1,0 +1,21 @@
+# 윈도우에서 VC 를 굽고 돌리는 데 필요한 것 (맥 자리와 같은 판).
+#
+# ★★ **`requirements-mac.txt` 를 쓰지 마라** — 거기 llama-cpp-python 은 맥 Metal 판이다.
+# ★★ 아래 두 줄이 **미리 구운 CPU 판**을 받게 한다. 빼면 소스로 굽느라 몇 십 분이
+#    걸리거나 터진다 — 실제로 그렇게 막혔다.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+--only-binary=llama-cpp-python
+
+PyQt5==5.15.11
+onnxruntime==1.27.0
+tokenizers==0.23.1
+faster-whisper==1.2.1
+sounddevice==0.5.5
+segno==1.6.6
+piper-tts==1.6.0
+llama-cpp-python==0.3.34
+numpy==2.4.6
+Pillow==12.2.0
+pyinstaller==6.21.0
+# 윈도우 목소리(SAPI)가 쓴다 — 맥에는 없는 것이라 맥 목록에는 빠져 있다
+pywin32
