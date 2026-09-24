@@ -1,0 +1,56 @@
+# VC 저장소에 **프로그램만** 둔다. 기록은 쓰는 사람이 채운다(오너 2026-09-24).
+#
+# ★★ 이 파일이 아예 없어서 저장소가 5.14GB 가 됐다 — 모델 4.8GB · 맥 venv ·
+#    구운 것 · 개인 기록 · **페어링 열쇠**까지 통째로 들어갔다.
+#    올릴 때 지울 것을 그때 고르면 반드시 하나를 빠뜨린다. 여기서 막는다.
+
+# ── 기록 (사람마다 다르다. 빈 창고로 시작해 스스로 채운다)
+data/
+pc/data/
+*.jsonl
+
+# ── 열쇠·설정 (기계마다 다르고, 열쇠가 들어 있다)
+eb_config.json
+pc/eb_config.json
+기록자리.txt
+pc/기록자리.txt
+
+# ── 모델 (기계마다 받는다. 깃허브는 100MB 넘는 파일을 거부한다)
+models/
+pc/$받을자리/
+
+# ── 만들어지는 것 (소스에서 언제든 다시 난다)
+.venv*/
+pc/.venv*/
+dist/
+pc/dist/
+build/
+pc/build/
+__pycache__/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+vc-잠금/
+pc/vc-잠금/
+*.log
+
+# ── 운영체제가 뿌리는 것
+.DS_Store
+Thumbs.db
+
+# ── 돌다 남는 자국 (기계마다 다르고 **계정 경로가 박힌다**)
+vc-*.json
+vc-*.log
+pc/vc-*.json
+pc/vc-*.log
+
+# ── 작업 문서 (프로그램이 아니다. 기록은 쓰는 사람이 채운다)
+시험기록/
+pc/tools/*지시서*.md
+pc/tools/★판-올렸다*.md
+pc/tools/현재상태.md
+vc-*.lock
+pc/vc-*.lock
+vc-*
+pc/vc-*
