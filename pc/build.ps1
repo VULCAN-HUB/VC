@@ -52,6 +52,16 @@ try {
     $Tpl | Out-File "$Link\version.txt" -Encoding utf8 -NoNewline
     if ((Get-Content "$Link\version.txt" -Raw) -match '@@') { throw "틀에 안 채운 자리가 남았다" }
 
+    # ★★ **안 재고 굽지 않는다.** 맥 굽는 틀(`build_mac.sh`)은 굽기 전에 자체점검을
+    # 다 돌린다. 윈도우만 그냥 구우면, 윈도우에서만 나는 탈이 그대로 설치본에 실린다 —
+    # 이 프로젝트에서 굵직한 것들이 죄다 「구운 것으로 돌려 봐야 나온」 것들이었다.
+    Write-Host "== 자체점검"
+    Push-Location $Link
+    & python eb.py --모두검사
+    $검사 = $LASTEXITCODE
+    Pop-Location
+    if ($검사 -ne 0) { throw "자체점검이 안 통과했다 (종료 $검사) — 고치고 다시 구워라" }
+
     Write-Host "== 아이콘 굽기"
     & python "$Link\tools\make_icon.py"
     if ($LASTEXITCODE -ne 0) { throw "아이콘 실패" }
