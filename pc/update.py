@@ -115,13 +115,17 @@ def 받기(주소: str, 낼자리: Path, 셈주소: str = "", 알림=None,
     도중 = 낼자리.with_suffix(낼자리.suffix + ".part")   # 다 받기 전엔 제 이름을 안 준다
     셈 = hashlib.sha256()
     받은 = 0
+    멈췄나 = False
+    # ★★ **연 채로 지우지 않는다.** 맥·리눅스는 열린 파일도 지워지지만 **윈도우는
+    #   안 된다** — `PermissionError: [WinError 32] 다른 프로세스가 파일을 사용 중`
+    #   으로 터진다. 그래서 `with` 를 빠져나온 **뒤에** 치운다(윈도우 실기가 잡았다).
     try:
         with 열기(주소) as r, open(도중, "wb") as f:
             전체 = int(r.headers.get("Content-Length") or 0) if hasattr(r, "headers") else 0
             while True:
                 if 멈춤 is not None and 멈춤():
-                    도중.unlink(missing_ok=True)
-                    return {"됐나": False, "왜": "멈추라고 했다"}
+                    멈췄나 = True
+                    break
                 덩이 = r.read(1 << 20)
                 if not 덩이:
                     break
@@ -131,8 +135,11 @@ def 받기(주소: str, 낼자리: Path, 셈주소: str = "", 알림=None,
                 if 알림 is not None and 전체:
                     알림(받은, 전체)
     except Exception as e:
-        도중.unlink(missing_ok=True)
+        _치우기(도중)
         return {"됐나": False, "왜": f"받다 막혔다: {type(e).__name__}: {e}"}
+    if 멈췄나:
+        _치우기(도중)
+        return {"됐나": False, "왜": "멈추라고 했다"}
 
     if 셈주소:
         try:
@@ -140,10 +147,27 @@ def 받기(주소: str, 낼자리: Path, 셈주소: str = "", 알림=None,
         except Exception:
             적힌 = ""
         if 적힌 and 적힌 != 셈.hexdigest():
-            도중.unlink(missing_ok=True)
+            _치우기(도중)
             return {"됐나": False, "왜": "받은 파일의 셈이 안 맞는다 — 받다 끊겼거나 바뀌었다"}
     도중.replace(낼자리)
     return {"됐나": True, "자리": str(낼자리), "왜": ""}
+
+
+def _치우기(자리: Path, 몇번: int = 5) -> None:
+    """받다 만 것을 지운다. **윈도우는 곧바로 안 지워질 때가 있다.**
+
+    ★ 백신이 방금 닫힌 파일을 잠깐 붙들고 있으면 `WinError 32` 가 난다 —
+      몇 번 쉬었다 다시 해 본다. 끝내 못 지워도 **부르는 쪽을 막지는 않는다**
+      (`.part` 라 목록에도 안 뜨고, 다음에 덮어쓴다).
+    """
+    import time as _때
+
+    for 번 in range(몇번):
+        try:
+            자리.unlink(missing_ok=True)
+            return
+        except OSError:
+            _때.sleep(0.1 * (번 + 1))
 
 
 def 깔기명령(자리: str, 운영체제: str = "") -> list[str]:
@@ -238,10 +262,34 @@ def _self_check() -> None:
             assert not 낼것.exists(), "셈이 틀렸는데 파일을 남겼다"
             assert not list(낼것.parent.glob("*.part")), "받다 만 것이 남았다"
             # 멈추면 자국을 안 남긴다
+            # ★★ **멈출 때 연 채로 지우지 않는다** — 윈도우는 열린 파일을 못 지운다
+            #   (`WinError 32`). 윈도우 실기가 잡은 자리다.
+            열린채로지웠나 = []
+
+            class _못지우는파일(io.BytesIO):
+                headers = {"Content-Length": str(len(몸))}
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    _열림["열렸나"] = False
+                    return False
+
+            _열림 = {"열렸나": False}
+            옛열기파일 = open
+
             난것 = 받기("https://x/a", 낼것, "", 멈춤=lambda: True,
                      열기=lambda 주소: _응답(몸))
             assert not 난것["됐나"] and "멈추라고" in 난것["왜"], 난것
             assert not 낼것.exists() and not list(낼것.parent.glob("*.part"))
+            # 소스로도 못 박는다 — `with` 안에서 지우면 윈도우에서 또 터진다
+            import inspect as _본다받기
+
+            _소스받기 = _본다받기.getsource(받기)
+            _안쪽 = _소스받기[_소스받기.index("with 열기("):_소스받기.index("except Exception")]
+            assert "unlink" not in _안쪽 and "_치우기" not in _안쪽, \
+                "파일을 연 채로 지운다 — 윈도우에서 WinError 32 로 터진다"
         finally:
             globals()["_열기"] = 옛열기
 

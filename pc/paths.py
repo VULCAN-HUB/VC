@@ -27,7 +27,7 @@ APP_NAME = "VC"
 # 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
 # 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
 # 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
-VERSION = "0.5.19"
+VERSION = "0.5.20"
 
 
 def _qt_runtime_first() -> bool:
@@ -87,6 +87,16 @@ def pin_runtime() -> bool:
 # 이미 새 런타임이 프로세스에 있으므로 괜찮다.
 _PINNED = False
 _PINNED = pin_runtime()
+# ★★ **못 붙들었으면 말한다.** 이대로 onnxruntime 을 올리면 프로세스가 **오류도 없이
+#   통째로 죽는다**(0xC0000005). 윈도우 실기에서 `ui`·`ui_check` 가 딱 그렇게 죽었고,
+#   끝난 코드 말고는 아무 단서가 없었다 — 「조용히 실패하지 않는다」를 여기에도 적용한다.
+#   대개 까닭은 **VC++ 재배포 패키지가 없는 것**이다.
+if os.name == "nt" and not _PINNED:
+    sys.stderr.write(
+        "★ C++ 런타임을 못 붙들었다 — 뜻 검색(onnxruntime)을 올리면 프로세스가\n"
+        "  통째로 죽을 수 있다. 이것부터 깔아라:\n"
+        "    winget install --id Microsoft.VCRedist.2015+.x64\n")
+    sys.stderr.flush()
 
 
 def qt_plugins_dir() -> Path | None:
