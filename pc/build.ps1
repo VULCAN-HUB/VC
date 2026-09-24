@@ -15,6 +15,21 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Link = "C:\vcbuild"
 
+# ★★ **VC 전용 파이썬을 스스로 찾는다.** 맨 `python` 을 부르면 그 창에 잡혀 있는
+# 아무 venv 나 집는다 — 실제로 남의 도구 venv(`hermes-agent`)로 굽힐 뻔했고, 거기
+# Qt 는 판이 다르고 onnxruntime 은 깨져 있었다. `Activate.ps1` 로 켜라고 할 수도
+# 없다: 실행 정책이 막으면 거기서 끝난다(보안 설정이라 풀라고 하지 않는다).
+# **venv 의 파이썬을 경로로 곧장 부른다** — 정책을 안 건드리고 창과도 무관하다.
+$Py = Join-Path $Root ".venv\Scripts\python.exe"
+if (-not (Test-Path $Py)) {
+    throw "VC 전용 파이썬이 없다: $Py`n" +
+          "  `설치-윈도우.md` 2번대로 만든다:`n" +
+          "    `$뿌리 = python -c `"import sys; print(sys.base_prefix)`"`n" +
+          "    & `"`$뿌리\python.exe`" -m venv .venv`n" +
+          "  남의 venv 로 구우면 그 도구가 깔아 둔 것이 설치본에 섞인다."
+}
+Write-Host "== 파이썬 $Py"
+
 # ★★ **두 굽기가 겹치면 둘 다 깨진다.** 같은 정션·같은 dist 를 쓰기 때문이다 —
 # 먼저 것이 묶는 중에 뒤엣것이 정션을 지우고 다시 걸어, 둘 다 "파일을 못 찾는다" 로 끝났다.
 # 실제로 그렇게 두 판을 날렸다. 자물쇠 파일 하나로 막는다.
@@ -41,7 +56,7 @@ if (-not (Test-Path "$Link\eb.py")) { throw "정션이 안 걸렸다" }
 try {
     # 판 번호는 paths.py 한 자리에만 있다. 여기서 읽어 version.txt 를 만든다 —
     # 안 그러면 exe 속성에 0.1.0.0 이 박히고, 쓰는 사람이 어느 판인지 못 가른다.
-    $Ver = (& python -c "import sys; sys.path.insert(0, r'$Link'); import paths; print(paths.VERSION)").Trim()
+    $Ver = (& $Py -c "import sys; sys.path.insert(0, r'$Link'); import paths; print(paths.VERSION)").Trim()
     if ($Ver -notmatch '^\d+\.\d+\.\d+$') { throw "판 번호가 이상하다: '$Ver'" }
     Write-Host "== 판 v$Ver"
     $Tpl = Get-Content "$Link\version.txt.틀" -Raw -Encoding UTF8
@@ -57,18 +72,18 @@ try {
     # 이 프로젝트에서 굵직한 것들이 죄다 「구운 것으로 돌려 봐야 나온」 것들이었다.
     Write-Host "== 자체점검"
     Push-Location $Link
-    & python eb.py --모두검사
+    & $Py eb.py --모두검사
     $검사 = $LASTEXITCODE
     Pop-Location
     if ($검사 -ne 0) { throw "자체점검이 안 통과했다 (종료 $검사) — 고치고 다시 구워라" }
 
     Write-Host "== 아이콘 굽기"
-    & python "$Link\tools\make_icon.py"
+    & $Py "$Link\tools\make_icon.py"
     if ($LASTEXITCODE -ne 0) { throw "아이콘 실패" }
 
     Write-Host "== 굽는 중 (몇 분 걸린다)"
     Push-Location $Link
-    & python -m PyInstaller VC.spec --noconfirm --clean `
+    & $Py -m PyInstaller VC.spec --noconfirm --clean `
         --distpath "$Link\dist" --workpath "$Link\build"
     $code = $LASTEXITCODE
     Pop-Location
