@@ -648,6 +648,21 @@ def open_dialog(win, notes: Notes):
     창.사본열쇠.setPlaceholderText("메인의 열쇠 — 비우면 쓰던 것 그대로")
     줄(사본틀, "메인 열쇠", 창.사본열쇠)
 
+    # ── 기기끼리 신호(오너 2026-09-24). **훑지 말고 바뀐 쪽이 말하게 한다.**
+    그물틀, _ = 쪽("기기끼리 신호", "저장·지움을 누르면 붙어 있는 다른 기기에 바로 알린다. "
+                           "주소는 안 적는다 — 테일스케일로 서로 찾는다. "
+                           "모든 기계에 **같은 열쇠**를 넣어라(영문·숫자만).")
+    쓰던그물 = paths.load_config().get("그물") or {}
+    쓰던그물 = 쓰던그물 if isinstance(쓰던그물, dict) else {}
+    창.그물열쇠 = QLineEdit(str(쓰던그물.get("열쇠") or ""))
+    창.그물열쇠.setPlaceholderText("비우면 이 기계는 혼자 쓴다")
+    줄(그물틀, "그물 열쇠", 창.그물열쇠)
+    만들기 = QPushButton("새 열쇠 만들기")
+    만들기.setToolTip("여기서 만든 값을 다른 기계에도 똑같이 넣는다")
+    만들기.clicked.connect(
+        lambda: 창.그물열쇠.setText(__import__("secrets").token_urlsafe(24)))
+    줄(그물틀, "", 만들기)
+
     사본말 = QLabel("")
     사본말.setObjectName("note")
     사본말.setWordWrap(True)
@@ -658,8 +673,13 @@ def open_dialog(win, notes: Notes):
         cfg = paths.load_config()
         옛 = cfg.get("사본") or {}
         열쇠 = 창.사본열쇠.text().strip() or 옛.get("main_token", "")
+        # ★★ **열쇠는 영문·숫자만.** HTTP 머리말은 latin-1 이라 한글이 섞이면
+        #   붙을 때 통째로 깨진다 — 실기에서 그 덫에 걸렸다(2026-09-24).
+        그물값 = 창.그물열쇠.text().strip()
+        if 그물값 and not 그물값.isascii():
+            그물값 = ""
         새것 = {"역할": 역할, "main_url": 창.사본주소.text().strip(), "main_token": 열쇠}
-        paths.save_config({**cfg, "사본": 새것})
+        paths.save_config({**cfg, "사본": 새것, "그물": {"열쇠": 그물값}})
         # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다
         try:
             import server as _서버

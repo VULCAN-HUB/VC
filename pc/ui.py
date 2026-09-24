@@ -2861,6 +2861,12 @@ class MainWindow(QWidget):
         갈아 끼우면 방금 쓴 문장이 소리 없이 사라진다 — 그건 되돌릴 수도 없다.
         대신 알려만 주고, 손을 뗀 뒤에 눌러서 받게 한다.
         """
+        # ★★ **그물이 살아 있으면 훑기를 늦춘다.** 이웃이 바꾸면 신호가 바로 오니
+        #   3초마다 창고를 통째로 훑을 까닭이 없다 — 창고가 NAS 에 있고 글이 수만
+        #   장이면 그 훑기가 곧 값이다(오너 2026-09-24: 「감시 하지 말고 신호 전송」).
+        #   ★ 아주 끄지는 않는다. 그물 열쇠를 안 넣었거나 테일스케일이 꺼져 있으면
+        #     신호가 아예 없는데, 그때 훑기까지 없으면 **밖에서 고친 것을 영영 모른다.**
+        self._훑기늦추기()
         if time.monotonic() - self._wrote_at < 1.5:
             return                       # 방금 우리가 쓴 것이다
         self.indexer.ask()               # 훑기는 딴 실에서. 끝나면 _indexed가 받는다
@@ -3627,6 +3633,27 @@ class MainWindow(QWidget):
         if not isinstance(것, dict) or 것.get("역할") != "손님":
             return ""
         return "  (여긴 사본이야 — 메인엔 그대로 남아. 아주 지우려면 메인에서 지워라.)"
+
+    # 그물이 붙어 있을 때의 훑기 간격(ms). 신호가 오니 뜸해도 된다.
+    느긋훑기MS = 30000
+
+    def _훑기늦추기(self) -> None:
+        """이웃과 붙어 있으면 훑기를 늦추고, 끊기면 도로 촘촘히 본다."""
+        재깍 = getattr(self, "_poll_timer", None)
+        if 재깍 is None:
+            return
+        붙었나 = False
+        try:
+            import server as _서버
+
+            돌것 = getattr(_서버, "RUNNING", None)
+            그물 = getattr(돌것, "그물", None) if 돌것 is not None else None
+            붙었나 = bool(그물 is not None and 그물.붙은수)
+        except Exception:
+            붙었나 = False
+        바라는 = self.느긋훑기MS if 붙었나 else OUTSIDE_POLL_MS
+        if 재깍.interval() != 바라는:
+            재깍.setInterval(바라는)
 
     def open_reader(self) -> None:
         """본문 판을 그래프 위에 띄운다."""

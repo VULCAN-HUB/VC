@@ -199,6 +199,15 @@ class Handler(BaseHTTPRequestHandler):
             self.session = None
             return True
 
+        # ★★ **그물 열쇠는 신호 문 하나만 연다.** 기기끼리 「바뀌었다」를 주고받으려면
+        #   같은 열쇠가 있어야 하는데, 그 열쇠로 창고까지 열어 주면 열쇠 하나가 새는
+        #   순간 글이 통째로 샌다. **들을 권한과 읽을 권한은 다르다**(2026-09-24).
+        그물열쇠 = str((self.server.cfg.get("그물") or {}).get("열쇠") or "")
+        if (token and 그물열쇠 and (path or urlparse(self.path).path) == "/eb/v1/events"
+                and self._같은열쇠(token, 그물열쇠)):
+            self.session = None
+            return True
+
         # 브라우저는 헤더를 못 붙이는 자리(내려받기 링크)가 있어 ?t= 도 받는다.
         token = token or (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
         self.session = self.server.gate.check(token, path or urlparse(self.path).path,
@@ -1792,6 +1801,11 @@ class EBServer(ThreadingHTTPServer):
         self.notes = note_store
         self.skills = SkillStore(note_store)
         self.hub = Hub()
+        # ★★ **바뀌면 바로 쏜다.** 창고 한 군데(`notes.알림걸이`)에 걸어 두면
+        #   창이 쓰든 문이 쓰든 AI 가 쓰든 다 걸린다 — 부르는 자리마다 넣으면
+        #   반드시 한 군데를 빠뜨린다(오너 2026-09-24: 「감시하지 말고 신호 전송」).
+        self.notes.알림걸이 = self.hub.publish
+        self.그물 = None
         self.backend = backends.build(cfg["backend"])
         # 자체 엔진이면 가진 모델을 설정보다 우선한다 — 모델 이름을 손으로 적게 하면
         # 파일명을 그대로 옮겨야 해서 오타 한 번에 "모델이 없다"가 뜬다.
@@ -2146,6 +2160,38 @@ class EBServer(ThreadingHTTPServer):
         if 보.보냄:
             말.append(f"보냄 {보.보냄}" + (f"(둘 다 남김 {보.붙임})" if 보.붙임 else ""))
         return " · ".join(말) if 말 else "메인과 같아 — 주고받을 게 없다."
+
+    def start_mesh(self) -> None:
+        """이웃 VC 를 스스로 찾아 **서로의 신호를 듣는다**(오너 2026-09-24).
+
+        주소를 사람이 안 적는다 — 테일스케일에게 물어본다. 「VC 깔고 테일스케일과
+        VC 설정만」이 오너가 정한 선이다.
+
+        ★ 열쇠는 이 기계 것을 쓴다. 같은 열쇠를 쓰는 기계끼리만 서로 듣는다 —
+          테일넷 안이라도 **아무나 붙게 두지 않는다.**
+        ★★ 받은 신호로 **글 몸을 받지 않는다.** 제 창고를 다시 볼 뿐이다 —
+           창고가 하나(NAS)면 그것으로 충분하고, 둘이 서로 덮을 일도 없다.
+        """
+        import mesh
+
+        if self.그물 is not None:
+            return
+        # ★ 그물 열쇠가 있어야 이웃과 붙는다. 없으면 이 기계는 혼자 쓴다 —
+        #   **조용히 아무 데나 붙지 않는다.**
+        열쇠 = str((self.cfg.get("그물") or {}).get("열쇠") or "")
+        if not 열쇠:
+            return
+
+        def 받으면(것: dict) -> None:
+            if not isinstance(것, dict) or 것.get("kind") != "note":
+                return                 # 제안 신호 따위는 그물이 안 다룬다
+            try:
+                self.notes.reindex()
+            except Exception as e:
+                _알림(f"[그물] 다시 보다 탈: {type(e).__name__}: {e}")
+
+        self.그물 = mesh.그물(열쇠, 받으면)
+        self.그물.돌기()
 
     def start_mirror(self, every_sec: int = 60) -> None:
         """손님이면 주기적으로 메인과 주고받는다. 메인이면 아무 일도 안 한다."""
@@ -3496,6 +3542,40 @@ def _self_check() -> None:
     # ★★ **묻기(Query)의 배선을 잰다.** 문을 냈는데 `POST_PATHS` 에 안 적으면
     #   404 로 떨어진다 — 오늘 「배선을 안 쟀다」로 헛통과한 적이 있어 여기서 막는다.
     assert "/eb/v1/wiki/ask" in Handler.POST_PATHS, "묻기 문이 POST 목록에 없다"
+    # ★★ **그물 열쇠는 신호 문 하나만 연다.** 그 열쇠로 창고까지 열어 주면 열쇠
+    #   하나가 새는 순간 글이 통째로 샌다 — 들을 권한과 읽을 권한은 다르다.
+    server.cfg["그물"] = {"열쇠": "mesh-only-key"}
+    try:
+        # ★ 신호 문은 **끊기지 않는 흐름**이라 끝까지 기다리면 검사가 멈춘다.
+        #   막히면 401 이 곧바로 오고, 열리면 흐름이 붙잡는다 — 그 차이로 잰다.
+        import urllib.error as _탈9그
+        import urllib.request as _요청9그
+
+        def _신호문(열쇠: str) -> str:
+            req = _요청9그.Request(base + "/eb/v1/events",
+                                headers={"Authorization": f"Bearer {열쇠}"})
+            try:
+                with _요청9그.urlopen(req, timeout=1.5) as r:
+                    r.read(1)
+                return "열림"
+            except _탈9그.HTTPError as e:
+                return str(e.code)
+            except (TimeoutError, OSError):
+                return "열림"       # 머리말까지 받고 흐름이 붙잡았다
+
+        assert _신호문("mesh-only-key") == "열림", "그물 열쇠로 신호 문이 안 열린다"
+        for _막힐길 in ("/eb/v1/memory/search?q=x", "/eb/v1/memory/note?title=x",
+                     "/eb/v1/status", "/eb/v1/graph"):
+            _코드 = call("GET", _막힐길, token="mesh-only-key")[0]
+            assert _코드 == 401, f"그물 열쇠로 {_막힐길} 까지 열렸다 ({_코드})"
+        assert call("POST", "/eb/v1/memory", {"title": "ㄱ", "text": "ㄴ"},
+                    token="mesh-only-key")[0] == 401, "그물 열쇠로 글이 써진다"
+        # ★ 열쇠가 비면 아무것도 안 연다 — 빈 열쇠로 붙는 일이 없게
+        server.cfg["그물"] = {"열쇠": ""}
+        assert _신호문("") == "401", _신호문("")
+    finally:
+        server.cfg.pop("그물", None)
+
     # ★★ **대화 문은 묻기와 따로 있다** — 한 길로 묶으면 「안녕」에도 창고를 뒤진다
     assert "/eb/v1/wiki/chat" in Handler.POST_PATHS, "대화 문이 POST 목록에 없다"
     assert hasattr(Handler, "_wiki_chat"), "대화 문 손잡이가 없다"
@@ -3646,6 +3726,9 @@ def _self_check() -> None:
             ("server.start_consolidate()", "--no-ui 로 띄우면 메모가 정리되지 않는다"),
             # 사본 실(결정 30) — 안 띄우면 손님으로 골라 놔도 **아무것도 안 받는다**
             ("def start_mirror(", "사본 실이 서버에 없다"),
+            ("def start_mesh(", "그물 실이 서버에 없다"),
+            ("eb.start_mesh()", "창 있는 판이 그물을 안 띄운다"),
+            ("self.notes.알림걸이 = self.hub.publish", "바뀐 것을 아무 데도 안 쏜다"),
             ("eb.start_mirror()", "창 있는 판이 사본 실을 안 띄운다"),
             ("server.start_mirror()", "--no-ui 로 띄우면 사본이 안 자란다"),
             # ★★ **자라는 것과 쓰이는 것은 다른 말이다.** 처음엔 이 실의 제 연결에만

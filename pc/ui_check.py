@@ -1587,6 +1587,32 @@ def run() -> None:
             assert "8월 정산" in win.detail_view.textCursor().block().text(),                 f"읽기 화면이 소제목으로 안 간다: {win.detail_view.textCursor().block().text()!r}"
         notes.delete("보고서")
 
+        # ★★ **그물이 붙으면 훑기를 늦추고, 끊기면 도로 촘촘히 본다.**
+        #   신호가 오는데도 3초마다 창고를 통째로 훑으면 NAS 에서 그 값이 곧 병이다.
+        #   ★ 아주 끄지는 않는다 — 그물이 없으면 밖에서 고친 것을 영영 모른다.
+        import server as _서버그물
+
+        _옛돌것 = getattr(_서버그물, "RUNNING", None)
+
+        class _붙은그물:
+            붙은수 = 2
+
+        class _돌것흉내:
+            그물 = _붙은그물()
+
+        try:
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == ui.OUTSIDE_POLL_MS, win._poll_timer.interval()
+            _서버그물.RUNNING = _돌것흉내()
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == win.느긋훑기MS, win._poll_timer.interval()
+            _붙은그물.붙은수 = 0
+            win._훑기늦추기()
+            assert win._poll_timer.interval() == ui.OUTSIDE_POLL_MS, "그물이 끊겼는데 계속 뜸하다"
+        finally:
+            _서버그물.RUNNING = _옛돌것
+            win._poll_timer.setInterval(ui.OUTSIDE_POLL_MS)
+
         # ★★ **손님에서 지우면 메인엔 남는다** — 지움은 메인→손님 한 방향뿐이다.
         #   실기로 쟀다(2026-09-24): 손님이 지운 글이 메인에 남아 있다가, 메인에서
         #   그 글이 바뀌자 **다시 내려왔다.** 아무도 말해 주지 않으면

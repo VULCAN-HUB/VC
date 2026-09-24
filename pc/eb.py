@@ -79,6 +79,9 @@ def start_server(cfg: dict) -> srv.EBServer:
     eb.start_embedding()   # 창이 없어도 뜻 벡터가 자라야 한다 (--no-ui)
     eb.start_consolidate()  # 흩어진 메모 → 제품 정리 글 (2분 모아서)
     eb.start_mirror()       # 손님이면 메인과 주고받는다(결정 30). 메인이면 아무 일도 안 한다
+    # ★★ **이웃이 바꾸면 바로 안다** — 훑어서 알아내지 않는다(오너 2026-09-24).
+    #   주소를 사람이 안 적는다. 테일스케일에게 물어 스스로 찾는다.
+    eb.start_mesh()
     threading.Thread(target=eb.serve_forever, daemon=True).start()
     return eb
 

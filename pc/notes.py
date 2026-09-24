@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 # [[대상]] · [[대상#소제목]] · [[대상|보이는 글자]] 를 한 번에 읽는다.
 # ★ 표 안에서는 `|` 가 칸을 가르므로 옵시디언은 `[[제목\|보일 말]]` 로 적는다 — `\|` 도 받는다.
@@ -2113,6 +2114,25 @@ class Notes:
             자리 = folder / f"{이름}~{hashlib.sha256(title.encode()).hexdigest()[:6]}.md"
         return 자리
 
+    # ★★ **바뀌면 알린다.** 훑어서 알아내지 말고 **바꾼 쪽이 말하게** 한다
+    #   (오너 2026-09-24: 「감시하지 말고 버튼 눌렀을 때 신호 전송」).
+    #   여기 하나에 걸어 두면 창이 쓰든 문이 쓰든 AI 가 쓰든 **다 걸린다** —
+    #   부르는 자리마다 알림을 넣으면 반드시 한 군데를 빠뜨린다.
+    알림걸이: Callable[[dict], None] | None = None
+
+    def _알린다(self, 무엇: str, 제목: str, 새제목: str = "") -> None:
+        """글이 바뀌었다고 밖에 말한다. **알리다 터져도 쓰기는 이미 끝났다.**"""
+        걸이 = self.알림걸이
+        if 걸이 is None:
+            return
+        것 = {"kind": "note", "what": 무엇, "title": 제목}
+        if 새제목:
+            것["new_title"] = 새제목
+        try:
+            걸이(것)
+        except Exception:
+            pass          # 알림이 실패해도 창고는 멀쩡하다
+
     def write(self, note: Note, at: str | Path = "") -> Path:
         """항목을 쓴다. **이미 있으면 신원(식별자·만든 날짜)을 물려받는다.**
 
@@ -2170,6 +2190,7 @@ class Notes:
         self.conn.execute("UPDATE notes SET wrote = ? WHERE path = ?",
                           (_지문, str(path)))
         self.conn.commit()
+        self._알린다("write", note.title)
         return path
 
     def _남의손인가(self, path: Path, 지금글: str) -> bool:
@@ -2286,6 +2307,7 @@ class Notes:
             for table, col in (("links", "src"), ("tags", "title"), ("aliases", "title")):
                 self.conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (path.stem,))
             self.conn.commit()
+        self._알린다("delete", title)
         return True
 
     # --- 인덱스 ---------------------------------------------------------
@@ -2999,6 +3021,7 @@ class Notes:
                         continue
         self.reindex()
         쪽지.unlink(missing_ok=True)      # 끝났으니 쪽지를 지운다
+        self._알린다("rename", old, new)
         return True
 
     def 이름바꾸다만것(self) -> tuple[str, str] | None:
@@ -5469,6 +5492,28 @@ def _self_check() -> None:
         성한 = Notes(뿌리, 색인, index_now=False)
         assert not 성한._색인이비었나(), "성한 색인을 비었다고 한다"
         성한.conn.close()
+
+    # ★★ **바뀌면 알린다** — 훑어서 알아내지 말고 바꾼 쪽이 말하게 한다.
+    #   걸이를 한 군데(`write`/`_delete`/`_rename`)에만 두었으니, 창이 쓰든 문이
+    #   쓰든 AI 가 쓰든 다 걸려야 한다.
+    with tempfile.TemporaryDirectory() as _알림tmp:
+        _들은것: list[dict] = []
+        _알림n = Notes(Path(_알림tmp) / "창고", ":memory:")
+        _알림n.알림걸이 = _들은것.append
+        _알림n.write(Note(title="알림 글", kind="메모", body="ㄱ"))
+        assert _들은것[-1] == {"kind": "note", "what": "write", "title": "알림 글"}, _들은것
+        _알림n.rename("알림 글", "이름 바꾼 글")
+        assert _들은것[-1]["what"] == "rename" and _들은것[-1]["new_title"] == "이름 바꾼 글", _들은것
+        _알림n.delete("이름 바꾼 글")
+        assert _들은것[-1] == {"kind": "note", "what": "delete", "title": "이름 바꾼 글"}, _들은것
+        # ★ **알리다 터져도 창고는 멀쩡해야 한다** — 신호가 쓰기를 망치면 안 된다
+        def _터지는걸이(것):
+            raise RuntimeError("신호 못 보냈다")
+
+        _알림n.알림걸이 = _터지는걸이
+        _알림n.write(Note(title="그래도 써진다", kind="메모", body="ㄴ"))
+        assert _알림n.read("그래도 써진다") is not None, "알림이 터지자 쓰기까지 망했다"
+        _알림n.conn.close()
 
     # ★★ **창고 하나를 여러 기계가 같이 쓴다(NAS 꼴).** 한쪽에서 지운 글이 다른
     #   기계 색인에 남아 있으면 안 된다 — 「맥에서 지웠는데 윈도우에서 계속 보인다」가
