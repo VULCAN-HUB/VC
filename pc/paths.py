@@ -156,6 +156,27 @@ def pin_qt_plugins() -> bool:
     return _QT_PINNED
 
 
+def 화면없이() -> None:
+    """화면 없이 Qt 를 띄울 채비. **자체점검은 모두 이 한 줄로 시작한다.**
+
+    ★★ **윈도우의 offscreen 판은 시스템 글꼴을 안 본다.** 맥·리눅스와 달리 글꼴
+    데이터베이스가 통째로 비고(`QFontDatabase: Cannot find font directory` 가
+    수백 줄 찍힌다), 그 상태로 서식 있는 글을 재면 빈 글꼴을 만져 **접근 위반으로
+    프로세스가 통째로 죽는다.** `ui.py` 의 `단축키보기` → `box.open()` 에서 그랬고,
+    파이썬 자국을 안 남겨서 `-X faulthandler` 로 겨우 잡았다(2026-09-24).
+    글자 치수로 자리를 잡는 검사(graph3d 이름표 · panels 칸 높이)도 같이 흔들린다.
+
+    ★ **검사판만의 일이다** — 진짜로 켤 때는 windows 판이라 시스템 글꼴을 쓴다.
+
+    ★ 여섯 군데가 각자 `QT_QPA_PLATFORM` 을 놓고 있었다. 한 곳에 둔다 —
+      찾는 쪽과 고치는 쪽이 갈리면 한 군데는 반드시 빠진다.
+    """
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if os.name == "nt":
+        os.environ.setdefault(
+            "QT_QPA_FONTDIR", str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"))
+
+
 def frozen() -> bool:
     """설치본으로 도는 중인가."""
     return getattr(sys, "frozen", False)
@@ -1193,6 +1214,20 @@ def _self_check() -> None:
                 if v is not None:
                     os.environ[k] = v
     assert _적어둔자리() != Path(_나스자리), "치웠는데 아직 그 자리를 가리킨다"
+
+    # ★★ **화면 없이 띄우는 자리는 여섯이다.** 저마다 `QT_QPA_PLATFORM` 을 놓고
+    #   있었고, 윈도우 글꼴 자리를 알려 줘야 한다는 것을 알았을 때 여섯 군데를
+    #   따라다녀야 했다. 한 곳(`화면없이`)만 부르게 하고, 새는지 여기서 본다 —
+    #   찾는 쪽과 고치는 쪽이 갈리면 한 군데는 반드시 빠진다.
+    _여기 = Path(__file__).resolve().parent
+    for _판 in sorted(_여기.glob("*.py")):
+        if _판.name == "paths.py":
+            continue
+        _글 = _판.read_text(encoding="utf-8")
+        assert 'environ.setdefault("QT_QPA_PLATFORM"' not in _글, \
+            f"{_판.name} 이 화면 판을 혼자 놓는다 — `paths.화면없이()` 를 부른다"
+    assert 'QT_QPA_FONTDIR' in Path(__file__).read_text(encoding="utf-8"), \
+        "윈도우 offscreen 은 글꼴이 하나도 없다 — 글꼴 자리를 알려 줘야 죽지 않는다"
 
     print("paths self-check 통과")
 

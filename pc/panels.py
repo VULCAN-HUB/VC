@@ -1968,7 +1968,7 @@ if __name__ == "__main__":
     import os
     import sys
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     from PyQt5.QtWidgets import QApplication
 
     app = QApplication(sys.argv)

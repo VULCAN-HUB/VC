@@ -2259,7 +2259,8 @@ if __name__ == "__main__":
     import os
     import sys
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import paths as _자리
+    _자리.화면없이()
     from PyQt5.QtWidgets import QApplication
 
     # QApplication을 변수에 안 담으면 가비지 컬렉션돼 종료할 때 조용히 죽는다.

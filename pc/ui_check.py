@@ -42,7 +42,7 @@ def run() -> None:
     import os
     import tempfile
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     # ★ **앱이 창보다 먼저 죽으면 프로세스가 통째로 끝난다.**
     # `app` 을 이 함수의 지역 변수로만 두면, 함수가 끝날 때 앱이 먼저 죽고 남은
     # 창들이 그 뒤에 죽는다 — Qt 가 이미 없는 것을 만져 접근 위반이 난다.

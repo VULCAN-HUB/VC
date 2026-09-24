@@ -1066,7 +1066,7 @@ def _self_check() -> None:
     assert "그냥 메모 줄" in to_body(답, 남), "손으로 적은 줄이 사라진다"
     assert "## 건강" not in 몸, "빈 칸까지 적는다"
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     from PyQt5.QtWidgets import QApplication, QWidget
 
     paths.pin_qt_plugins()      # 한글 경로면 `offscreen` 조차 못 찾는다
