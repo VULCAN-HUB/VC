@@ -175,6 +175,58 @@ def 화면없이() -> None:
     if os.name == "nt":
         os.environ.setdefault(
             "QT_QPA_FONTDIR", str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"))
+    if os.name == "nt" or os.environ.get("VC_NO_MSGBOX") == "1":
+        _상자안띄우기()
+
+
+def _상자안띄우기() -> None:
+    """윈도우 + offscreen 에서 `QMessageBox` 를 **화면에 안 붙인다**. 검사판 전용.
+
+    ★★ **윈도우에서 offscreen 으로 `QMessageBox` 를 띄우면 프로세스가 통째로 죽는다**
+    (접근 위반). `QDialog` 는 `show` 도 `open` 도 멀쩡하고 `QMessageBox` 만 그렇다 —
+    상자는 뜰 때 **윈도우에서만 도는 코드**를 지나는데(시스템 메뉴·소리·접근성)
+    거기가 진짜 창을 요구하고, offscreen 에는 진짜 창이 없다.
+
+    2026-09-24 에 하루를 들여 좁혔다. 아닌 것부터 적어 둔다 — 다시 파지 않게:
+
+    | 재 본 것 | 결과 |
+    |---|---|
+    | 글꼴이 없어서 | 아니다(그건 맞아서 `QT_QPA_FONTDIR` 로 따로 고쳤다) |
+    | onnxruntime·Qt 부르는 차례 | 아니다 — `pin_runtime()` 이 듣는다 |
+    | 마우스 자리·화면 찾기 | 아니다 — 셋 다 산다 |
+    | Qt 판이 낮아서 | **아니다** — 윈도우용 Qt 는 5.15.2 가 끝이라 올릴 데가 없다 |
+    | 표·글꼴 꾸밈·부모 창·단추 | 아니다 — 민글·부모없음도 죽는다 |
+    | `WA_DontShowOnScreen` 으로 안 붙이기 | 아니다 — 그래도 죽는다 |
+
+    ★ **진짜 앱은 멀쩡하다.** 켤 때는 `windows` 판이라 진짜 창이 있고 상자는 잘 뜬다.
+      이것은 화면 없이 돌릴 때만 나는 Qt 쪽 탈이다.
+
+    ★ **재는 것은 안 줄인다.** 상자를 만들고 글을 짜고 단추를 붙이는 일은 그대로 하고,
+      마지막에 화면에 붙이는 것만 건너뛴다. `isVisible()` 은 Qt 안에서 표식 하나로
+      답하므로 그 표식을 대신 세워 준다. 막느냐(`isModal()`)는 띄우기와 무관하고,
+      `open()` 이 하던 나머지(창 막기·결과 0)도 그대로 해 둔다.
+
+    맥에서도 이 길을 재 보려면 `VC_NO_MSGBOX=1` 로 켠다
+    (이름을 영문으로 둔 까닭: zsh 는 한글 변수 이름을 못 받는다 — 세 번 걸렸다).
+    """
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QMessageBox
+
+    if getattr(QMessageBox, "_VC안띄움", False):
+        return          # 여러 검사가 한 프로세스에서 돌 수 있다
+
+    def _보이기(self, *_, **__):
+        self.setAttribute(Qt.WA_WState_Visible, True)
+
+    def _열기(self, *_, **__):
+        # `QDialog.open()` 이 하는 것에서 **화면에 붙이는 것만** 뺐다
+        self.setWindowModality(Qt.WindowModal)
+        self.setResult(0)
+        self.setAttribute(Qt.WA_WState_Visible, True)
+
+    QMessageBox.show = _보이기
+    QMessageBox.open = _열기
+    QMessageBox._VC안띄움 = True
 
 
 def frozen() -> bool:
