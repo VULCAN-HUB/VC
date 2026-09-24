@@ -4271,6 +4271,7 @@ class MainWindow(QWidget):
 
 
 def main() -> None:
+    theme.고해상도켜기()     # 앱보다 먼저여야 먹는다
     app = QApplication(sys.argv)
     notes = Notes("data/notes", "notes_index.db")
     win = MainWindow(notes, Store("eb.db"))

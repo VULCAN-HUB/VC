@@ -405,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
             from PyQt5.QtWidgets import QApplication, QMessageBox
 
             paths.pin_qt_plugins()      # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
+            import theme as _꼴
+            _꼴.고해상도켜기()           # 앱보다 먼저여야 먹는다
             app = QApplication.instance() or QApplication(sys.argv)
             QMessageBox.information(
                 None, "VC", "VC가 이미 떠 있어. 작업표시줄을 봐.  "
@@ -417,8 +419,10 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt5.QtWidgets import QApplication
 
     paths.pin_qt_plugins()              # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
+    import theme
     import ui
 
+    theme.고해상도켜기()                 # 앱보다 먼저여야 먹는다
     app = QApplication(sys.argv)
     # 창부터 띄우고 훑기는 뒤에서 돈다 — 2만 개면 훑는 데 6초, 10만 개면 30초다.
     win = ui.MainWindow(ui.Notes(paths.notes_dir(), str(paths.index_path()), index_now=False),
