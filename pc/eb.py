@@ -1235,7 +1235,12 @@ def _모두검사() -> int:
         t0 = time.perf_counter()
         # ★ 자식은 UTF-8 로 찍고 UTF-8 로 읽는다. 안 그러면 윈도우(cp949)에서
         #   실패 줄이 통째로 깨져 무엇이 터졌는지 못 읽는다.
-        난것 = subprocess.run([sys.executable, str(자리 / f"{이름}.py"), "--check"],
+        # ★★ **`-X faulthandler` 를 붙인다.** 접근 위반으로 죽으면 파이썬은 자국을
+        #   한 줄도 안 남기고 프로세스가 사라진다 — 그걸 좁히느라 하루를 썼다
+        #   (2026-09-24 · 윈도우에서만 나던 탈 셋). 이걸 붙이면 죽는 순간의
+        #   **파일과 줄 번호**가 찍혀, 다음에는 처음부터 어디인지 보인다.
+        난것 = subprocess.run([sys.executable, "-X", "faulthandler",
+                             str(자리 / f"{이름}.py"), "--check"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace",
                              cwd=str(자리), timeout=600,
                              env={**os.environ, "PYTHONIOENCODING": "utf-8"})
@@ -1246,8 +1251,12 @@ def _모두검사() -> int:
             # ★ **끝난 코드를 같이 적는다.** 「통과」라고 찍고도 0이 아닌 채 끝나는 일이
             #   있었다(창을 띄우는 `ui_check` 가 정리 중에 그랬다) — 마지막 줄만 보면
             #   무엇이 잘못됐는지 알 길이 없다.
-            터진것.append((이름, f"[끝난 코드 {난것.returncode}] "
-                          + (끝[-1][:110] if 끝 else "(말이 없다)")))
+            # ★ **뭉개서 죽은 것은 마지막 한 줄로 안 된다.** 접근 위반은
+            #   `faulthandler` 가 여러 줄로 자국을 찍으므로 그 자리를 같이 보여 준다.
+            _뭉갬 = 난것.returncode < 0 or 난것.returncode > 0x40000000
+            _보일 = ("\n      ".join(줄[:110] for 줄 in 끝[-5:]) if _뭉갬 and 끝
+                   else 끝[-1][:110] if 끝 else "(말이 없다 — 자국조차 없다)")
+            터진것.append((이름, f"[끝난 코드 {난것.returncode}] " + _보일))
     for 이름, 코드, 초 in 잰것:
         말하기(f"  {'✔' if 코드 == 0 else '✘'} {이름:18s} {초:5.1f}초")
     말하기(f"{len(잰것)}개 중 {len(잰것) - len(터진것)}개 통과 · "

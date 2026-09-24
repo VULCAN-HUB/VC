@@ -78,8 +78,13 @@ MONO = ('"Apple SD Gothic Neo", "Menlo", monospace' if _맥 else
 # 한 자리에서 곱한다. 쓰는 쪽은 `theme.글자(11)` 로 적고, 배율만 바꾸면 다 같이 큰다.
 #   ※ 배율은 화면이 켜질 때 설정에서 읽어 넣는다(`theme.배율바꾸기`).
 _배율 = 1.0
-# ★ 맥 레티나에서 픽셀로 박힌 9~11px 글씨가 너무 작았다(2026-09-18 창 점검). 설정에 값이 없을 때의 시작 배율.
-기본배율 = 1.2 if _맥 else 1.0
+# 설정에 값이 없을 때의 시작 배율. **기계마다 다르다** — 한 숫자로 묶으면 한쪽이 틀어진다.
+#   맥 1.2 : 레티나에서 픽셀로 박힌 9~11px 글씨가 너무 작았다(2026-09-18 창 점검).
+#   윈도우 0.9 : 고해상도 대비를 켜자(`고해상도켜기`) 운영체제 배율이 그대로 곱해져
+#     이번엔 커졌다. 재 보고 90% 가 편하다고 했다(오너 · 2026-09-25 · 4K 윈도우).
+#   ★ 이 값은 **처음 켜는 사람에게만** 쓰인다. 한 번이라도 설정에서 고르면 그 값이
+#     남아 여기를 안 본다 — 그래서 값을 바꿔도 쓰던 사람의 화면은 안 흔들린다.
+기본배율 = 1.2 if _맥 else 0.9
 
 
 def 배율바꾸기(값: float) -> float:
@@ -490,20 +495,27 @@ def _self_check() -> None:
         "from PyQt5.QtWidgets import QApplication;"
         "a=QApplication([]);"
         "print(a.testAttribute(Qt.AA_EnableHighDpiScaling), a.testAttribute(Qt.AA_UseHighDpiPixmaps))")
-    _난것 = _딴것.run([_시스.executable, "-c", _잰줄], capture_output=True, text=True,
+    _난것 = _딴것.run([_시스.executable, "-c", _잰줄], capture_output=True, text=True, encoding="utf-8", errors="replace",
                    cwd=str(Path(__file__).resolve().parent), timeout=120,
                    env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
-    assert "True True" in _난것.stdout, \
-        f"화면 배율이 안 켜진다 — 윈도우 고해상도에서 창이 손바닥만 해진다: {_난것.stdout}{_난것.stderr[-400:]}"
+    # ★ `stdout` 이 `None` 으로 오는 자리가 있었다(윈도우 CI). 무엇이 왔는지 모르면
+    #   고칠 수가 없으니 **둘을 합쳐 보고 끝난 코드까지 적는다** — 잠잠한 실패가 제일 나쁘다.
+    _나온글 = (_난것.stdout or "") + (_난것.stderr or "")
+    assert "True True" in _나온글, (
+        "화면 배율이 안 켜진다 — 윈도우 고해상도에서 창이 손바닥만 해진다 · "
+        f"끝난코드={_난것.returncode} · {_나온글[-500:]!r}")
 
     # ★ 늦게 부르면 **잠잠히 넘어가지 않고 말을 한다** — 안 먹는데 조용하면 못 찾는다
     _늦게 = _딴것.run(
         [_시스.executable, "-c",
          "from PyQt5.QtWidgets import QApplication; a=QApplication([]);"
          "import theme; theme.고해상도켜기()"],
-        capture_output=True, text=True, cwd=str(Path(__file__).resolve().parent), timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(Path(__file__).resolve().parent), timeout=120,
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
-    assert "늦게 불렀다" in _늦게.stderr, f"늦게 불러도 잠잠하다: {_늦게.stderr[-300:]}"
+    _늦은글 = (_늦게.stdout or "") + (_늦게.stderr or "")
+    assert "늦게 불렀다" in _늦은글, (
+        f"늦게 불러도 잠잠하다 · 끝난코드={_늦게.returncode} · {_늦은글[-300:]!r}")
 
     # ★ 진짜로 켜는 자리가 부르고 있나 — 부르는 줄이 앱 만드는 줄보다 **앞**인지까지 본다
     for _문 in ("eb.py", "ui.py"):
