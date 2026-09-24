@@ -110,6 +110,10 @@ class 손:
     #   없으면 한 마디 할 때마다 처음 보는 사이가 되어 「채팅」이 아니다.
     #   실기로 쟀다(2026-09-24): 「내가 좋아하는 숫자는 47」 뒤에 이어 물으니 47 이라 했다.
     이어서: str = ""
+    # ★★ **VC 의 일을 도구로 쥐여 준다.** 이것이 없으면 바깥 AI 는 코드만 고치고
+    #   「창고에 적어 둬」 같은 VC 안의 일은 못 한다 — 오너가 「그냥 답만 한다」고
+    #   짚은 자리다(2026-09-24). `돌리기` 가 한 판마다 채운다.
+    도구자리: Path | None = None
 
     def 세션찾기(self, 나온것: str, 탈난것: str = "") -> str:
         """이번 판의 세션 이름. 다음 판에 `이어서` 로 돌려주면 대화가 이어진다."""
@@ -168,8 +172,15 @@ class 클로드(손):
         # ★ 이어 말할 때는 `--resume` 을 붙인다. 실기 확인(2026-09-24): 앞 판에서 말한
         #   것을 다음 판이 기억했다. 안 붙이면 매번 처음 보는 사이가 된다.
         이음 = ["--resume", self.이어서] if self.이어서 else []
+        # ★★ **MCP 도구는 따로 허락해야 돈다.** 안 열어 주면 「권한 승인이 필요합니다」
+        #   하고 아무 일도 안 한다(실기로 그랬다 · 2026-09-24).
+        # ★ `--strict-mcp-config` 로 **VC 것만** 쓴다 — 오너가 따로 깔아 둔 MCP 가
+        #   섞이면 무엇이 도는지 알 수 없다.
+        도구 = ([] if self.도구자리 is None else
+              ["--mcp-config", str(self.도구자리), "--strict-mcp-config",
+               "--allowed-tools", "mcp__vc"])
         return [self.실행파일, "-p", 지시, "--output-format", "json",
-                "--permission-mode", "plan" if 읽기전용 else "acceptEdits", *이음]
+                "--permission-mode", "plan" if 읽기전용 else "acceptEdits", *이음, *도구]
 
     def 세션찾기(self, 나온것: str, 탈난것: str = "") -> str:
         글 = (나온것 or "").strip()
@@ -356,6 +367,18 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     말집 = tempfile.mkdtemp(prefix="vc-손말-")
     그손.말자리 = Path(말집) / "끝말.txt"
     그손.이어서 = (이어서 or "").strip()
+    # ★★ **보는 손에게는 도구를 안 준다.** 읽기만 하라 해 놓고 창고를 고치면
+    #   짓는 손의 일과 섞여 누구 탓인지 못 가린다 — 판으로 막는 것과 같은 결이다.
+    그손.도구자리 = None
+    if not 읽기전용:
+        try:
+            import vcmcp
+
+            그손.도구자리 = Path(말집) / "vc-도구.json"
+            그손.도구자리.write_text(
+                json.dumps(vcmcp.설정글(), ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            그손.도구자리 = None      # 도구를 못 얹어도 일 자체는 돌아야 한다
 
     명령줄 = list(그손.명령(지시, 읽기전용))
     if 명령줄:
@@ -418,6 +441,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     세션 = 그손.세션찾기(나온말, 탈말) or 그손.이어서
     그손.말자리 = None
     그손.이어서 = ""
+    그손.도구자리 = None
     shutil.rmtree(말집, ignore_errors=True)
 
     return {"손": 그손.이름,
@@ -456,6 +480,15 @@ def _self_check() -> None:
     assert 손고르기("claude").이름 == "claude" and 손고르기("CODEX").이름 == "codex"
     assert 손고르기("없는손") is None
     assert "-p" in 클로드().명령("일해라") and "일해라" in 클로드().명령("일해라")
+    # ★★ **VC 의 일을 도구로 쥐여 준다.** 안 주면 코드만 고치고 창고 일은 못 한다.
+    #   허락까지 같이 열어야 한다 — 안 열면 「권한 승인이 필요합니다」 하고 멈춘다.
+    도구손 = 클로드()
+    도구손.도구자리 = Path("/tmp/vc-도구.json")
+    명령들 = 도구손.명령("일해라")
+    assert "--mcp-config" in 명령들 and "--strict-mcp-config" in 명령들, 명령들
+    assert "mcp__vc" in 명령들, 명령들
+    assert "--mcp-config" not in 클로드().명령("일해라"), "도구 없이도 깃발이 붙는다"
+
     # ★★ **실기로 확정한 깃발**(2026-09-24 · claude 2.1.267). 보는 손은 `plan` 이라
     #   「반드시 고쳐라」고 시켜도 파일을 못 고친다 — 말이 아니라 판이 막는다.
     assert 클로드().명령("보기만", 읽기전용=True)[-1] == "plan", 클로드().명령("보기만", True)
@@ -709,6 +742,27 @@ def _self_check() -> None:
                 import sys as _s
                 글 = "open(%r, 'w').write('몰래')" % str(자리 / "c.py")
                 return [_s.executable, "-c", 글]
+
+        # ★★ **보는 손에게는 도구를 안 준다** — 읽기만 하라 해 놓고 창고를 고치면 안 된다
+        도구잼 = 클로드()
+        돌리기("CliApp", "보기만", 뿌리=뿌리, 읽기전용=True, 손물건=도구잼)
+        assert 도구잼.도구자리 is None, 도구잼.도구자리
+        본것 = {}
+
+        class _도구본손(가짜):
+            def 명령(self, 지시, 읽기전용=False):
+                # ★ **그 자리에서** 본다 — 판이 끝나면 말집째 치워져 나중엔 없다
+                본것["자리"] = self.도구자리
+                본것["있나"] = bool(self.도구자리 and self.도구자리.exists())
+                본것["글"] = (self.도구자리.read_text(encoding="utf-8")
+                           if 본것["있나"] else "")
+                return super().명령(지시, 읽기전용)
+
+        돌리기("CliApp", "고쳐라", 뿌리=뿌리, 손물건=_도구본손())
+        assert 본것.get("있나"), 본것
+        assert '"mcpServers"' in 본것["글"] and '"vc"' in 본것["글"], 본것["글"][:200]
+        # ★ 도구 설정은 **프로젝트 밖**에 둔다 — 안에 두면 바뀐 파일로 세어진다
+        assert str(자리) not in str(본것["자리"]), 본것["자리"]
 
         난것 = 돌리기("CliApp", "보기만 해라", 뿌리=뿌리, 읽기전용=True, 손물건=_말안듣는손())
         assert not 난것["됐나"] and "읽기만 하라 했는데" in 난것["왜"], 난것

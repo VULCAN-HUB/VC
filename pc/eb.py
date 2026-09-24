@@ -204,6 +204,10 @@ def _사람이손댄것(뿌리) -> list[str]:
     "--사본치우기", "--판올리기", "--휴지통", "--시험표", "--화면상태",
     "--예외시험", "--no-ui", "--no-server", "--도움말", "--help", "-h",
     "--모두검사", "--check-all",
+    # ★★ 바깥 AI 가 VC 의 일을 도구로 잡는 다리(MCP). **구운 앱에는 파이썬이 따로
+    #   없어서** 제 실행파일을 이 스위치로 다시 부른다 — 여기 없으면 「모르는 것이다」
+    #   하고 끝나 도구가 통째로 안 뜬다.
+    "--mcp",
 }
 # 뒤에 값이 하나 딸리는 것. 그 값은 스위치가 아니다.
 값받는스위치 = {"--빼고", "--without"}
@@ -291,6 +295,17 @@ def main(argv: list[str] | None = None) -> int:
         print("모르는 것이다: " + " ".join(모름))
         print("아는 것: " + " ".join(sorted(아는스위치 - {"-h"})))
         return 2
+    # ★★ **다리로 불린 것이면 다리만 하고 끝낸다.** 창도 서버도 띄우면 안 된다 —
+    #   `claude` 가 stdio 로 말을 걸고 있는데 다른 것이 같은 출구에 찍으면 프로토콜이
+    #   깨진다. 그리고 창이 또 뜨면 혼자 켜기 잠금에 걸린다.
+    if "--mcp" in argv:
+        import os as _os
+
+        import vcmcp as _다리
+
+        _다리.돌기(주소=_os.environ.get("VC_MCP_주소") or _다리.기본주소)
+        return 0
+
     want_ui = "--no-ui" not in argv
     want_server = "--no-server" not in argv
 

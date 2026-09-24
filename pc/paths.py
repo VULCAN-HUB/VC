@@ -613,6 +613,19 @@ def 창고막혔나(자리: Path | None = None, 초: float = 막힘기다림) ->
             "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 에서 VC 를 켜라.")
 
 
+def 일터() -> Path:
+    """프로젝트를 안 열었을 때 바깥 AI 가 설 자리.
+
+    ★★ 전에는 프로젝트가 없으면 **아무 일도 안 했다** — 「창고에 적어 둬」처럼
+       프로젝트와 상관없는 일까지 막혔다(오너가 짚었다 · 2026-09-24).
+       일할 자리는 있어야 하니 **기계 자리 안에** 빈 방을 하나 둔다.
+    ★ 창고나 `~/projects` 를 그 자리로 쓰면 AI 가 거기에 파일을 흘린다.
+    """
+    자리 = state_dir() / "workbench"
+    자리.mkdir(parents=True, exist_ok=True)
+    return 자리
+
+
 def notes_dir() -> Path:
     return data_dir() / "data" / "notes"
 
@@ -1109,6 +1122,10 @@ def _self_check() -> None:
     finally:
         os.scandir = _옛스캔
         _잰때.set()
+
+    # ★ 일할 자리는 늘 있어야 한다 — 없으면 프로젝트 없이는 아무것도 못 시킨다
+    assert 일터().is_dir() and 일터().name == "workbench", 일터()
+    assert str(notes_dir()) not in str(일터()), "창고 안에 일터를 두면 AI 가 거기 흘린다"
 
     print("paths self-check 통과")
 
