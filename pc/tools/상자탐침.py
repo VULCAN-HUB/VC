@@ -1,10 +1,16 @@
-"""단축키 상자가 윈도우 offscreen 에서 죽는 자리 찾기 (한 번 쓰고 지울 것).
+"""윈도우 offscreen 에서 `QMessageBox.show()` 가 죽는 자리 찾기 (한 번 쓰고 지울 것).
 
-접근 위반은 파이썬 자국을 안 남기고 프로세스를 죽인다. 그래서 **한 계단마다
-먼저 찍고** 실행한다 — 마지막으로 찍힌 번호가 죽인 조각이다.
+계단마다 **먼저 찍고** 실행한다 — 접근 위반은 자국을 안 남기므로
+마지막으로 찍힌 번호가 죽인 조각이다.
 
-1차에서 「민글·부모없음」이 죽었다. 표도 글꼴도 아니고 상자를 **여는 것** 자체다.
-그래서 더 잘게 나눈다: 창을 보이는 것 / `show()` 와 `open()` / 상자와 그냥 대화창.
+여기까지 잰 것:
+  · 그냥 위젯 show / QDialog show / QDialog open  — 다 산다
+  · QMessageBox 만들기 / 단추 붙이기              — 다 산다
+  · **QMessageBox.show()**                        — 윈도우에서 죽는다 (맥은 산다)
+  · 맥 Qt 5.15.14 · 윈도우 Qt 5.15.2 (PyQt 는 둘 다 5.15.11)
+
+`QMessageBox` 가 `QDialog` 와 다르게 하는 일: 뜰 때 제 크기를 맞추려고
+**마우스가 어느 화면에 있는지** 묻는다. offscreen 판에는 마우스가 없다.
 
     python tools/상자탐침.py
 """
@@ -13,59 +19,38 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths
-import theme
 
 paths.화면없이()
 paths.pin_qt_plugins()
 
-from PyQt5.QtCore import QT_VERSION_STR, Qt                              # noqa: E402
-from PyQt5.QtCore import PYQT_VERSION_STR                                # noqa: E402
-from PyQt5.QtWidgets import (QApplication, QDialog, QMessageBox,         # noqa: E402
-                             QPushButton, QWidget)
+from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QLibraryInfo   # noqa: E402
+from PyQt5.QtGui import QCursor, QGuiApplication                          # noqa: E402
+from PyQt5.QtWidgets import QApplication, QMessageBox                     # noqa: E402
 
 print("Qt", QT_VERSION_STR, "· PyQt", PYQT_VERSION_STR, flush=True)
-print("화면판", os.environ.get("QT_QPA_PLATFORM"), "· 글꼴자리", os.environ.get("QT_QPA_FONTDIR"), flush=True)
+print("Qt 어디서", QLibraryInfo.location(QLibraryInfo.LibrariesPath), flush=True)
 
 앱 = QApplication([])
-print("화면들", [(s.name(), s.size().width(), s.size().height()) for s in 앱.screens()], flush=True)
-print("MONO", theme.MONO, flush=True)
+print("으뜸화면", QGuiApplication.primaryScreen(), flush=True)
 
 
 def 재기(번호: str, 하기) -> None:
     print(f"{번호} 들어간다", flush=True)
-    하기()
+    값 = 하기()
     앱.processEvents()
-    print(f"{번호} 살았다", flush=True)
+    print(f"{번호} 살았다", "→", 값, flush=True)
 
 
-def 위젯보이기():
-    w = QWidget()
-    w.show()
-    앱.processEvents()
-    w.close()
+def 마우스자리():
+    return QCursor.pos()
 
 
-def 대화창보이기():
-    d = QDialog()
-    d.show()
-    앱.processEvents()
-    d.close()
+def 마우스화면():
+    return QGuiApplication.screenAt(QCursor.pos())
 
 
-def 대화창열기():
-    d = QDialog()
-    d.open()
-    앱.processEvents()
-    d.close()
-
-
-def 상자만들기():
-    QMessageBox(QMessageBox.NoIcon, "t", "그냥 글", QMessageBox.NoButton)
-
-
-def 상자단추():
-    b = QMessageBox(QMessageBox.NoIcon, "t", "그냥 글", QMessageBox.NoButton)
-    b.addButton("닫는다", QMessageBox.RejectRole)
+def 으뜸자리():
+    return QGuiApplication.primaryScreen().availableGeometry()
 
 
 def 상자보이기():
@@ -74,31 +59,25 @@ def 상자보이기():
     b.show()
     앱.processEvents()
     b.close()
+    return "떴다"
 
 
-def 상자열기():
+def 상자이전에화면고정():
+    """마우스를 먼저 한 번 물어 본 뒤에 띄우면 사는지."""
+    QGuiApplication.screenAt(QCursor.pos())
     b = QMessageBox(QMessageBox.NoIcon, "t", "그냥 글", QMessageBox.NoButton)
     b.addButton("닫는다", QMessageBox.RejectRole)
-    b.open()
+    b.show()
     앱.processEvents()
     b.close()
+    return "떴다"
 
 
-def 상자기본단추():
-    b = QMessageBox(QMessageBox.NoIcon, "t", "그냥 글", QMessageBox.Ok)
-    b.open()
-    앱.processEvents()
-    b.close()
-
-
-재기("1 그냥위젯 show", 위젯보이기)
-재기("2 대화창 show", 대화창보이기)
-재기("3 대화창 open", 대화창열기)
-재기("4 상자 만들기만", 상자만들기)
-재기("5 상자 단추까지", 상자단추)
-재기("6 상자 show", 상자보이기)
-재기("7 상자 open", 상자열기)
-재기("8 상자 기본단추 open", 상자기본단추)
+재기("1 마우스 자리", 마우스자리)
+재기("2 마우스가 있는 화면", 마우스화면)
+재기("3 으뜸화면 크기", 으뜸자리)
+재기("4 상자 show", 상자보이기)
+재기("5 화면 먼저 묻고 상자 show", 상자이전에화면고정)
 
 print("다 살았다", flush=True)
 sys.stdout.flush()
