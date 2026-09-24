@@ -1133,16 +1133,14 @@ def _self_check() -> None:
     assert 창고막혔나(Path(tempfile.gettempdir()), 2.0) == ""
     # ★★ **아직 없는 자리는 막힌 것이 아니다** — 새 기계 첫 실행이 그 꼴이다
     assert 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0) == ""
-    # 권한으로 막힌 것은 말한다
-    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
-    _막은곳.mkdir()
-    (_막은곳 / "안").mkdir()
-    os.chmod(_막은곳, 0o000)
-    try:
-        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
-        assert "못 읽는다" in _말막, _말막
-    finally:
-        os.chmod(_막은곳, 0o755)
+    # 권한으로 막힌 것은 말한다.
+    # ★ 이 시험은 `chmod(0o000)` 으로 폴더를 막는데 **윈도우는 그 권한 비트를
+    #   무시한다** — 안 막히니 할 말도 없어 검사만 헛되이 실패한다(실기가 잡았다).
+    #   거기서는 건너뛴다. 없어서 못 재는 것과 재서 틀린 것은 다른 말이다.
+    if os.name != "nt":
+        _권한막힘시험()
+
+
 
     import threading as _실검
     import time as _때검
@@ -1197,6 +1195,21 @@ def _self_check() -> None:
     assert _적어둔자리() != Path(_나스자리), "치웠는데 아직 그 자리를 가리킨다"
 
     print("paths self-check 통과")
+
+
+def _권한막힘시험() -> None:
+    import tempfile
+    from pathlib import Path
+
+    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
+    _막은곳.mkdir()
+    (_막은곳 / "안").mkdir()
+    os.chmod(_막은곳, 0o000)
+    try:
+        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
+        assert "못 읽는다" in _말막, _말막
+    finally:
+        os.chmod(_막은곳, 0o755)
 
 
 if __name__ == "__main__":
