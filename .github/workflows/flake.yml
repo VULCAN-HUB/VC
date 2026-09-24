@@ -6,10 +6,12 @@ name: 흔들림 재기
 
 on:
   workflow_dispatch:
-    inputs:
-      몇번:
-        description: 몇 번 돌릴까
-        default: '10'
+
+# ★ 몇 번 돌릴지는 여기 박는다. 입력 이름을 한글로 뒀더니 깃허브가
+#   「Unexpected symbol: '몇번'」 으로 판을 아예 안 읽었다 — 표현식에 쓰는 이름은
+#   영문이어야 한다(PyQt·zsh·bash 와 같은 자리다. 오늘만 다섯 번째다).
+env:
+  TIMES: '10'
 
 jobs:
   flake:
@@ -31,7 +33,7 @@ jobs:
       - name: 여러 번 돌려 본다
         shell: pwsh
         run: |
-          $몇 = [int]'${{ inputs.몇번 }}'
+          $몇 = [int]$env:TIMES
           $죽음 = 0
           for ($i = 1; $i -le $몇; $i++) {
             $난것 = & python -X faulthandler ui.py --check 2>&1 | Out-String
