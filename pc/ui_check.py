@@ -1587,6 +1587,30 @@ def run() -> None:
             assert "8월 정산" in win.detail_view.textCursor().block().text(),                 f"읽기 화면이 소제목으로 안 간다: {win.detail_view.textCursor().block().text()!r}"
         notes.delete("보고서")
 
+        # ★★ **모델이 없으면 처음 켠 사람에게 말한다.** 받는 길은 있는데 그 칸이
+        #   접혀 있어 아무도 못 찾았다 — 「준비됐어」라고만 하고 끝났다.
+        import models_config as _모델설정
+
+        _옛풀기 = _모델설정.resolve
+        try:
+            _모델설정.resolve = lambda *ㄱ, **ㄴ: {"using": {"chat": ""}, "available": {}}
+            win.models_fold.set_open(False)
+            assert win.모델없으면알리기() is True, "모델이 없는데 아무 말도 안 한다"
+            assert "모델" in win._say_text and "받기" in win._say_text, win._say_text
+            assert win.models_fold.body.isVisibleTo(win.models_fold), "말만 하고 그 칸을 안 펴 준다"
+            # 모델이 있으면 **아무 말도 안 한다** — 헛말은 그 자체가 병이다
+            _모델설정.resolve = lambda *ㄱ, **ㄴ: {"using": {"chat": "qwen3-8b"}}
+            _옛말 = win._say_text
+            assert win.모델없으면알리기() is False
+            assert win._say_text == _옛말, "모델이 있는데 없다고 한다"
+            # 재다 터져도 조용하다 — 헛경보가 더 나쁘다
+            def _터짐(*ㄱ, **ㄴ):
+                raise RuntimeError("못 잰다")
+            _모델설정.resolve = _터짐
+            assert win.모델없으면알리기() is False
+        finally:
+            _모델설정.resolve = _옛풀기
+
         # ★★ **그물이 붙으면 훑기를 늦추고, 끊기면 도로 촘촘히 본다.**
         #   신호가 오는데도 3초마다 창고를 통째로 훑으면 NAS 에서 그 값이 곧 병이다.
         #   ★ 아주 끄지는 않는다 — 그물이 없으면 밖에서 고친 것을 영영 모른다.

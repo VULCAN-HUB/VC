@@ -431,6 +431,13 @@ def main(argv: list[str] | None = None) -> int:
 
     settings.apply_screen(win, str(paths.load_config().get("화면방식", "창")))
     report.trail("창 떴다")
+    # ★★ **모델이 없으면 처음 켠 사람에게 말해 준다.** 받는 길은 있는데 그 칸이
+    #   접혀 있어 아무도 못 찾는다 — 기록도 모델도 없이 시작하는 것이 목표라면
+    #   「다음에 뭘 눌러야 하는지」를 VC 가 말해야 한다(오너 2026-09-24).
+    #   창이 다 선 뒤에 말한다 — 짓는 중에 말하면 첫 인사에 덮인다.
+    from PyQt5.QtCore import QTimer as _때알림
+
+    _때알림.singleShot(1200, win.모델없으면알리기)
     if 화면상태:
         _화면상태재기(app, win)
     code = app.exec_()

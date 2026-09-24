@@ -3655,6 +3655,34 @@ class MainWindow(QWidget):
         if 재깍.interval() != 바라는:
             재깍.setInterval(바라는)
 
+    def 모델없으면알리기(self) -> bool:
+        """모델이 하나도 없으면 **말하고 그 칸을 펴 준다.** 돌려주는 값은 「없더라」.
+
+        ★★ 처음 쓰는 사람에게 VC 가 「준비됐어」라고 했다 — 모델이 하나도 없는데.
+           받는 길은 있는데(모델 칸 → 받기) **그 칸이 접혀 있어** 아무도 못 찾는다.
+           기록도 모델도 없이 시작하는 것이 목표라면(오너 2026-09-24),
+           **처음 켠 사람이 다음에 뭘 눌러야 하는지**를 VC 가 말해야 한다.
+        ★ 조용히 실패하지 않는다 — 이 프로그램이 내내 지켜 온 결이다.
+        """
+        try:
+            import models_config
+            import paths as _자리
+
+            자리 = str(_자리.models_dir())
+            난것 = models_config.resolve({"backend": {"kind": "local", "model_dir": 자리}},
+                                      자리)
+            쓸것 = (난것.get("using") or {}).get("chat") or ""
+        except Exception:
+            return False          # 못 재면 아무 말도 안 한다 — 헛경보가 더 나쁘다
+        if 쓸것:
+            return False
+        칸 = getattr(self, "models_fold", None)
+        if 칸 is not None:
+            칸.set_open(True)      # 접혀 있으면 아무도 못 찾는다
+        self.report("아직 AI 모델이 없어. 오른쪽 «모델» 칸에서 «받기» 를 누르면 "
+                    "여기서 바로 받아 — 글자·사진·목소리·뜻 검색 다 있어.", [])
+        return True
+
     def open_reader(self) -> None:
         """본문 판을 그래프 위에 띄운다."""
         self._place_reader()
