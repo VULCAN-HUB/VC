@@ -438,6 +438,9 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt5.QtCore import QTimer as _때알림
 
     _때알림.singleShot(1200, win.모델없으면알리기)
+    # ★★ **켤 때 새 판이 있는지 본다.** 딴 실에서 묻고, 있으면 말한다 —
+    #   조용히 갈아 끼우지 않는다(오너 2026-09-24).
+    _때알림.singleShot(3000, win.새판찾기)
     if 화면상태:
         _화면상태재기(app, win)
     code = app.exec_()

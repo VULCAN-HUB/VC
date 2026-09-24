@@ -223,6 +223,8 @@ class MainWindow(QWidget):
     # 맡기기(에이전트 CLI)가 끝났다 — 프로젝트 · 돌린 결과(dict).
     # ★ 신호 이름은 영문이어야 한다(한글이면 PyQt 가 ascii 로 굽다 터진다).
     handoff_done = pyqtSignal(str, object)
+    # 새 판이 있나 물어본 결과 — 딴 실에서 창 실로
+    update_found = pyqtSignal(object)
 
     def __init__(self, notes: Notes, store: Store, link: ServerLink | None = None) -> None:
         """화면을 짓는다. 짓는 일은 셋으로 나눠 뒀다 — 한 함수에 437줄이면
@@ -265,6 +267,7 @@ class MainWindow(QWidget):
         self.query_done.connect(
             lambda 물음, 답, 근거, 대화: self._묻기보이기(물음, 답, 근거, 대화))
         self.handoff_done.connect(lambda 프로젝트, 난것: self._맡김끝(프로젝트, 난것))
+        self.update_found.connect(lambda 난것: self._새판보이기(난것))
         # 돌아가는 동안 몇 초째인지 보여 준다 — 아무 말이 없으면 멈춘 줄 안다
         self._맡김타이머 = QTimer(self)
         self._맡김타이머.setInterval(1000)
@@ -3683,7 +3686,81 @@ class MainWindow(QWidget):
                     "여기서 바로 받아 — 글자·사진·목소리·뜻 검색 다 있어.", [])
         return True
 
+    def 새판찾기(self) -> None:
+        """켤 때 깃허브에 새 판이 있는지 **딴 실에서** 물어본다.
+
+        ★★ 창 실에서 물어보면 인터넷이 느릴 때 창이 그만큼 굳는다. 그리고
+           **못 물어봐도 켜는 것을 막지 않는다** — 업데이트 확인이 프로그램보다
+           중해지면 안 된다.
+        """
+        def 일() -> None:
+            import paths as _자리
+            import update as _새판
+
+            난것 = _새판.물어보기(_자리.VERSION)
+            if 난것.get("있나"):
+                self.update_found.emit(난것)
+
+        report.딴실로("새 판 보기", 일)
+
+    def _새판보이기(self, 난것: dict) -> None:
+        """새 판이 있다고 **말하고 묻는다.** 조용히 갈아 끼우지 않는다."""
+        if 난것.get("탈"):
+            return self.report(f"새 판을 못 받았어 — {난것['탈']}", [])
+        if 난것.get("열었다"):
+            return self.report("받았어. 뜬 창에서 깔면 돼 — 기록은 그대로야.", [])
+        판 = 난것.get("판") or ""
+        if not 난것.get("받을곳"):
+            self.report(f"새 판 {판} 이 나왔어 — 이 기계에 맞는 파일이 아직 없네. "
+                        f"{난것.get('쪽') or ''}", [])
+            return
+        self._새판 = 난것
+        box = QMessageBox(self)
+        box.setWindowTitle("새 판이 있어")
+        box.setText(f"새 판 {판} 이 나왔어. 받아서 깔까?\n\n"
+                    "기록·설정·모델은 그대로 남아 — 프로그램만 갈린다.")
+        받기단추 = box.addButton("받아서 깔기", QMessageBox.AcceptRole)
+        box.addButton("나중에", QMessageBox.RejectRole)
+        box.setModal(False)          # 창을 막지 않는다
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.buttonClicked.connect(
+            lambda 누른것: self.새판받기() if 누른것 is 받기단추 else None)
+        self._새판상자 = box
+        box.show()
+
+    def 새판받기(self) -> None:
+        """받아서 **연다.** 우리가 직접 덮어쓰지 않는다 — 돌던 제 몸을 갈면 위험하다."""
+        난것 = getattr(self, "_새판", None) or {}
+        if not 난것.get("받을곳"):
+            return
+        import paths as _자리
+
+        낼자리 = _자리.state_dir() / "받은판" / (난것.get("이름") or "VC-새판")
+        self.report(f"새 판 {난것.get('판')} 받는 중…", [])
+
+        def 일() -> None:
+            import subprocess as _돌림
+
+            import update as _새판
+
+            잰것 = _새판.받기(난것["받을곳"], 낼자리, 난것.get("셈곳") or "",
+                          알림=lambda 온것, 전체: self.update_found.emit(
+                              {"진행": (온것, 전체)}) if False else None)
+            if not 잰것.get("됐나"):
+                self.update_found.emit({"탈": 잰것.get("왜") or "못 받았다"})
+                return
+            try:
+                _돌림.Popen(_새판.깔기명령(잰것["자리"]))
+                self.update_found.emit({"열었다": 잰것["자리"]})
+            except Exception as e:
+                self.update_found.emit({"탈": f"못 열었다: {type(e).__name__}"})
+
+        report.딴실로("새 판 받기", 일)
+
     def open_reader(self) -> None:
+        """본문 판을 그래프 위에 띄운다."""
+        self._place_reader()
+
         """본문 판을 그래프 위에 띄운다."""
         self._place_reader()
         self.detail_card.show()
