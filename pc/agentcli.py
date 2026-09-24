@@ -90,6 +90,23 @@ def 꼬리(글: str, 최대: int = 꼬리최대) -> str:
     return "…(앞은 줄였다)\n" + 잘린
 
 
+def 윈도우껍데기(명령줄: list[str]) -> list[str]:
+    """윈도우에서 `.cmd`·`.bat` 은 **그냥 못 띄운다** — `cmd /c` 로 감싼다.
+
+    ★★ 윈도우의 claude·codex 는 `claude.cmd` 꼴이다. `CreateProcess` 는 배치 파일을
+       직접 못 돌려서 `WinError 193` 으로 죽는다 — 맥에서는 절대 안 나오고 **윈도우에
+       붙이는 날에야** 나올 탈이다(오너가 셋을 다 붙여 쓴다 · 2026-09-24).
+       ★ 윈도우 기계가 여기 없어 실기로는 못 쟀다. 맥에서는 이 함수가 아무 일도
+         안 하므로(그대로 돌려준다) 이쪽이 나빠질 일은 없다.
+    """
+    if os.name != "nt" or not 명령줄:
+        return 명령줄
+    앞 = (명령줄[0] or "").lower()
+    if 앞.endswith((".cmd", ".bat")):
+        return [os.environ.get("COMSPEC") or "cmd.exe", "/c", *명령줄]
+    return 명령줄
+
+
 def 찾기(실행파일: str) -> str:
     """그 CLI 의 온전한 자리. 없으면 빈 글.
 
@@ -383,6 +400,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
     명령줄 = list(그손.명령(지시, 읽기전용))
     if 명령줄:
         명령줄[0] = 찾기(명령줄[0]) or 명령줄[0]
+        명령줄 = 윈도우껍데기(명령줄)
     판환경 = {**os.environ, "PATH": 길()}
     try:
         # ★★ **stdin 을 막는다.** codex 는 stdin 이 열려 있으면 「Reading additional
@@ -572,6 +590,19 @@ def _self_check() -> None:
     assert "--sandbox" not in 이은코.명령("고쳐라"), "resume 에 없는 깃발을 준다"
     assert 이은코.명령("고쳐라")[-2:] == ["ID9", "고쳐라"]
     assert 'sandbox_mode="workspace-write"' not in 이은코.명령("보기만", 읽기전용=True)
+
+    # ★★ **윈도우의 `.cmd` 는 그냥 못 띄운다** — `cmd /c` 로 감싸야 한다.
+    #   맥에서는 아무 일도 안 한다(그대로 돌려준다). 윈도우 기계가 없어 실기로는 못 쟀다.
+    assert 윈도우껍데기(["/opt/homebrew/bin/claude", "-p"]) == ["/opt/homebrew/bin/claude", "-p"]
+    assert 윈도우껍데기([]) == []
+    옛이름 = os.name
+    try:
+        os.name = "nt"
+        감싼것 = 윈도우껍데기([r"C:\npm\claude.CMD", "-p", "ㄱ"])
+        assert 감싼것[1:] == ["/c", r"C:\npm\claude.CMD", "-p", "ㄱ"], 감싼것
+        assert 윈도우껍데기([r"C:\bin\codex.exe"]) == [r"C:\bin\codex.exe"]
+    finally:
+        os.name = 옛이름
 
     # ★ Codex 는 권한을 **필요한 만큼만** 연다
     assert "--sandbox" in 코덱스().명령("일해라"), 코덱스().명령("일해라")

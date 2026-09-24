@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import errno
 import os
 import re
 import sys
@@ -605,12 +606,25 @@ def 창고막혔나(자리: Path | None = None, 초: float = 막힘기다림) ->
         return ""
     if isinstance(난것.get("탈"), OSError):
         탈 = 난것["탈"]
-        if getattr(탈, "errno", 0) != 1:        # EPERM 이 아니면 권한 얘기가 아니다
+        # ★★ **아직 없는 것은 막힌 것이 아니다.** 새 기계 첫 실행에는 창고 폴더가
+        #   없다 — VC 가 곧 만든다. 그걸 「못 읽는다」고 했더니 **처음 켜는 사람에게
+        #   겁부터 주는 꼴**이었다(실기로 잡았다 · 2026-09-24).
+        if getattr(탈, "errno", 0) == errno.ENOENT:
+            return ""
+        if getattr(탈, "errno", 0) not in (errno.EPERM, errno.EACCES):
             return f"창고를 못 읽는다: {탈}"
     어디 = 자리.parts[3] if len(자리.parts) > 3 else "그 폴더"
-    return (f"맥이 「{어디}」 폴더를 막고 있어 창고({자리})를 못 읽는다. "
-            "화면에 허락을 묻는 창이 떴으면 «허용»을 누르고, 안 떴으면 "
-            "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 에서 VC 를 켜라.")
+    # ★★ **기계마다 할 말이 다르다.** 맥 설정 이름을 윈도우에서 읊으면 엉뚱한 데를
+    #   찾게 된다 — 셋(윈도우·맥·폰)을 다 쓰는 물건이라 여기서 갈라야 한다.
+    if sys.platform == "darwin":
+        길 = ("화면에 허락을 묻는 창이 떴으면 «허용»을 누르고, 안 떴으면 "
+             "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 에서 VC 를 켜라.")
+    elif os.name == "nt":
+        길 = ("그 폴더가 딴 프로그램에 잡혀 있거나(백신·클라우드 동기화) 권한이 없다. "
+             "폴더 속성 → 보안 에서 쓰기를 열거나, 창고 자리를 딴 곳으로 옮겨라.")
+    else:
+        길 = "그 폴더의 권한을 확인해라."
+    return f"「{어디}」 폴더를 못 열어 창고({자리})를 못 읽는다. " + 길
 
 
 def 일터() -> Path:
@@ -1100,7 +1114,18 @@ def _self_check() -> None:
     #   `opendir` 이 허락이 날 때까지 안 돌아온다 — 재는 쪽은 시간을 끊어야 한다
     #   (실기로 잡았다 · 2026-09-24: 구운 앱이 0% 로 매달렸다).
     assert 창고막혔나(Path(tempfile.gettempdir()), 2.0) == ""
-    assert "No such file" in 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0)
+    # ★★ **아직 없는 자리는 막힌 것이 아니다** — 새 기계 첫 실행이 그 꼴이다
+    assert 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0) == ""
+    # 권한으로 막힌 것은 말한다
+    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
+    _막은곳.mkdir()
+    (_막은곳 / "안").mkdir()
+    os.chmod(_막은곳, 0o000)
+    try:
+        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
+        assert "못 읽는다" in _말막, _말막
+    finally:
+        os.chmod(_막은곳, 0o755)
 
     import threading as _실검
     import time as _때검
@@ -1118,7 +1143,12 @@ def _self_check() -> None:
         _말 = 창고막혔나(Path(tempfile.gettempdir()), 0.5)
         _든것 = _때검.monotonic() - _t0
         assert _든것 < 4, f"막힌 자리를 재다 같이 멈췄다({_든것:.1f}초)"
-        assert "허용" in _말 and "시스템 설정" in _말, _말
+        # ★ 기계마다 할 말이 다르다 — 맥 설정 이름을 윈도우에서 읊으면 안 된다
+        assert "못 읽는다" in _말, _말
+        if sys.platform == "darwin":
+            assert "허용" in _말 and "시스템 설정" in _말, _말
+        elif os.name == "nt":
+            assert "시스템 설정" not in _말, _말
     finally:
         os.scandir = _옛스캔
         _잰때.set()

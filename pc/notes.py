@@ -149,6 +149,8 @@ def _앞머리풀기(글: str) -> dict:
 
 
 UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# 윈도우가 장치 이름으로 잡아 파일을 못 만드는 것들. 확장자가 붙어도 걸린다.
+윈도우예약 = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$', re.IGNORECASE)
 
 # 첨부로 보는 확장자. **첨부는 항목이 아니다** — `![[사진.png]]`을 노트 링크로 세면
 # "아직 없는 것"에 사진 이름이 끝없이 쌓이고 그래프에 유령 점이 생긴다.
@@ -1097,6 +1099,14 @@ def safe_title(title: str) -> str:
     (기존 파일 이름이 바뀌면 옵시디언 링크가 끊긴다).
     """
     cleaned = UNSAFE.sub("-", 제목맞춤(title)).strip().strip(".")
+    # ★★ **윈도우는 이 이름들로 파일을 못 만든다**(CON·PRN·AUX·NUL·COM1~9·LPT1~9).
+    #   장치 이름이라 `CON.md` 를 열면 콘솔이 열린다. 맥에서 그런 제목으로 글을 쓰면
+    #   **윈도우 손님이 그 글만 조용히 못 받는다** — 셋을 다 붙여 쓰는 물건이라
+    #   만드는 쪽에서 막는다(2026-09-24 · 지금 창고엔 그런 글이 없어 바뀔 이름도 없다).
+    # ★ 밑줄은 **장치 이름 바로 뒤**에 넣는다. 맨 끝에 붙이면 `NUL.md_` 가 되는데
+    #   확장자까지 규칙에 들어서 여전히 예약 이름이다(검사가 잡았다).
+    if 맞은예약 := 윈도우예약.match(cleaned):
+        cleaned = 맞은예약.group(1) + "_" + (맞은예약.group(2) or "")
     if len(cleaned) > 80:
         지문 = hashlib.sha256(title.encode("utf-8")).hexdigest()[:6]
         return cleaned[:73].rstrip() + "~" + 지문
@@ -5455,6 +5465,17 @@ def _self_check() -> None:
         성한 = Notes(뿌리, 색인, index_now=False)
         assert not 성한._색인이비었나(), "성한 색인을 비었다고 한다"
         성한.conn.close()
+
+    # ★★ **셋(윈도우·맥·폰)이 같은 창고를 본다** — 맥에서만 되는 이름을 만들면
+    #   윈도우 손님이 그 글만 조용히 못 받는다.
+    for 금지 in ('<', '>', ':', '"', '/', '\\', '|', '?', '*'):
+        assert 금지 not in safe_title(f"가{금지}나"), (금지, safe_title(f"가{금지}나"))
+    for 예약 in ("CON", "con", "NUL.md", "COM1", "LPT9", "AUX", "PRN"):
+        난것 = safe_title(예약)
+        assert not 윈도우예약.match(난것), (예약, 난것)
+    # 비슷하지만 예약이 아닌 것은 안 건드린다 — 멀쩡한 이름을 바꾸면 링크가 끊긴다
+    assert safe_title("CONCERT") == "CONCERT"
+    assert safe_title("COM10") == "COM10"
 
     print("notes self-check 통과")
 
