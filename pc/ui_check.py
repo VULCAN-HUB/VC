@@ -285,8 +285,15 @@ def run() -> None:
         import threading as _실묻기
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
+        받은몸 = []
+
         class _가짜문(BaseHTTPRequestHandler):
             def do_POST(self):
+                # ★★ **몸을 반드시 읽고 답한다.** 안 읽고 닫으면 **윈도우가 연결을
+                #   끊어버려**(RST) 부르는 쪽이 `ConnectionAbortedError` 를 받는다.
+                #   맥·리눅스는 안 읽은 것을 조용히 버려 줘서 거기서는 안 났고,
+                #   윈도우에서만 「서버에 못 물었다」로 떨어졌다(2026-09-25).
+                받은몸.append(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 몸 = _json묻기.dumps({"answer": "짧은 답 [[회의록]]",
                                     "sources": ["회의록"], "looked": ["회의록"],
                                     "why": ""}).encode()
@@ -319,6 +326,9 @@ def run() -> None:
             assert 난것묻기["답"].startswith("짧은 답"), 난것묻기
             assert 난것묻기["근거"] == ["회의록"], 난것묻기
             assert 본것 and 본것[0][1].startswith("짧은 답"), 본것
+            # 끝까지 태운다면서 **무엇을 보냈는지는 안 보고 있었다** — 물음이 실려
+            # 갔는지까지 재야 「끝까지」다
+            assert 받은몸 and "아무거나 물어본다?" in 받은몸[0].decode(), 받은몸
         finally:
             win._묻기보이기 = 옛보이기
             win.link.base, win.link.token = 옛base, 옛token
