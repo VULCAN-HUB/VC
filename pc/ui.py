@@ -2144,7 +2144,8 @@ class MainWindow(QWidget):
                 return done(f"'{hit}' 못 지웠어 — 지난 판을 못 남겨서 멈췄어(기록 폴더가 잠겼거나 읽기 전용).", [hit])
             self.clear_detail()
             self.refresh()
-            return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어.")
+            return done(f"'{hit}'{orders.tail(hit, '을/를')} 지웠어."
+                        + self.사본이면한마디())
         if what == "되돌리기":
             past = self.notes.history(hit) if hit else []
             if not past:
@@ -3601,7 +3602,31 @@ class MainWindow(QWidget):
         self.notes.delete(gone)
         self.clear_detail()
         self.refresh()
-        self.report(f"{gone} 지웠어.", [ROOT])
+        self.report(f"{gone} 지웠어." + self.사본이면한마디(), [ROOT])
+
+    def 사본이면한마디(self) -> str:
+        """이 VC 가 손님이면 **지워도 메인엔 남는다**고 말한다.
+
+        ★★ 실기로 쟀다(2026-09-24): 손님에서 지운 글이 메인엔 그대로 남아 있었고,
+           **메인에서 그 글이 바뀌자 손님에 다시 내려왔다.** 지움은 메인→손님 한
+           방향뿐이다. 아무도 말해 주지 않으면 「문제돼서 지웠는데 왜 또 있지」가 된다.
+        ★ 말만 한다 — 지움을 양방향으로 바꾸면 **뒤처진 손님이 메인 글을 날릴 수** 있다.
+          어느 쪽이 나은지는 오너가 정할 일이라 여기서 정하지 않는다.
+        """
+        것 = (self.link.config_dict() or {}).get("사본") if hasattr(self.link, "config_dict") else None
+        if 것 is None:
+            try:
+                import json as _제이
+
+                import paths as _자리
+
+                것 = (_제이.loads(_자리.config_path().read_text(encoding="utf-8"))
+                     .get("사본") or {})
+            except Exception:
+                것 = {}
+        if not isinstance(것, dict) or 것.get("역할") != "손님":
+            return ""
+        return "  (여긴 사본이야 — 메인엔 그대로 남아. 아주 지우려면 메인에서 지워라.)"
 
     def open_reader(self) -> None:
         """본문 판을 그래프 위에 띄운다."""

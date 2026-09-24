@@ -1587,6 +1587,29 @@ def run() -> None:
             assert "8월 정산" in win.detail_view.textCursor().block().text(),                 f"읽기 화면이 소제목으로 안 간다: {win.detail_view.textCursor().block().text()!r}"
         notes.delete("보고서")
 
+        # ★★ **손님에서 지우면 메인엔 남는다** — 지움은 메인→손님 한 방향뿐이다.
+        #   실기로 쟀다(2026-09-24): 손님이 지운 글이 메인에 남아 있다가, 메인에서
+        #   그 글이 바뀌자 **다시 내려왔다.** 아무도 말해 주지 않으면
+        #   「문제돼서 지웠는데 왜 또 있지」가 된다.
+        assert win.사본이면한마디() == "", "메인인데 사본이라고 한다"
+        import json as _제이사본
+        import paths as _자리사본
+
+        _설정자리 = _자리사본.config_path()
+        _옛설정 = _설정자리.read_text(encoding="utf-8") if _설정자리.exists() else None
+        try:
+            _쓸것 = _제이사본.loads(_옛설정) if _옛설정 else {}
+            _쓸것["사본"] = {"역할": "손님", "main_url": "http://x", "main_token": "k"}
+            _설정자리.write_text(_제이사본.dumps(_쓸것, ensure_ascii=False), encoding="utf-8")
+            _말사본 = win.사본이면한마디()
+            assert "사본" in _말사본 and "메인에서 지워라" in _말사본, _말사본
+        finally:
+            if _옛설정 is None:
+                _설정자리.unlink(missing_ok=True)
+            else:
+                _설정자리.write_text(_옛설정, encoding="utf-8")
+        assert win.사본이면한마디() == "", "되돌렸는데 아직 손님이라고 한다"
+
         # 나가는 링크와 들어오는 링크는 따로 보인다.
         # "내가 적은 것"과 "나를 부른 것"은 다른 정보다.
         win.show_note("카페 단골")
