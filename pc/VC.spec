@@ -106,14 +106,28 @@ ort_datas, ort_bins, ort_hidden = collect_all("onnxruntime")
 #   (한 줄로 이어서 친다. PyPI 에는 미리 구운 휠이 없어 `--extra-index-url` 이 있어야
 #    받아진다 — 없으면 「No matching distribution found」 로 끝난다.)
 MAC = sys.platform == "darwin"
-# 맥: CUDA 가 없어 그 사슬 문제가 없다. pip 로 깐 llama-cpp-python(Metal)을 그대로 담는다 — build_mac.sh
-if MAC and not (ENGINE / "llama_cpp").is_dir():
-    ENGINE = Path(__import__("site").getsitepackages()[0])
+# ★★ **`빌드전용/` 이 없으면 깔려 있는 것을 쓴다.** 이 폴더는 오너의 개발 PC 를
+#   지키려고 만든 길이다 — 거기엔 CUDA 판이 깔려 있고, 그걸 건드리면 시험 속도가 바뀐다.
+#   그런데 **깨끗한 기계(CI·새로 받은 사람)에는 CUDA 판이 아예 없고**
+#   `requirements-win.txt` 가 CPU 판을 받아 놓는다. 그런 기계에까지 이 폴더를
+#   요구하면 **아무도 못 굽는다**(CI 윈도우가 여기서 멈췄다 · 2026-09-25).
+#   ★ 잘못 집는 걱정은 그대로 막힌다 — 아래에서 CUDA 조각이 있으면 멈춘다.
+#     「있으면 쓴다」가 아니라 **「집은 것이 CPU 판인지 본다」**가 진짜 막이다.
+if not (ENGINE / "llama_cpp").is_dir():
+    import site as _사이트
+
+    # ★ 윈도우 venv 는 `getsitepackages()[0]` 이 venv 뿌리다(맥과 다르다) —
+    #   첫 칸만 보면 못 찾는다. 다 훑는다.
+    for _곳 in [*_사이트.getsitepackages(), _사이트.getusersitepackages()]:
+        if (Path(_곳) / "llama_cpp").is_dir():
+            ENGINE = Path(_곳)
+            break
 if not (ENGINE / "llama_cpp").is_dir():
     raise SystemExit(chr(10).join([
-        f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'}",
+        f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'} — 깔려 있지도 않다",
         "  위 주석의 pip 한 줄로 CPU 판을 받아라. 그거 없이 구우면 흡수의 비싼",
         "  문지기가 설치본에서 한 번도 안 돈다(그런데 셈은 「다 통과」로 보인다)."]))
+print(f"[VC.spec] 대화 엔진 자리: {ENGINE}")
 sys.path.insert(0, str(ENGINE))
 llama_datas, llama_bins, llama_hidden = collect_all("llama_cpp")
 # 링크용 `.lib` 는 도는 데 필요 없다. CUDA 판을 잘못 집었는지도 여기서 걸린다.
