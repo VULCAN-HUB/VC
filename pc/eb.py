@@ -1127,6 +1127,12 @@ def _self_check() -> None:
     _스펙 = _자리스펙 / "VC.spec"
     if _스펙.exists():
         _스펙글 = _스펙.read_text(encoding="utf-8", errors="replace")
+        # ★★ **명세도 한글을 찍는다.** 이 파일은 PyInstaller 가 제 프로세스에서 돌려
+        #   VC 의 막이를 안 지나므로, 영어권 윈도우(cp1252)에서 **찍는 줄 하나 때문에**
+        #   굽기가 통째로 멈췄다(CI · 2026-09-25). 스스로 그 막이를 부르게 해 뒀고
+        #   여기서 지킨다 — 찍기는 굽기의 곁다리지 굽기 자체가 아니다.
+        assert "import paths" in _스펙글, \
+            "VC.spec 이 paths 를 안 부른다 — 한글을 찍다 영어권 윈도우에서 굽기가 멈춘다"
         _안적힌 = []
         for _파일 in sorted(_자리스펙.glob("*.py")):
             _이름 = _파일.stem

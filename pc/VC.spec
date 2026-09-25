@@ -22,6 +22,13 @@ from PyInstaller.utils.hooks import collect_all
 # 찾다 죽었다. 손으로 돌릴 때는 cwd 가 실제 경로로 풀려 우연히 맞아서 안 보였다.
 # `SPECPATH` 는 PyInstaller 가 넣어 준다.
 HERE = Path(SPECPATH).resolve()
+
+# ★★ **여기서 찍는 한글도 UTF-8 이어야 한다.** 이 파일은 PyInstaller 가 제 프로세스에서
+#   돌리므로 VC 의 막이(`paths._한글도찍히게`)를 안 지난다 — 영어권 윈도우(cp1252)에서
+#   굽다가 **찍는 줄 하나 때문에** 통째로 멈췄다(CI · 2026-09-25).
+#   찍기는 굽기의 곁다리지 굽기 자체가 아니다. 한 자리에 둔 그 막이를 여기서도 부른다.
+sys.path.insert(0, str(HERE))
+import paths as _자리  # noqa: E402  (막이가 불러오는 순간 돈다)
 MODELS = HERE.parent / "models"
 # 상자에 담을 대화 엔진은 **CPU 판**이다. 아래 「엔진 담기」 설명 참고.
 ENGINE = HERE.parent / "빌드전용"
