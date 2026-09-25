@@ -1741,7 +1741,7 @@ class MainWindow(QWidget):
         #   그대로 두고 **말만 사실대로** — 문턱으로 자르면 자료가 바뀔 때 무너진다.
         뜻만 = getattr(self.notes, "낱말로찾은수", None) == 0
         if narrowing:
-            self.show_note(hits[0], focus=False)
+            self.show_note(hits[0], focus=False, 말할까=False)   # 아래에서 한 번만 말한다
             said = f"{hits[0]} 얘기야."
         elif 뜻만:
             # 조사는 받침을 본다 — 따옴표 밖에 붙이되 받침은 원래 말로 본다
@@ -2696,7 +2696,8 @@ class MainWindow(QWidget):
         self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
                         self.notes.kin(picked))
 
-    def show_note(self, title: str, focus: bool = True, trail: bool = True) -> None:
+    def show_note(self, title: str, focus: bool = True, trail: bool = True,
+                  말할까: bool = True) -> None:
         note = self.notes.read(title)
         if note is None:
             return
@@ -2707,7 +2708,11 @@ class MainWindow(QWidget):
             # 항목을 직접 누른 것도 내용을 펼치는 일이다 — 그 항목만 남기고 다가간다.
             self.graph.focus_on([title], zoom=FOCUS_ZOOM)
         self._fill_detail(note)
-        self.report(f"{title} 얘기야.", [title] + self.notes.neighbors(title)[:3])
+        # ★ **부르는 쪽이 이미 말할 참이면 여기서는 안 말한다.** 찾기가 하나로 좁혔을 때
+        #   여기서 한 번, 찾기 끝에서 또 한 번 — **같은 말이 두 줄** 찍혔다
+        #   (실기 · 2026-09-25 · 윈도우에서 재 왔다. 두 번 다 그랬다고 했다).
+        if 말할까:
+            self.report(f"{title} 얘기야.", [title] + self.notes.neighbors(title)[:3])
 
     def _fill_detail(self, note: Note, where: str = "") -> None:
         """항목을 칸에 올린다.
@@ -3769,9 +3774,6 @@ class MainWindow(QWidget):
         report.딴실로("새 판 받기", 일)
 
     def open_reader(self) -> None:
-        """본문 판을 그래프 위에 띄운다."""
-        self._place_reader()
-
         """본문 판을 그래프 위에 띄운다."""
         self._place_reader()
         self.detail_card.show()

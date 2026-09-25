@@ -916,6 +916,20 @@ def run() -> None:
         lit = [n for n in win.graph.nodes.values() if n.graphicsEffect() is not None]
         assert lit and lit[0].title == "카페 단골", "발광이 딴 데 붙었다"
         assert win.say.text().startswith("카페 단골 얘기야."), win.say.text()
+
+        # ★★ **한 번 물었는데 같은 말이 두 줄 찍히면 안 된다.** 찾기가 하나로 좁히면
+        #   `show_note` 가 한 번 말하고 찾기 끝에서 또 한 번 말해, 대화 칸에
+        #   「… 얘기야.」가 **두 줄** 남았다(실기 · 2026-09-25 · 윈도우에서 두 번 다 그랬다).
+        #   ★ 화면 글자만 보면 **마지막 줄만 보여 안 걸린다** — 말한 횟수를 세야 한다.
+        _한말 = []
+        _옛말하기 = win.report
+        win.report = lambda 글, 근=(), **ㄴ: (_한말.append(글), _옛말하기(글, 근, **ㄴ))[1]
+        try:
+            win._ask("카페 단골")          # 하나로 좁히는 물음
+            _얘기 = [ㄱ for ㄱ in _한말 if "얘기야" in ㄱ]
+            assert len(_얘기) <= 1, f"한 번 물었는데 같은 말이 {len(_얘기)}줄: {_얘기}"
+        finally:
+            win.report = _옛말하기
         assert win.detail_kind.currentData() == "preference"
 
         # 고칠 수 있는 칸이라 본문은 **파일에 있는 그대로** 보인다. 대괄호를 벗겨
