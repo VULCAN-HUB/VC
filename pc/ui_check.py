@@ -1096,6 +1096,24 @@ def run() -> None:
         assert picker.get_list.count() > 0, "열자마자 받을 목록이 비어 있다"
         assert picker.get_box.isVisibleTo(picker), "받기 칸이 아예 안 보인다"
 
+        # ★★ **긴 항목이 칸을 밀면 안 된다.** 목록을 채우자마자 「Qwen2.5-VL 7B
+        #   (사진, 정확) 5536MB ⚠ 이 PC엔 버거움」 같은 항목이 오른쪽 칸을 밀어
+        #   **«받기» 단추가 잘리고** 창이 화면보다 크게 떴다(실기 · 2026-09-25 ·
+        #   4K 250% 윈도우 · 창 1397 인데 화면 1382). 목록이 비어 있던 동안에는
+        #   안 보이던 탈이라, 「열 때 채운다」 고침과 함께 나왔다.
+        #
+        # ★ **이 검사는 약하다 — 그렇게 적어 둔다.** 정작 재고 싶은 것(칸이 안 밀린다)은
+        #   픽셀이고, 그 값은 글꼴을 타서 기계마다 다르다. 맥에서 손으로 재 보니
+        #   판 최소 너비가 **205 → 114** 로 갈렸지만, 그 숫자를 박으면 윈도우에서
+        #   흔들린다. 그래서 **막이가 걸려 있는지**만 본다. 픽셀은 사람이 봐야 한다.
+        from PyQt5.QtWidgets import QSizePolicy as _자람검
+
+        for _칸검 in [picker.get_list, *picker.boxes.values()]:
+            assert _칸검.sizePolicy().horizontalPolicy() == _자람검.Ignored, \
+                "칸이 고른 글만큼 넓어진다 — 옆 단추가 잘린다"
+            assert _칸검.sizeAdjustPolicy() == QComboBox.AdjustToMinimumContentsLengthWithIcon, \
+                "칸이 가장 긴 항목에 맞춰 커진다"
+
         picker.boxes["chat"].setCurrentIndex(2)  # b-7b
         picker._chose("chat")
         assert ModelLink.sent[-1] == {"role": "chat", "name": "b-7b"}, ModelLink.sent

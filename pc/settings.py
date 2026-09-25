@@ -304,7 +304,15 @@ def apply_screen(win, mode: str) -> None:
     돌아갈 자리를 「창」으로 덮어써 **최대화로 안 돌아왔다**(실기 · 2026-09-25).
     두 탈이 한 까닭이었다. 맥에서는 곧바로 반영돼 여기서는 안 났다.
     """
+    앞 = getattr(win, "_화면방식", "")
     win._화면방식 = mode
+    # ★★ **전체화면에서 곧바로 최대화로 못 간다.** 윈도우에서 `showMaximized()` 를
+    #   바로 부르면 **아무 일도 안 일어난다** — F11 이 한두 번 헛눌리고 서너 번째에야
+    #   풀렸다(실기 · 2026-09-25 · 창 상태를 0.01초마다 재서 잡았다).
+    #   Qt 문서도 「전체화면에서 나오려면 `showNormal()` 을 부르라」고 적어 뒀다.
+    #   먼저 보통 창으로 내린 뒤 걸어야 한다. 맥은 그냥도 돼서 여기서는 안 났다.
+    if 앞 == "전체화면" and mode != "전체화면":
+        win.showNormal()
     {"최대화": win.showMaximized, "전체화면": win.showFullScreen}.get(mode, win.showNormal)()
 
 
@@ -1395,6 +1403,24 @@ def _self_check() -> None:
             assert toggle_full(win) == "전체화면"
             win.showMaximized()            # 창 상태만 어긋나게 만든다(우리 기억은 전체화면)
             assert toggle_full(win) == "최대화", "전체화면을 풀었는데 최대화로 안 돌아온다"
+            # ★★ **전체화면에서 나올 때는 먼저 보통 창으로 내린다.** 윈도우에서
+            #   `showMaximized()` 를 바로 부르면 아무 일도 안 일어나, F11 이 한두 번
+            #   헛눌리고 서너 번째에야 풀렸다(실기 · 2026-09-25 · 창 상태를 0.01초마다
+            #   재서 잡았다). Qt 문서도 `showNormal()` 을 부르라고 적어 뒀다.
+            #   ★ **맥에서는 그 증상 자체를 못 만든다** — 여기서는 그냥도 풀린다.
+            #     그래서 픽셀이 아니라 **부르는 차례**를 잰다. 약한 검사지만,
+            #     이 줄이 지워지는 것은 막는다.
+            class _부름기록:
+                def __init__(자기): 자기.간것 = []
+                def showNormal(자기): 자기.간것.append("보통")
+                def showMaximized(자기): 자기.간것.append("최대화")
+                def showFullScreen(자기): 자기.간것.append("전체화면")
+            _적이 = _부름기록()
+            apply_screen(_적이, "전체화면")
+            apply_screen(_적이, "최대화")
+            assert _적이.간것 == ["전체화면", "보통", "최대화"], \
+                f"전체화면에서 곧바로 최대화로 간다 — 윈도우에서 안 풀린다: {_적이.간것}"
+
             # 연달아 눌러도 돌아갈 자리를 안 잃는다
             apply_screen(win, "최대화")
             toggle_full(win)

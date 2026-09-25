@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QTextBrowser,
     QTextEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -1128,6 +1129,18 @@ class Gaps(QWidget):
             self.buttons.append(b)
 
 
+def _좁게(칸: QComboBox) -> None:
+    """고른 글이 아무리 길어도 **칸 너비를 안 밀게** 한다.
+
+    Qt 의 기본값(`AdjustToContentsOnFirstShow`)은 **가장 긴 항목에 맞춰 칸을 넓힌다.**
+    옆 칸이 좁아지거나 창이 화면보다 커지는 것이 그 대가다 — 실제로 «받기» 단추가
+    잘렸다. 글은 「…」으로 줄고, 펼치면 다 보인다.
+    """
+    칸.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    칸.setMinimumContentsLength(8)
+    칸.setSizePolicy(QSizePolicy.Ignored, 칸.sizePolicy().verticalPolicy())
+
+
 class ModelPicker(HudPanel):
     """쓸 모델을 고르는 칸 (결정 42).
 
@@ -1160,6 +1173,13 @@ class ModelPicker(HudPanel):
         self.get_label.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.5)}; font-size:{theme.글자(10)};")
         self.get_list = QComboBox()
         self.get_list.setObjectName("pick")
+        # ★★ **고른 글이 칸 너비를 정하면 안 된다.** 목록을 채우자마자
+        #   「Qwen2.5-VL 7B (사진, 정확) 5536MB ⚠ 이 PC엔 버거움」 같은 긴 항목이
+        #   오른쪽 칸을 밀어, **«받기» 단추가 칸 밖으로 잘리고** 창이 화면보다
+        #   크게 떴다(실기 · 2026-09-25 · 4K 250% 윈도우 · 창이 1397 인데 화면이 1382).
+        #   목록이 비어 있던 동안에는 안 보이던 탈이라, 목록을 채우자 같이 나왔다.
+        #   ★ 글은 「…」으로 줄고 펼치면 다 보인다 — 칸이 밀리는 것보다 낫다.
+        _좁게(self.get_list)
         self.get_button = QPushButton("받기")
         self.get_button.setObjectName("quiet")
         self.get_button.setCursor(Qt.PointingHandCursor)
@@ -1185,6 +1205,7 @@ class ModelPicker(HudPanel):
             name.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.55)}; font-size:{theme.글자(11)};")
             combo = QComboBox()
             combo.setObjectName("pick")
+            _좁게(combo)          # 모델 이름이 길어도 칸을 안 민다
             combo.activated.connect(lambda _, r=role: self._chose(r))
             self.boxes[role] = combo
             row.addWidget(name)
