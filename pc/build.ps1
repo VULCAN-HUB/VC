@@ -106,7 +106,8 @@ try {
     $sha = (Get-FileHash $Zip -Algorithm SHA256).Hash
     "$sha  VC.zip" | Out-File "$Zip.sha256" -Encoding utf8
     Write-Host "== SHA-256 $sha"
-    "v$Ver  $sha" | Out-File (Join-Path $OutDir "판.txt") -Encoding utf8
+    # ★ 이름은 영문이다 — 깃허브가 릴리스 이름의 한글을 버린다(VC.iss 머리말 참고)
+    "v$Ver  $sha" | Out-File (Join-Path $OutDir "release.txt") -Encoding utf8
 
     # ★★ **단일 설치 파일도 낸다.** zip 은 받아서 「어디에 풀지?」가 남고, 푼 뒤에도
     # 시작 메뉴에 안 뜬다. 설치 파일 한 장이면 누르고 끝이다.
@@ -122,10 +123,10 @@ try {
         # ★ `/DVer` 가 아니라 `/DVCVer` 다 — `VER` 는 Inno 가 제 판 번호로 쓰는 이름이라
         #   덮어쓰면 ISPPBuiltins.iss 에서 터진다(VC.iss 머리말 참고).
         & $ISCC "/DVCVer=$Ver" "/DSrc=$App" "/DOut=$OutDir" "$Link\tools\VC.iss" | Out-Null
-        $Exe = Join-Path $OutDir "VC-설치-$Ver.exe"
+        $Exe = Join-Path $OutDir "VC-Setup-$Ver.exe"
         if (Test-Path $Exe) {
             $esha = (Get-FileHash $Exe -Algorithm SHA256).Hash
-            "$esha  VC-설치-$Ver.exe" | Out-File "$Exe.sha256" -Encoding utf8
+            "$esha  VC-Setup-$Ver.exe" | Out-File "$Exe.sha256" -Encoding utf8
             Write-Host "== 설치 파일 $Exe"
             Write-Host "== SHA-256 $esha"
         } else {

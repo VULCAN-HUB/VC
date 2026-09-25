@@ -38,7 +38,12 @@ DefaultGroupName=VC
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#Out}
-OutputBaseFilename=VC-설치-{#VCVer}
+; ★★ **이름은 영문이다.** 깃허브는 릴리스에 올릴 때 파일 이름의 한글을 버린다 —
+;    `VC-설치-0.5.21.exe` 가 `VC-.-0.5.21.exe` 로 올라갔다(2026-09-26 첫 릴리스).
+;    도는 데는 지장이 없지만(업데이트는 `.exe` 로 고른다) 손으로 받는 사람에게는
+;    깨져 보이고, 공개 저장소라 그게 첫인상이 된다. 한글이 남의 도구를 죽이는
+;    자리가 또 하나다(Qt · zsh · bash · PyQt · 깃허브 표현식에 이어 여섯 번째).
+OutputBaseFilename=VC-Setup-{#VCVer}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

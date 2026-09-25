@@ -1160,6 +1160,19 @@ def _self_check() -> None:
         #   여기서 지킨다 — 찍기는 굽기의 곁다리지 굽기 자체가 아니다.
         assert "import paths" in _스펙글, \
             "VC.spec 이 paths 를 안 부른다 — 한글을 찍다 영어권 윈도우에서 굽기가 멈춘다"
+
+    # ★★ **릴리스에 올라갈 파일 이름은 영문이어야 한다.** 깃허브가 한글을 버린다 —
+    #   `VC-설치-0.5.21.exe` 가 `VC-.-0.5.21.exe` 로 올라갔다(첫 릴리스 · 2026-09-26).
+    #   업데이트는 `.exe` 로 골라서 도는 데는 지장이 없지만, 손으로 받는 사람에게는
+    #   깨져 보인다. 공개 저장소라 그게 첫인상이다.
+    for _문서, _찾을것 in (("tools/VC.iss", "OutputBaseFilename="),
+                       ("build.ps1", "$Exe = Join-Path $OutDir")):
+        _길 = _자리스펙 / _문서
+        if not _길.exists():
+            continue
+        for _줄 in _길.read_text(encoding="utf-8").splitlines():
+            if _찾을것 in _줄 and not _줄.lstrip().startswith((";", "#")):
+                assert _줄.isascii(), f"{_문서}: 릴리스 파일 이름에 한글이 있다 — 깃허브가 버린다: {_줄.strip()}"
         _안적힌 = []
         for _파일 in sorted(_자리스펙.glob("*.py")):
             _이름 = _파일.stem
