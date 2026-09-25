@@ -458,7 +458,8 @@ class MainWindow(QWidget):
         caret.start(600)
 
         legend_row = QHBoxLayout()
-        legend_row.addWidget(Legend())
+        self.legend = Legend()          # 검사가 「카드가 이걸 덮나」를 재려면 잡을 수 있어야 한다
+        legend_row.addWidget(self.legend)
         legend_row.addStretch(1)
 
         graph_box = QVBoxLayout()
@@ -3785,7 +3786,11 @@ class MainWindow(QWidget):
         g = self.graph.geometry()
         if g.width() < 40:
             return
-        h = max(280, int(g.height() * 0.88))
+        # ★★ **그래프보다 커지면 안 된다.** 바닥값(280)이 그래프 높이를 넘으면 카드가
+        #   위아래로 넘쳐 **바로 밑 색 범례 줄을 덮었다**(실기 · 2026-09-25 · 윈도우).
+        #   채팅 칸을 펴거나 창을 낮추면 그래프가 그만큼 짧아져 쉽게 걸린다.
+        #   좁으면 작게 뜨는 것이 맞다 — 남의 자리를 밟는 것보다 낫다.
+        h = min(max(280, int(g.height() * 0.88)), g.height())
         top = g.y() + (g.height() - h) // 2
         if self.side_open:
             # 둘로 나눈다. 글줄 폭은 각자 620에서 끊는다 — 좁아도 읽을 수는 있어야 한다.

@@ -296,15 +296,33 @@ def save_backend(kind: str, base_url: str = "", model: str = "", key: str = "") 
 
 
 def apply_screen(win, mode: str) -> None:
+    """화면 방식을 건다. **무엇으로 걸었는지 우리가 적어 둔다.**
+
+    ★★ **창에게 물으면 안 된다.** 윈도우에서 `showFullScreen()` 은 곧바로 반영되지
+    않아서, 바로 다음에 `isFullScreen()` 을 물으면 아직 거짓이다. 그래서 F11 을
+    연달아 누르면 **두 번째가 안 먹은 것처럼** 보였고(세 번째에야 풀렸다), 그 김에
+    돌아갈 자리를 「창」으로 덮어써 **최대화로 안 돌아왔다**(실기 · 2026-09-25).
+    두 탈이 한 까닭이었다. 맥에서는 곧바로 반영돼 여기서는 안 났다.
+    """
+    win._화면방식 = mode
     {"최대화": win.showMaximized, "전체화면": win.showFullScreen}.get(mode, win.showNormal)()
+
+
+def 지금화면방식(win) -> str:
+    """지금 걸려 있는 방식. 우리가 적어 둔 것이 먼저고, 없으면 창에게 묻는다."""
+    적은것 = getattr(win, "_화면방식", "")
+    if 적은것:
+        return 적은것
+    return "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
 
 
 def toggle_full(win) -> str:
     """F11. 전체화면이면 켜기 전 방식으로, 아니면 전체화면으로. 고른 것을 남긴다."""
-    if win.isFullScreen():
+    지금 = 지금화면방식(win)
+    if 지금 == "전체화면":
         mode = getattr(win, "_앞화면방식", "창")
     else:
-        win._앞화면방식 = "최대화" if win.isMaximized() else "창"
+        win._앞화면방식 = 지금
         mode = "전체화면"
     apply_screen(win, mode)
     paths.save_config({**paths.load_config(), "화면방식": mode})
@@ -1365,6 +1383,24 @@ def _self_check() -> None:
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"
+
+            # ★★ **최대화에서 F11 을 켰다 끄면 최대화로 돌아와야 한다.**
+            #   창에게 「지금 전체화면이냐」고 물어 판단했더니, 윈도우에서는 아직
+            #   반영이 안 돼 거짓으로 왔다 — 연달아 누르면 두 번째가 안 먹은 것처럼
+            #   보였고(세 번째에 풀렸다), 그 김에 돌아갈 자리를 「창」으로 덮어써
+            #   최대화로 안 돌아왔다(실기 · 2026-09-25 · 윈도우).
+            #   ★ **창이 안 따라온 상태를 일부러 만들어** 잰다 — 맥에서는 곧바로
+            #     반영돼서, 그냥 재면 이 병을 영영 못 잡는다.
+            apply_screen(win, "최대화")
+            assert toggle_full(win) == "전체화면"
+            win.showMaximized()            # 창 상태만 어긋나게 만든다(우리 기억은 전체화면)
+            assert toggle_full(win) == "최대화", "전체화면을 풀었는데 최대화로 안 돌아온다"
+            # 연달아 눌러도 돌아갈 자리를 안 잃는다
+            apply_screen(win, "최대화")
+            toggle_full(win)
+            toggle_full(win)
+            assert toggle_full(win) == "전체화면", "연달아 눌렀더니 방식이 어긋난다"
+            assert win._앞화면방식 == "최대화", f"돌아갈 자리를 잃었다: {win._앞화면방식}"
             창.deleteLater(); 다시.deleteLater(); win.deleteLater()
             n.conn.close()
         finally:

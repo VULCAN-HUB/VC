@@ -2626,6 +2626,27 @@ def run() -> None:
     finally:
         _창묻기.글자배율로(_옛배율, 말할까=False)
 
+    # ★★ **글 카드가 색 범례를 덮으면 안 된다.** 카드 높이에 바닥값(280)이 있어서
+    #   그래프가 그보다 짧아지면 카드가 그래프 밖으로 넘쳐 **바로 밑 범례 줄**을
+    #   깔고 앉았다(실기 · 2026-09-25 · 윈도우에서 오너가 봤다).
+    #   ★ **낮은 창에서 잰다** — 넓고 높은 창에서는 영영 안 걸린다. 창 크기 하나로만
+    #     재는 검사는 「우리 화면에서만 맞는」 검사가 된다.
+    _창덮 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+    _창덮.show()
+    for _높이 in (1000, 700, 520, 420, 360):
+        _창덮.resize(1180, _높이)
+        app.processEvents()
+        _창덮.show_note(ROOT)
+        app.processEvents()
+        _칸 = _창덮.detail_card.geometry()
+        _범 = _창덮.legend.geometry()
+        _범 = _범.translated(_창덮.legend.parentWidget().mapTo(_창덮, _범.topLeft()) - _범.topLeft())
+        assert not _칸.intersects(_범), (
+            f"창 높이 {_높이}: 글 카드가 색 범례를 덮는다 카드={_칸} 범례={_범}")
+        assert _칸.bottom() <= _창덮.graph.geometry().bottom() + 1, (
+            f"창 높이 {_높이}: 카드가 그래프 밖으로 넘친다 {_칸} / {_창덮.graph.geometry()}")
+    _창덮.close()
+
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다
     #   세그폴트를 냈다(파이썬이 위젯을 먼저 거두고 C++ 쪽이 그걸 다시 만지는 자리다).
