@@ -21,6 +21,8 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QShortcut, QToolButton
 
 # 앱을 여기 붙들어 둔다 — 창보다 늦게 죽어야 한다(아래 `run` 설명 참고).
 _앱 = None
+# 만든 창도 여기 붙들어 둔다 — 쓰레기 치우기가 검사 도중에 창을 거둬 가면 죽는다.
+_창들: list = []
 
 import notes as notes_module
 import paths
@@ -53,6 +55,29 @@ def run() -> None:
     global _앱
     _앱 = QApplication.instance() or QApplication([])
     app = _앱
+
+    # ★★ **만든 창을 다 붙들어 둔다.** 검사는 주 창을 스무 개 넘게 만들고 그냥 버리는데,
+    #   창과 창이 물린 람다가 서로를 붙들어 **고리**가 된다. 파이썬의 쓰레기 치우기가
+    #   그 고리를 **아무 때나** 끊고, 마침 그 창 앞으로 온 신호를 꺼내는 중이면
+    #   이미 없는 것을 만져 프로세스가 통째로 죽는다(접근 위반).
+    #
+    #   윈도우에서 **서른 번에 다섯 번** 그랬다(2026-09-25 · CI 에서 재서 잡았다).
+    #   자국은 늘 같은 꼴이었다 — `ui.py` 의 <lambda> · 바로 앞은 `processEvents()`.
+    #   자리는 매번 달랐다(323 · 2259 …). 때를 못 잡으니 「다시 돌리면 되겠지」로
+    #   넘어가기 쉬운 꼴이고, 실제로 그래서 하루를 흘렸다.
+    #
+    #   ★ 앱을 붙들어 둔 것과 **같은 까닭**이다(위 설명). 거기서 창까지 붙들었어야 했다.
+    #   ★ 진짜로 켤 때는 주 창이 하나뿐이고 `main()` 이 붙들고 있어 이 자리가 없다.
+    global _창들
+    if not getattr(MainWindow, "_VC붙듦", False):
+        _원래만들기 = MainWindow.__init__
+
+        def _붙들고만들기(자기, *것들, **딸림):
+            _원래만들기(자기, *것들, **딸림)
+            _창들.append(자기)
+
+        MainWindow.__init__ = _붙들고만들기
+        MainWindow._VC붙듦 = True
 
     with tempfile.TemporaryDirectory() as tmp:
         notes = Notes(Path(tmp) / "notes")
