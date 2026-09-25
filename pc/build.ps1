@@ -119,7 +119,9 @@ try {
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($ISCC) {
         Write-Host "== 설치 파일 굽는 중"
-        & $ISCC "/DVer=$Ver" "/DSrc=$App" "/DOut=$OutDir" "$Link\tools\VC.iss" | Out-Null
+        # ★ `/DVer` 가 아니라 `/DVCVer` 다 — `VER` 는 Inno 가 제 판 번호로 쓰는 이름이라
+        #   덮어쓰면 ISPPBuiltins.iss 에서 터진다(VC.iss 머리말 참고).
+        & $ISCC "/DVCVer=$Ver" "/DSrc=$App" "/DOut=$OutDir" "$Link\tools\VC.iss" | Out-Null
         $Exe = Join-Path $OutDir "VC-설치-$Ver.exe"
         if (Test-Path $Exe) {
             $esha = (Get-FileHash $Exe -Algorithm SHA256).Hash
@@ -127,7 +129,13 @@ try {
             Write-Host "== 설치 파일 $Exe"
             Write-Host "== SHA-256 $esha"
         } else {
-            Write-Host "!! 설치 파일이 안 나왔다 — zip 은 멀쩡하다"
+            # ★★ **깔려 있는데 터진 것은 조용히 넘기지 않는다.** 여기를 경고로 두었더니
+            #   설치 파일 없이 굽기가 「성공」으로 끝났고, 릴리스에는 zip 만 올라갈
+            #   뻔했다 — 쓰는 사람은 단일 설치 파일을 기다리는데 아무도 모른다
+            #   (CI · 2026-09-25 · Inno 가 `Ver` 이름 때문에 터졌다).
+            #   ★ **안 깔린 것과 터진 것은 다르다.** 안 깔렸으면 아래에서 건너뛴다 —
+            #     그건 zip 만으로도 쓸 수 있으니 굽기를 막을 일이 아니다.
+            throw "Inno Setup 이 있는데 설치 파일이 안 나왔다 — 위 오류를 보라. zip 은 나왔다"
         }
     } else {
         # ★ 없다고 굽기를 막지 않는다 — zip 만으로도 쓸 수 있다.

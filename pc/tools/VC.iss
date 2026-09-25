@@ -13,8 +13,13 @@
 ;
 ; 굽기:  ISCC.exe /DVer=0.5.19 /DSrc=<dist\VC 자리> /DOut=<낼 자리> VC.iss
 
-#ifndef Ver
-  #define Ver "0.0.0"
+; ★★ **이름을 `Ver` 로 두면 안 된다.** Inno 전처리기는 이름의 대소문자를 안 가리고
+;    `VER` 는 **제가 쓰는 이름**이다(Inno 자신의 판 번호). 우리 값이 그걸 덮어써서
+;    제 판을 견주는 줄에서 터진다:
+;      Error on line 216 in ISPPBuiltins.iss: Operator not applicable to this operand type.
+;    오너 기계엔 Inno 가 없어 여태 건너뛰었고, CI 에서 처음 돌려 보고 알았다(2026-09-25).
+#ifndef VCVer
+  #define VCVer "0.0.0"
 #endif
 #ifndef Src
   #define Src "..\dist\VC"
@@ -26,14 +31,14 @@
 [Setup]
 AppId={{8F2B6C21-5D4E-4A77-9C13-VC000000001}
 AppName=VC
-AppVersion={#Ver}
+AppVersion={#VCVer}
 AppPublisher=Unknown
 DefaultDirName={autopf}\VC
 DefaultGroupName=VC
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#Out}
-OutputBaseFilename=VC-설치-{#Ver}
+OutputBaseFilename=VC-설치-{#VCVer}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -42,7 +47,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; 돌고 있는 VC 를 덮어쓰려다 반쯤 깔리는 것을 막는다
 CloseApplications=yes
 RestartApplications=no
-UninstallDisplayName=VC {#Ver}
+UninstallDisplayName=VC {#VCVer}
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
