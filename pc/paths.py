@@ -21,6 +21,30 @@ import re
 import sys
 from pathlib import Path
 
+def _한글도찍히게() -> None:
+    """찍는 자리를 **UTF-8 로 돌린다.** `paths` 를 부르는 순간(= VC 가 시작하는 순간) 돈다.
+
+    ★★ **VC 는 켜면서 한글을 찍는다.** 그런데 윈도우 콘솔은 그 기계의 코드페이지를
+    따르고, 영어권 윈도우는 **cp1252** 라 한글을 못 찍는다 — `UnicodeEncodeError` 로
+    **켜자마자 죽는다.** 오너의 윈도우는 한국어(cp949)라 여태 한 번도 안 났다.
+    공개로 올린 프로그램이니 남이 첫 줄에서 바로 밟을 자리였다.
+
+    실제로 CI 의 영어권 윈도우에서 두 번 밟았다(2026-09-25) — 가짜 손이 한 번,
+    내가 쓴 탐침이 한 번. 둘 다 따로 고치다가 **뿌리가 같다**는 것을 알았다.
+
+    ★ `errors="replace"` 다. 못 찍는 글자 하나 때문에 프로그램이 죽는 것보다
+      `?` 로 찍히는 쪽이 낫다 — **찍기는 일의 곁다리지 일 자체가 아니다.**
+    ★ 부르는 자리가 여기 하나다. 파일마다 적으면 새로 만든 파일에서 또 샌다.
+    """
+    for 것 in (sys.stdout, sys.stderr):
+        try:
+            것.reconfigure(encoding="utf-8", errors="replace")   # 파이썬 3.7+
+        except (AttributeError, ValueError, OSError):
+            pass        # 파이프로 묶였거나 딴 것으로 갈렸으면 그냥 둔다
+
+
+_한글도찍히게()
+
 APP_NAME = "VC"
 
 # ★ **판 번호는 여기 한 자리에만 적는다.** 그동안 exe 속성에는 `0.1.0.0` 이
@@ -1280,6 +1304,30 @@ def _self_check() -> None:
             f"{_판.name} 이 화면 판을 혼자 놓는다 — `paths.화면없이()` 를 부른다"
     assert 'QT_QPA_FONTDIR' in Path(__file__).read_text(encoding="utf-8"), \
         "윈도우 offscreen 은 글꼴이 하나도 없다 — 글꼴 자리를 알려 줘야 죽지 않는다"
+
+    # ★★ **한글을 못 찍는 콘솔에서도 죽지 않는다.** 영어권 윈도우는 cp1252 라
+    #   VC 가 켜면서 찍는 첫 줄에서 `UnicodeEncodeError` 로 죽었다(CI 에서 두 번
+    #   밟았다 · 2026-09-25). 오너의 윈도우는 한국어(cp949)라 한 번도 안 났다.
+    #   ★ 기계를 안 가리고 잰다 — 자식에게 `PYTHONIOENCODING=cp1252` 를 물려
+    #     **cp1252 인 척**하게 만든다. 맥에서도 같은 병이 그대로 재현된다.
+    import subprocess as _딴것
+
+    def _찍어보기(딸림: dict) -> tuple:
+        난것 = _딴것.run([sys.executable, "-c", 딸림.pop("_줄")],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120,
+                       env={**os.environ, **딸림})
+        return 난것.returncode, (난것.stdout or "") + (난것.stderr or "")
+
+    _코드, _글 = _찍어보기({"_줄": "import paths; print('한글도 찍힌다')",
+                       "PYTHONIOENCODING": "cp1252",
+                       "PYTHONPATH": str(Path(__file__).resolve().parent)})
+    assert _코드 == 0 and "한글도 찍힌다" in _글, \
+        f"한글을 못 찍는 콘솔에서 죽는다 — 영어권 윈도우가 여기 걸린다: {_코드} {_글[-300:]!r}"
+
+    # ★ 막이가 없으면 진짜로 죽는지도 본다 — 안 그러면 이 검사가 헛도는지 알 수 없다
+    _맨코드, _ = _찍어보기({"_줄": "print('한글도 찍힌다')", "PYTHONIOENCODING": "cp1252"})
+    assert _맨코드 != 0, "cp1252 인 척했는데 그냥 찍힌다 — 이 검사는 아무것도 안 재고 있다"
 
     print("paths self-check 통과")
 
