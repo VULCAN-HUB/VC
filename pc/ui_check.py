@@ -777,7 +777,7 @@ def run() -> None:
 
             reply = {"kind": "result", "text": "볼륨 올렸어", "module": "volume"}
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 return self.reply if path == "/eb/v1/ask" else None
 
         runner = Runner()
@@ -957,7 +957,7 @@ def run() -> None:
             def __init__(self):
                 self.waiting = []
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 calls.append((method, path, payload))
                 if path == "/eb/v1/remote/pending":
                     return {"sessions": self.waiting}
@@ -1068,7 +1068,7 @@ def run() -> None:
                   "state": "idle", "key": "", "label": "", "percent": 0,
                   "done_mb": 0, "total_mb": 0, "error": "", "busy": False}
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 if path == "/eb/v1/models/download":
                     if method == "GET":
                         return self.dl
@@ -1087,6 +1087,14 @@ def run() -> None:
         assert picker.boxes["chat"].itemData(0) == ""
         assert "자동" in picker.boxes["chat"].itemText(0)
         assert picker.boxes["chat"].count() == 3, picker.boxes["chat"].count()
+
+        # ★★ **열자마자 채워져 있어야 한다.** 여태 이 검사는 `_chose` 를 먼저 부른
+        #   **뒤에** 목록을 읽어서, 「모델을 고른 뒤에만 채워지는」 버그를 그대로
+        #   지나쳤다 — 검사가 버그와 같은 차례로 재고 있었던 것이다.
+        #   모델이 하나도 없는 사람에게는 이 칸이 **모델을 받는 유일한 길**이라,
+        #   비어 있으면 거기서 막힌다(실기 · 오너 2026-09-25 · 구운 판을 처음 깔고).
+        assert picker.get_list.count() > 0, "열자마자 받을 목록이 비어 있다"
+        assert picker.get_box.isVisibleTo(picker), "받기 칸이 아예 안 보인다"
 
         picker.boxes["chat"].setCurrentIndex(2)  # b-7b
         picker._chose("chat")
