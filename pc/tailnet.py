@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import paths
+
 import ipaddress
 import os
 import re
@@ -28,7 +30,7 @@ Runner = Callable[[list[str]], "str | None"]
 
 def _run(cmd: list[str]) -> str | None:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=4, **paths.창안띄우기())
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
@@ -67,7 +69,7 @@ def _터널인터페이스주소(목록: str | None, 윈도우: bool) -> str | N
         # ipconfig: 「... adapter Tailscale:」 머리 아래 줄들이 그 어댑터 것이다
         덩이 = re.split(r"\r?\n(?=\S)", 목록)
         for d in 덩이:
-            if "tailscale" in d.splitlines()[0].lower():
+            if "tailscale" in (d.splitlines() or [""])[0].lower():
                 if (ip := _테일넷주소(d)):
                     return ip
         return None

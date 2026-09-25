@@ -458,7 +458,8 @@ class MainWindow(QWidget):
         caret.start(600)
 
         legend_row = QHBoxLayout()
-        legend_row.addWidget(Legend())
+        self.legend = Legend()          # 검사가 「카드가 이걸 덮나」를 재려면 잡을 수 있어야 한다
+        legend_row.addWidget(self.legend)
         legend_row.addStretch(1)
 
         graph_box = QVBoxLayout()
@@ -1374,7 +1375,15 @@ class MainWindow(QWidget):
         눈이 불편한 사람은 쓸 수가 없다. 옵시디언은 `Ctrl +/-` 로 된다.
         바꾼 값은 설정에 남겨 다음에 켤 때 그대로 뜬다.
         """
-        새배율 = theme.배율바꾸기(theme.배율() + 만큼 if 만큼 else theme.기본배율)
+        self.글자배율로(theme.배율() + 만큼 if 만큼 else 0)
+
+    def 글자배율로(self, 값: float, 말할까: bool = True) -> float:
+        """글자 배율을 **그 값으로** 맞춘다. `값<=0` 이면 이 기계의 기본으로.
+
+        ★ `Ctrl +/-` 와 설정 창이 **같은 이 길**을 쓴다. 둘이 따로 정하면
+          한쪽에서 바꾼 것이 다른 쪽에 안 비치고, 저장하는 자리도 갈린다.
+        """
+        새배율 = theme.배율바꾸기(값 if 값 and 값 > 0 else theme.기본배율)
         self._apply_style()
         for 아이 in self.findChildren(QWidget):
             아이.style().unpolish(아이)
@@ -1383,7 +1392,9 @@ class MainWindow(QWidget):
             paths.save_config({**paths.load_config(), "글자배율": 새배율})
         except Exception:
             pass        # 못 남겨도 이번 판에는 적용된다
-        self.report(f"글자 {round(새배율 * 100)}%", [ROOT])
+        if 말할까:
+            self.report(f"글자 {round(새배율 * 100)}%", [ROOT])
+        return 새배율
 
     def escape(self) -> None:
         """Esc. **`[[` 목록이 떠 있으면 그것부터 닫는다.**"""
@@ -1730,7 +1741,7 @@ class MainWindow(QWidget):
         #   그대로 두고 **말만 사실대로** — 문턱으로 자르면 자료가 바뀔 때 무너진다.
         뜻만 = getattr(self.notes, "낱말로찾은수", None) == 0
         if narrowing:
-            self.show_note(hits[0], focus=False)
+            self.show_note(hits[0], focus=False, 말할까=False)   # 아래에서 한 번만 말한다
             said = f"{hits[0]} 얘기야."
         elif 뜻만:
             # 조사는 받침을 본다 — 따옴표 밖에 붙이되 받침은 원래 말로 본다
@@ -2685,7 +2696,8 @@ class MainWindow(QWidget):
         self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
                         self.notes.kin(picked))
 
-    def show_note(self, title: str, focus: bool = True, trail: bool = True) -> None:
+    def show_note(self, title: str, focus: bool = True, trail: bool = True,
+                  말할까: bool = True) -> None:
         note = self.notes.read(title)
         if note is None:
             return
@@ -2696,7 +2708,11 @@ class MainWindow(QWidget):
             # 항목을 직접 누른 것도 내용을 펼치는 일이다 — 그 항목만 남기고 다가간다.
             self.graph.focus_on([title], zoom=FOCUS_ZOOM)
         self._fill_detail(note)
-        self.report(f"{title} 얘기야.", [title] + self.notes.neighbors(title)[:3])
+        # ★ **부르는 쪽이 이미 말할 참이면 여기서는 안 말한다.** 찾기가 하나로 좁혔을 때
+        #   여기서 한 번, 찾기 끝에서 또 한 번 — **같은 말이 두 줄** 찍혔다
+        #   (실기 · 2026-09-25 · 윈도우에서 재 왔다. 두 번 다 그랬다고 했다).
+        if 말할까:
+            self.report(f"{title} 얘기야.", [title] + self.notes.neighbors(title)[:3])
 
     def _fill_detail(self, note: Note, where: str = "") -> None:
         """항목을 칸에 올린다.
@@ -3750,7 +3766,7 @@ class MainWindow(QWidget):
                 self.update_found.emit({"탈": 잰것.get("왜") or "못 받았다"})
                 return
             try:
-                _돌림.Popen(_새판.깔기명령(잰것["자리"]))
+                _돌림.Popen(_새판.깔기명령(잰것["자리"]), **paths.창안띄우기())
                 self.update_found.emit({"열었다": 잰것["자리"]})
             except Exception as e:
                 self.update_found.emit({"탈": f"못 열었다: {type(e).__name__}"})
@@ -3758,9 +3774,6 @@ class MainWindow(QWidget):
         report.딴실로("새 판 받기", 일)
 
     def open_reader(self) -> None:
-        """본문 판을 그래프 위에 띄운다."""
-        self._place_reader()
-
         """본문 판을 그래프 위에 띄운다."""
         self._place_reader()
         self.detail_card.show()
@@ -3775,7 +3788,11 @@ class MainWindow(QWidget):
         g = self.graph.geometry()
         if g.width() < 40:
             return
-        h = max(280, int(g.height() * 0.88))
+        # ★★ **그래프보다 커지면 안 된다.** 바닥값(280)이 그래프 높이를 넘으면 카드가
+        #   위아래로 넘쳐 **바로 밑 색 범례 줄을 덮었다**(실기 · 2026-09-25 · 윈도우).
+        #   채팅 칸을 펴거나 창을 낮추면 그래프가 그만큼 짧아져 쉽게 걸린다.
+        #   좁으면 작게 뜨는 것이 맞다 — 남의 자리를 밟는 것보다 낫다.
+        h = min(max(280, int(g.height() * 0.88)), g.height())
         top = g.y() + (g.height() - h) // 2
         if self.side_open:
             # 둘로 나눈다. 글줄 폭은 각자 620에서 끊는다 — 좁아도 읽을 수는 있어야 한다.
@@ -4271,6 +4288,7 @@ class MainWindow(QWidget):
 
 
 def main() -> None:
+    theme.고해상도켜기()     # 앱보다 먼저여야 먹는다
     app = QApplication(sys.argv)
     notes = Notes("data/notes", "notes_index.db")
     win = MainWindow(notes, Store("eb.db"))

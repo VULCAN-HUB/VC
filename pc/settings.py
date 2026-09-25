@@ -22,6 +22,14 @@ MODES = ("창", "최대화", "전체화면")
 # 구석으로 밀린다 — 두 번 눌러 되돌릴 수는 있지만 **가운데가 아닌 줄도 모르고**
 # 그냥 쓰게 된다(오너 지시 2026-09-15). 기본은 30초.
 되돌리기때 = (("끔", 0), ("10초", 10), ("30초", 30), ("1분", 60), ("3분", 180), ("10분", 600))
+
+# ★★ **화면 크기를 설정에서도 바꾼다.** `Ctrl +/-` 로만 되던 것을 설정 창에도 둔다 —
+#   단축키를 모르는 사람은 크게 뜬 화면을 줄일 길이 없었다(실기 · 오너 2026-09-25 ·
+#   윈도우 고해상도에서 배율을 켜자 이번엔 너무 커졌다).
+#   0 은 「이 기계의 기본」이다 — 맥과 윈도우가 다르다(맥 1.2 · 윈도우 1.0).
+글자배율때 = (("기본", 0.0), ("70%", 0.7), ("80%", 0.8), ("90%", 0.9), ("100%", 1.0),
+           ("110%", 1.1), ("125%", 1.25), ("150%", 1.5), ("175%", 1.75),
+           ("200%", 2.0), ("250%", 2.5))
 되돌리기기본 = 30
 
 
@@ -288,15 +296,41 @@ def save_backend(kind: str, base_url: str = "", model: str = "", key: str = "") 
 
 
 def apply_screen(win, mode: str) -> None:
+    """화면 방식을 건다. **무엇으로 걸었는지 우리가 적어 둔다.**
+
+    ★★ **창에게 물으면 안 된다.** 윈도우에서 `showFullScreen()` 은 곧바로 반영되지
+    않아서, 바로 다음에 `isFullScreen()` 을 물으면 아직 거짓이다. 그래서 F11 을
+    연달아 누르면 **두 번째가 안 먹은 것처럼** 보였고(세 번째에야 풀렸다), 그 김에
+    돌아갈 자리를 「창」으로 덮어써 **최대화로 안 돌아왔다**(실기 · 2026-09-25).
+    두 탈이 한 까닭이었다. 맥에서는 곧바로 반영돼 여기서는 안 났다.
+    """
+    앞 = getattr(win, "_화면방식", "")
+    win._화면방식 = mode
+    # ★★ **전체화면에서 곧바로 최대화로 못 간다.** 윈도우에서 `showMaximized()` 를
+    #   바로 부르면 **아무 일도 안 일어난다** — F11 이 한두 번 헛눌리고 서너 번째에야
+    #   풀렸다(실기 · 2026-09-25 · 창 상태를 0.01초마다 재서 잡았다).
+    #   Qt 문서도 「전체화면에서 나오려면 `showNormal()` 을 부르라」고 적어 뒀다.
+    #   먼저 보통 창으로 내린 뒤 걸어야 한다. 맥은 그냥도 돼서 여기서는 안 났다.
+    if 앞 == "전체화면" and mode != "전체화면":
+        win.showNormal()
     {"최대화": win.showMaximized, "전체화면": win.showFullScreen}.get(mode, win.showNormal)()
+
+
+def 지금화면방식(win) -> str:
+    """지금 걸려 있는 방식. 우리가 적어 둔 것이 먼저고, 없으면 창에게 묻는다."""
+    적은것 = getattr(win, "_화면방식", "")
+    if 적은것:
+        return 적은것
+    return "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
 
 
 def toggle_full(win) -> str:
     """F11. 전체화면이면 켜기 전 방식으로, 아니면 전체화면으로. 고른 것을 남긴다."""
-    if win.isFullScreen():
+    지금 = 지금화면방식(win)
+    if 지금 == "전체화면":
         mode = getattr(win, "_앞화면방식", "창")
     else:
-        win._앞화면방식 = "최대화" if win.isMaximized() else "창"
+        win._앞화면방식 = 지금
         mode = "전체화면"
     apply_screen(win, mode)
     paths.save_config({**paths.load_config(), "화면방식": mode})
@@ -398,6 +432,25 @@ def open_dialog(win, notes: Notes):
     지금 = "전체화면" if win.isFullScreen() else "최대화" if win.isMaximized() else "창"
     창.방식.setCurrentText(paths.load_config().get("화면방식", 지금) if 지금 == "창" else 지금)
     줄(화면틀, "화면 방식", 창.방식)
+
+    # ★★ **고르면 바로 바뀐다.** 「저장」을 눌러야 보이면 몇 %가 맞는지 고를 수가 없다 —
+    #   크기는 눈으로 맞추는 것이다. 주 창과 이 창이 같이 바뀐다.
+    #   ★ `Ctrl +/-` 와 **같은 길**(`win.글자배율로`)을 쓴다. 둘이 따로 정하면
+    #     한쪽에서 바꾼 것이 다른 쪽에 안 비친다.
+    창.글자배율 = QComboBox()
+    창.글자배율.setObjectName("pick")
+    for 보일, 값 in 글자배율때:
+        창.글자배율.addItem(보일, 값)
+    _지금배율 = theme.배율()
+    창.글자배율.setCurrentIndex(min(
+        range(1, len(글자배율때)), key=lambda i: abs(글자배율때[i][1] - _지금배율)))
+
+    def 배율바꿈(_=None) -> None:
+        win.글자배율로(창.글자배율.currentData())
+        창.setStyleSheet(_dialog_css(theme))     # 이 창도 같이 커지고 작아진다
+
+    창.글자배율.currentIndexChanged.connect(배율바꿈)
+    줄(화면틀, "글자·칸 크기 (Ctrl +/- 로도 된다)", 창.글자배율)
 
     # 표식이 가운데에서 밀렸을 때 저절로 돌아오기까지의 시간. 표식을 두 번 누르면 바로 온다.
     창.되돌리기 = QComboBox()
@@ -591,9 +644,9 @@ def open_dialog(win, notes: Notes):
                 return
             창.폰남은.setText(f"폰에 「{주소}:{phone_app.PORT}」 라고 뜨면 맞다 · "
                            f"{남음[0] // 60}:{남음[0] % 60:02d} 뒤 사라짐")
-            QTimer.singleShot(1000, 한칸)
+            QTimer.singleShot(1000, lambda: 한칸())
 
-        QTimer.singleShot(1000, 한칸)
+        QTimer.singleShot(1000, lambda: 한칸())
 
     def QR보이기() -> None:
         테일 = 창.테일주소()
@@ -1066,7 +1119,7 @@ def _self_check() -> None:
     assert "그냥 메모 줄" in to_body(답, 남), "손으로 적은 줄이 사라진다"
     assert "## 건강" not in 몸, "빈 칸까지 적는다"
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     from PyQt5.QtWidgets import QApplication, QWidget
 
     paths.pin_qt_plugins()      # 한글 경로면 `offscreen` 조차 못 찾는다
@@ -1330,12 +1383,50 @@ def _self_check() -> None:
             paths.save_config({**paths.load_config(), "pair_token": "폰열쇠시험"})
             폰창 = open_dialog(win, n)
             assert "폰 연결" in 폰창.갈래이름 and 폰창.폰QR.isHidden(), "QR 이 단추 없이 떠 있다"
+            # 테일스케일이 없는 기계에서도 돈다 — 주소는 가짜로 끼운다(꺼진 쪽은 위에서 잰다)
+            폰창.테일주소 = lambda: "100.64.0.1"
             폰창.폰단추.click()
             assert not 폰창.폰QR.isHidden() and not 폰창.폰QR.pixmap().isNull(), "QR 을 못 그렸다"
             폰창.deleteLater()
             assert toggle_full(win) == "창" and not win.isFullScreen()
             assert toggle_full(win) == "전체화면" and win.isFullScreen()
             assert paths.load_config().get("화면방식") == "전체화면"
+
+            # ★★ **최대화에서 F11 을 켰다 끄면 최대화로 돌아와야 한다.**
+            #   창에게 「지금 전체화면이냐」고 물어 판단했더니, 윈도우에서는 아직
+            #   반영이 안 돼 거짓으로 왔다 — 연달아 누르면 두 번째가 안 먹은 것처럼
+            #   보였고(세 번째에 풀렸다), 그 김에 돌아갈 자리를 「창」으로 덮어써
+            #   최대화로 안 돌아왔다(실기 · 2026-09-25 · 윈도우).
+            #   ★ **창이 안 따라온 상태를 일부러 만들어** 잰다 — 맥에서는 곧바로
+            #     반영돼서, 그냥 재면 이 병을 영영 못 잡는다.
+            apply_screen(win, "최대화")
+            assert toggle_full(win) == "전체화면"
+            win.showMaximized()            # 창 상태만 어긋나게 만든다(우리 기억은 전체화면)
+            assert toggle_full(win) == "최대화", "전체화면을 풀었는데 최대화로 안 돌아온다"
+            # ★★ **전체화면에서 나올 때는 먼저 보통 창으로 내린다.** 윈도우에서
+            #   `showMaximized()` 를 바로 부르면 아무 일도 안 일어나, F11 이 한두 번
+            #   헛눌리고 서너 번째에야 풀렸다(실기 · 2026-09-25 · 창 상태를 0.01초마다
+            #   재서 잡았다). Qt 문서도 `showNormal()` 을 부르라고 적어 뒀다.
+            #   ★ **맥에서는 그 증상 자체를 못 만든다** — 여기서는 그냥도 풀린다.
+            #     그래서 픽셀이 아니라 **부르는 차례**를 잰다. 약한 검사지만,
+            #     이 줄이 지워지는 것은 막는다.
+            class _부름기록:
+                def __init__(자기): 자기.간것 = []
+                def showNormal(자기): 자기.간것.append("보통")
+                def showMaximized(자기): 자기.간것.append("최대화")
+                def showFullScreen(자기): 자기.간것.append("전체화면")
+            _적이 = _부름기록()
+            apply_screen(_적이, "전체화면")
+            apply_screen(_적이, "최대화")
+            assert _적이.간것 == ["전체화면", "보통", "최대화"], \
+                f"전체화면에서 곧바로 최대화로 간다 — 윈도우에서 안 풀린다: {_적이.간것}"
+
+            # 연달아 눌러도 돌아갈 자리를 안 잃는다
+            apply_screen(win, "최대화")
+            toggle_full(win)
+            toggle_full(win)
+            assert toggle_full(win) == "전체화면", "연달아 눌렀더니 방식이 어긋난다"
+            assert win._앞화면방식 == "최대화", f"돌아갈 자리를 잃었다: {win._앞화면방식}"
             창.deleteLater(); 다시.deleteLater(); win.deleteLater()
             n.conn.close()
         finally:

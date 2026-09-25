@@ -405,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
             from PyQt5.QtWidgets import QApplication, QMessageBox
 
             paths.pin_qt_plugins()      # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
+            import theme as _꼴
+            _꼴.고해상도켜기()           # 앱보다 먼저여야 먹는다
             app = QApplication.instance() or QApplication(sys.argv)
             QMessageBox.information(
                 None, "VC", "VC가 이미 떠 있어. 작업표시줄을 봐.  "
@@ -417,8 +419,10 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt5.QtWidgets import QApplication
 
     paths.pin_qt_plugins()              # 한글 경로에서 Qt 가 제 플러그인을 못 찾는다
+    import theme
     import ui
 
+    theme.고해상도켜기()                 # 앱보다 먼저여야 먹는다
     app = QApplication(sys.argv)
     # 창부터 띄우고 훑기는 뒤에서 돈다 — 2만 개면 훑는 데 6초, 10만 개면 30초다.
     win = ui.MainWindow(ui.Notes(paths.notes_dir(), str(paths.index_path()), index_now=False),
@@ -437,10 +441,10 @@ def main(argv: list[str] | None = None) -> int:
     #   창이 다 선 뒤에 말한다 — 짓는 중에 말하면 첫 인사에 덮인다.
     from PyQt5.QtCore import QTimer as _때알림
 
-    _때알림.singleShot(1200, win.모델없으면알리기)
+    _때알림.singleShot(1200, lambda: win.모델없으면알리기())
     # ★★ **켤 때 새 판이 있는지 본다.** 딴 실에서 묻고, 있으면 말한다 —
     #   조용히 갈아 끼우지 않는다(오너 2026-09-24).
-    _때알림.singleShot(3000, win.새판찾기)
+    _때알림.singleShot(3000, lambda: win.새판찾기())
     if 화면상태:
         _화면상태재기(app, win)
     code = app.exec_()
@@ -497,7 +501,7 @@ def _화면상태재기(app, win, 기다림_ms: int = 9000) -> None:
 
     # 창 관리자가 최소에서 막는다 — 멈춘 자리가 사람이 끌어서 닿는 최소다.
     QTimer.singleShot(기다림_ms - 1500, lambda: win.resize(1, 1))
-    QTimer.singleShot(기다림_ms, 적기)
+    QTimer.singleShot(기다림_ms, lambda: 적기())
 
 
 def _나를(*인자: str, 기한: int = 900) -> tuple[int | None, float, str]:
@@ -512,7 +516,7 @@ def _나를(*인자: str, 기한: int = 900) -> tuple[int | None, float, str]:
     t0 = time.perf_counter()
     try:
         r = subprocess.run(머리 + list(인자), capture_output=True, timeout=기한,
-                           env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8"), **paths.창안띄우기())
     except subprocess.TimeoutExpired:
         return None, time.perf_counter() - t0, f"{기한}초 넘어 끊었다"
     # ★ 구운 exe 의 표준출력은 UTF-8 이 아닐 수 있다(cp949 로 와서 「통과」가 깨졌다)
@@ -739,7 +743,7 @@ def _self_check() -> None:
         났다 = subprocess.run(
             [sys.executable, __file__, "--그물시험"],
             env=dict(os.environ, VC_DATA=tmp, PYTHONIOENCODING="utf-8"),
-            capture_output=True, timeout=90)
+            capture_output=True, timeout=90, **paths.창안띄우기())
         # 나가기만 하면 된다 — 멈추지 않는 것이 핵심이라 종료값은 안 본다.
         죽음, 자국 = Path(tmp) / report.DEATH, Path(tmp) / report.TRAIL
         assert 죽음.exists(), "스위치가 터졌는데 죽음 기록이 아예 안 생겼다"
@@ -1056,9 +1060,106 @@ def _self_check() -> None:
     #   모듈을 하나 더할 때마다 사람이 그 목록을 기억해야 하는데, 오늘 여섯을 빠뜨렸다.
     #   그래서 **세지 않고 검사가 잡는다**(2026-09-21).
     _자리스펙 = pathlib.Path(__file__).resolve().parent
+
+    # ★★ **한글 이름 함수를 `singleShot` 에 그대로 물리면 윈도우에서 죽는다.**
+    #   PyQt 가 슬롯 이름을 아스키로 바꾸려다 `UnicodeEncodeError` 를 낸다 —
+    #   맥에서는 안 나서 여기서 **네 번** 걸렸다(2026-09-25 에 네 번째).
+    #   마지막 것은 `singleShot(1200, win.모델없으면알리기)` 였고 **창이 아예 안 떴다.**
+    #   자체점검은 `eb.main()` 을 안 지나 못 잡았다. 고칠 때마다 사람이 기억할 일이
+    #   아니라서 여기서 잡는다. `lambda: 함수()` 로 감싸면 이름을 안 넘긴다.
+    #
+    #   ★ **본 것만 막는다.** `connect` 도 같은 병인지는 **안 겪었다** — 오히려
+    #     한글 이름을 물린 `settings` 가 윈도우에서 통과한다. 그래서 `connect` 는
+    #     글로 막지 않고 **아래에서 실제로 재 본다**. 겪지도 않은 것을 막으면
+    #     멀쩡한 코드를 뜯어고치게 되고, 진짜 위험이 어느 것인지 흐려진다.
+    #   ★ 글이 아니라 **문법 나무**로 본다 — 주석·문자열에 든 같은 글자를 잘못 잡지
+    #     않고, 줄바꿈으로 흩어 놓은 것도 놓치지 않는다. `sqlite3.connect` 같은
+    #     남의 `connect` 와도 안 헷갈린다(PyQt 를 부르는 파일만 본다).
+    import ast as _나무
+
+    _한글걸린것 = []
+    for _파일 in sorted(_자리스펙.glob("*.py")):
+        _글판 = _파일.read_text(encoding="utf-8", errors="replace")
+        if "PyQt5" not in _글판:
+            continue
+        try:
+            _뿌리 = _나무.parse(_글판)
+        except SyntaxError:
+            continue
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Call) and isinstance(_마디.func, _나무.Attribute)
+                    and _마디.func.attr == "singleShot"):
+                continue
+            for _인자 in _마디.args[1:]:      # 첫 인자는 기다릴 시간이다
+                _이름 = (_인자.attr if isinstance(_인자, _나무.Attribute) else
+                       _인자.id if isinstance(_인자, _나무.Name) else "")
+                if any("가" <= _자 <= "힣" for _자 in _이름):
+                    _한글걸린것.append(f"{_파일.name}:{_마디.lineno} → {_이름}")
+    assert not _한글걸린것, (
+        "한글 이름을 singleShot 에 그대로 물렸다 — 윈도우에서 UnicodeEncodeError 로 죽는다. "
+        "`lambda: 함수()` 로 감싼다: " + " · ".join(_한글걸린것))
+
+    # ★★ **자식을 부를 때마다 윈도우는 검은 창을 띄운다.** 구운 판을 처음 깔아 켜 보니
+    #   화면 한가운데서 창이 계속 깜빡였다(실기 · 2026-09-25) — 훑기·`tailscale status`·
+    #   `nvidia-smi` 처럼 자주 부르는 것마다 한 번씩 뜬다. 맥에는 이 개념이 없어
+    #   여태 안 보였다. 부르는 자리가 마흔이 넘어 자리마다 적으면 반드시 하나는
+    #   빠진다 — `paths.창안띄우기()` 하나만 두고 여기서 빠진 자리를 잡는다.
+    _창뜨는것 = []
+    for _파일 in sorted(_자리스펙.glob("*.py")):
+        _글판 = _파일.read_text(encoding="utf-8")
+        try:
+            _뿌리 = _나무.parse(_글판)
+        except SyntaxError:
+            continue
+        _별명 = {_이름.asname or "subprocess"
+               for _마디 in _나무.walk(_뿌리) if isinstance(_마디, _나무.Import)
+               for _이름 in _마디.names if _이름.name == "subprocess"}
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Call) and isinstance(_마디.func, _나무.Attribute)
+                    and _마디.func.attr in ("run", "Popen")
+                    and isinstance(_마디.func.value, _나무.Name)
+                    and _마디.func.value.id in _별명):
+                continue
+            if "창안띄우기" not in (_나무.get_source_segment(_글판, _마디) or ""):
+                _창뜨는것.append(f"{_파일.name}:{_마디.lineno}")
+    assert not _창뜨는것, (
+        "자식을 부르는데 `**paths.창안띄우기()` 가 없다 — 윈도우에서 검은 창이 깜빡인다: "
+        + " · ".join(_창뜨는것))
+
+    # ★ `connect` 는 정말 괜찮은지 **여기서 직접 재 본다.** 괜찮다고 믿고 넘어가면,
+    #   어느 날 PyQt 가 바뀌어 같은 병이 나도 창이 안 뜰 때까지 모른다.
+    #   깨지면 위 막이를 `connect` 까지 넓히고 물린 자리를 감싸야 한다는 뜻이다.
+    try:
+        from PyQt5.QtCore import QObject, pyqtSignal
+
+        class _신호집(QObject):
+            # ★ 신호 **이름**은 영문이어야 한다(그건 딴 규칙이고 이미 안다).
+            #   여기서 재는 것은 **받는 쪽 이름**이 한글이어도 되느냐 하나다.
+            rang = pyqtSignal()
+
+        _온것 = []
+
+        def 받는이():                      # 일부러 한글 이름이다
+            _온것.append(1)
+
+        _집 = _신호집()
+        _집.rang.connect(받는이)
+        _집.rang.emit()
+        assert _온것 == [1], "한글 이름이 신호를 못 받았다"
+    except UnicodeEncodeError as _탈:
+        raise AssertionError(
+            "`connect` 도 한글 이름을 못 받는다 — 위 막이를 connect 까지 넓히고 "
+            f"물린 자리를 `lambda:` 로 감싸야 한다: {_탈}") from None
+
     _스펙 = _자리스펙 / "VC.spec"
     if _스펙.exists():
         _스펙글 = _스펙.read_text(encoding="utf-8", errors="replace")
+        # ★★ **명세도 한글을 찍는다.** 이 파일은 PyInstaller 가 제 프로세스에서 돌려
+        #   VC 의 막이를 안 지나므로, 영어권 윈도우(cp1252)에서 **찍는 줄 하나 때문에**
+        #   굽기가 통째로 멈췄다(CI · 2026-09-25). 스스로 그 막이를 부르게 해 뒀고
+        #   여기서 지킨다 — 찍기는 굽기의 곁다리지 굽기 자체가 아니다.
+        assert "import paths" in _스펙글, \
+            "VC.spec 이 paths 를 안 부른다 — 한글을 찍다 영어권 윈도우에서 굽기가 멈춘다"
         _안적힌 = []
         for _파일 in sorted(_자리스펙.glob("*.py")):
             _이름 = _파일.stem
@@ -1165,9 +1266,17 @@ def _모두검사() -> int:
     터진것, 잰것 = [], []
     for 이름 in 모듈들:
         t0 = time.perf_counter()
-        난것 = subprocess.run([sys.executable, str(자리 / f"{이름}.py"), "--check"],
-                             capture_output=True, text=True, errors="replace",
-                             cwd=str(자리), timeout=600)
+        # ★ 자식은 UTF-8 로 찍고 UTF-8 로 읽는다. 안 그러면 윈도우(cp949)에서
+        #   실패 줄이 통째로 깨져 무엇이 터졌는지 못 읽는다.
+        # ★★ **`-X faulthandler` 를 붙인다.** 접근 위반으로 죽으면 파이썬은 자국을
+        #   한 줄도 안 남기고 프로세스가 사라진다 — 그걸 좁히느라 하루를 썼다
+        #   (2026-09-24 · 윈도우에서만 나던 탈 셋). 이걸 붙이면 죽는 순간의
+        #   **파일과 줄 번호**가 찍혀, 다음에는 처음부터 어디인지 보인다.
+        난것 = subprocess.run([sys.executable, "-X", "faulthandler",
+                             str(자리 / f"{이름}.py"), "--check"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             cwd=str(자리), timeout=600,
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **paths.창안띄우기())
         초 = time.perf_counter() - t0
         잰것.append((이름, 난것.returncode, 초))
         if 난것.returncode != 0:
@@ -1175,8 +1284,12 @@ def _모두검사() -> int:
             # ★ **끝난 코드를 같이 적는다.** 「통과」라고 찍고도 0이 아닌 채 끝나는 일이
             #   있었다(창을 띄우는 `ui_check` 가 정리 중에 그랬다) — 마지막 줄만 보면
             #   무엇이 잘못됐는지 알 길이 없다.
-            터진것.append((이름, f"[끝난 코드 {난것.returncode}] "
-                          + (끝[-1][:110] if 끝 else "(말이 없다)")))
+            # ★ **뭉개서 죽은 것은 마지막 한 줄로 안 된다.** 접근 위반은
+            #   `faulthandler` 가 여러 줄로 자국을 찍으므로 그 자리를 같이 보여 준다.
+            _뭉갬 = 난것.returncode < 0 or 난것.returncode > 0x40000000
+            _보일 = ("\n      ".join(줄[:110] for 줄 in 끝[-5:]) if _뭉갬 and 끝
+                   else 끝[-1][:110] if 끝 else "(말이 없다 — 자국조차 없다)")
+            터진것.append((이름, f"[끝난 코드 {난것.returncode}] " + _보일))
     for 이름, 코드, 초 in 잰것:
         말하기(f"  {'✔' if 코드 == 0 else '✘'} {이름:18s} {초:5.1f}초")
     말하기(f"{len(잰것)}개 중 {len(잰것) - len(터진것)}개 통과 · "

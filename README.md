@@ -8,6 +8,9 @@
 > - **윈도우** → [설치-윈도우.md](설치-윈도우.md) ← 이 문서 하나면 된다
 > - **맥** → `cd pc && bash build_mac.sh`
 >
+> **[내려받기 (Releases)](https://github.com/VULCAN-HUB/VC/releases/latest)** — 맥 `.dmg` · 윈도우 설치 `.exe`
+> 한 번 깔면 그다음은 VC 가 새 판을 알려 준다.
+>
 > **기록도 모델도 들어 있지 않다.** 빈 창고로 시작하고, 모델은 VC 안에서 받는다 —
 > 처음 켜면 어디를 눌러야 하는지 VC 가 말해 준다.
 

@@ -21,13 +21,37 @@ import re
 import sys
 from pathlib import Path
 
+def _한글도찍히게() -> None:
+    """찍는 자리를 **UTF-8 로 돌린다.** `paths` 를 부르는 순간(= VC 가 시작하는 순간) 돈다.
+
+    ★★ **VC 는 켜면서 한글을 찍는다.** 그런데 윈도우 콘솔은 그 기계의 코드페이지를
+    따르고, 영어권 윈도우는 **cp1252** 라 한글을 못 찍는다 — `UnicodeEncodeError` 로
+    **켜자마자 죽는다.** 오너의 윈도우는 한국어(cp949)라 여태 한 번도 안 났다.
+    공개로 올린 프로그램이니 남이 첫 줄에서 바로 밟을 자리였다.
+
+    실제로 CI 의 영어권 윈도우에서 두 번 밟았다(2026-09-25) — 가짜 손이 한 번,
+    내가 쓴 탐침이 한 번. 둘 다 따로 고치다가 **뿌리가 같다**는 것을 알았다.
+
+    ★ `errors="replace"` 다. 못 찍는 글자 하나 때문에 프로그램이 죽는 것보다
+      `?` 로 찍히는 쪽이 낫다 — **찍기는 일의 곁다리지 일 자체가 아니다.**
+    ★ 부르는 자리가 여기 하나다. 파일마다 적으면 새로 만든 파일에서 또 샌다.
+    """
+    for 것 in (sys.stdout, sys.stderr):
+        try:
+            것.reconfigure(encoding="utf-8", errors="replace")   # 파이썬 3.7+
+        except (AttributeError, ValueError, OSError):
+            pass        # 파이프로 묶였거나 딴 것으로 갈렸으면 그냥 둔다
+
+
+_한글도찍히게()
+
 APP_NAME = "VC"
 
 # ★ **판 번호는 여기 한 자리에만 적는다.** 그동안 exe 속성에는 `0.1.0.0` 이
 # 박혀 있었고 진짜 판(v0.1.54)은 공유 폴더 파일 이름과 내 머릿속에만 있었다.
 # 되돌릴 판을 고르려면 **쓰는 사람이 exe 만 보고 알 수 있어야 한다.**
 # 굽는 스크립트가 이 값을 읽어 `version.txt` 를 만들고, 진단에도 같이 적는다.
-VERSION = "0.5.19"
+VERSION = "0.5.21"
 
 
 def _qt_runtime_first() -> bool:
@@ -87,6 +111,16 @@ def pin_runtime() -> bool:
 # 이미 새 런타임이 프로세스에 있으므로 괜찮다.
 _PINNED = False
 _PINNED = pin_runtime()
+# ★★ **못 붙들었으면 말한다.** 이대로 onnxruntime 을 올리면 프로세스가 **오류도 없이
+#   통째로 죽는다**(0xC0000005). 윈도우 실기에서 `ui`·`ui_check` 가 딱 그렇게 죽었고,
+#   끝난 코드 말고는 아무 단서가 없었다 — 「조용히 실패하지 않는다」를 여기에도 적용한다.
+#   대개 까닭은 **VC++ 재배포 패키지가 없는 것**이다.
+if os.name == "nt" and not _PINNED:
+    sys.stderr.write(
+        "★ C++ 런타임을 못 붙들었다 — 뜻 검색(onnxruntime)을 올리면 프로세스가\n"
+        "  통째로 죽을 수 있다. 이것부터 깔아라:\n"
+        "    winget install --id Microsoft.VCRedist.2015+.x64\n")
+    sys.stderr.flush()
 
 
 def qt_plugins_dir() -> Path | None:
@@ -139,11 +173,104 @@ def pin_qt_plugins() -> bool:
     if 곳 is None:
         return False        # 구운 판은 PyInstaller 가 제 길로 넣는다
 
-    자리 = str(곳)
+    자리 = 곳.as_posix()     # Qt 는 윈도우에서도 「/」 로 돌려준다 — 「\」 로 대면 늘 없다고 본다
     if 자리 not in QCoreApplication.libraryPaths():
         QCoreApplication.addLibraryPath(자리)
     _QT_PINNED = 자리 in QCoreApplication.libraryPaths()
     return _QT_PINNED
+
+
+def 화면없이() -> None:
+    """화면 없이 Qt 를 띄울 채비. **자체점검은 모두 이 한 줄로 시작한다.**
+
+    ★★ **윈도우의 offscreen 판은 시스템 글꼴을 안 본다.** 맥·리눅스와 달리 글꼴
+    데이터베이스가 통째로 비고(`QFontDatabase: Cannot find font directory` 가
+    수백 줄 찍힌다), 그 상태로 서식 있는 글을 재면 빈 글꼴을 만져 **접근 위반으로
+    프로세스가 통째로 죽는다.** `ui.py` 의 `단축키보기` → `box.open()` 에서 그랬고,
+    파이썬 자국을 안 남겨서 `-X faulthandler` 로 겨우 잡았다(2026-09-24).
+    글자 치수로 자리를 잡는 검사(graph3d 이름표 · panels 칸 높이)도 같이 흔들린다.
+
+    ★ **검사판만의 일이다** — 진짜로 켤 때는 windows 판이라 시스템 글꼴을 쓴다.
+
+    ★ 여섯 군데가 각자 `QT_QPA_PLATFORM` 을 놓고 있었다. 한 곳에 둔다 —
+      찾는 쪽과 고치는 쪽이 갈리면 한 군데는 반드시 빠진다.
+    """
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if os.name == "nt":
+        os.environ.setdefault(
+            "QT_QPA_FONTDIR", str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"))
+    if os.name == "nt" or os.environ.get("VC_NO_MSGBOX") == "1":
+        _상자안띄우기()
+
+
+def _상자안띄우기() -> None:
+    """윈도우 + offscreen 에서 `QMessageBox` 를 **화면에 안 붙인다**. 검사판 전용.
+
+    ★★ **윈도우에서 offscreen 으로 `QMessageBox` 를 띄우면 프로세스가 통째로 죽는다**
+    (접근 위반). `QDialog` 는 `show` 도 `open` 도 멀쩡하고 `QMessageBox` 만 그렇다 —
+    상자는 뜰 때 **윈도우에서만 도는 코드**를 지나는데(시스템 메뉴·소리·접근성)
+    거기가 진짜 창을 요구하고, offscreen 에는 진짜 창이 없다.
+
+    2026-09-24 에 하루를 들여 좁혔다. 아닌 것부터 적어 둔다 — 다시 파지 않게:
+
+    | 재 본 것 | 결과 |
+    |---|---|
+    | 글꼴이 없어서 | 아니다(그건 맞아서 `QT_QPA_FONTDIR` 로 따로 고쳤다) |
+    | onnxruntime·Qt 부르는 차례 | 아니다 — `pin_runtime()` 이 듣는다 |
+    | 마우스 자리·화면 찾기 | 아니다 — 셋 다 산다 |
+    | Qt 판이 낮아서 | **아니다** — 윈도우용 Qt 는 5.15.2 가 끝이라 올릴 데가 없다 |
+    | 표·글꼴 꾸밈·부모 창·단추 | 아니다 — 민글·부모없음도 죽는다 |
+    | `WA_DontShowOnScreen` 으로 안 붙이기 | 아니다 — 그래도 죽는다 |
+
+    ★ **진짜 앱은 멀쩡하다.** 켤 때는 `windows` 판이라 진짜 창이 있고 상자는 잘 뜬다.
+      이것은 화면 없이 돌릴 때만 나는 Qt 쪽 탈이다.
+
+    ★ **재는 것은 안 줄인다.** 상자를 만들고 글을 짜고 단추를 붙이는 일은 그대로 하고,
+      마지막에 화면에 붙이는 것만 건너뛴다. `isVisible()` 은 Qt 안에서 표식 하나로
+      답하므로 그 표식을 대신 세워 준다. 막느냐(`isModal()`)는 띄우기와 무관하고,
+      `open()` 이 하던 나머지(창 막기·결과 0)도 그대로 해 둔다.
+
+    맥에서도 이 길을 재 보려면 `VC_NO_MSGBOX=1` 로 켠다
+    (이름을 영문으로 둔 까닭: zsh 는 한글 변수 이름을 못 받는다 — 세 번 걸렸다).
+    """
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QMessageBox
+
+    if getattr(QMessageBox, "_VC안띄움", False):
+        return          # 여러 검사가 한 프로세스에서 돌 수 있다
+
+    def _보이기(self, *_, **__):
+        self.setAttribute(Qt.WA_WState_Visible, True)
+
+    def _열기(self, *_, **__):
+        # `QDialog.open()` 이 하는 것에서 **화면에 붙이는 것만** 뺐다
+        self.setWindowModality(Qt.WindowModal)
+        self.setResult(0)
+        self.setAttribute(Qt.WA_WState_Visible, True)
+
+    QMessageBox.show = _보이기
+    QMessageBox.open = _열기
+    QMessageBox._VC안띄움 = True
+
+
+def 창안띄우기() -> dict:
+    """자식 프로세스를 부를 때 덧붙인다 — **윈도우에서 검은 창이 안 뜨게.**
+
+    ★★ **창 있는 앱이 자식을 부를 때마다 윈도우는 콘솔 창을 띄웠다 지운다.**
+    구운 판을 처음 깔아 켜 보니 화면 한가운데서 **검은 창이 계속 깜빡였다**
+    (실기 · 2026-09-25). 훑기·`tailscale status`·`nvidia-smi` 처럼 자주 부르는
+    것마다 한 번씩 뜬다. 맥에는 이 개념이 아예 없어 여태 안 보였다.
+
+    ★ 부르는 자리가 스물이 넘는다. 자리마다 적으면 **새로 만든 자리에서 또 샌다** —
+      그래서 여기 하나만 두고 `eb` 검사가 빠진 자리를 잡는다.
+
+        subprocess.run([...], **창안띄우기())
+    """
+    if os.name != "nt":
+        return {}
+    import subprocess
+
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
 
 
 def frozen() -> bool:
@@ -983,16 +1110,28 @@ def _self_check() -> None:
     #   구운 판이 `--doctor` 에 「v0.1.98」 을 찍어서야 알았다.
     #   **사람이 눈으로 볼 일이 아니다.** 여기서 막는다.
     #   (소스가 아니면 `git` 이 없다 — 그때는 건너뛴다.)
-    try:
+    #   ★★ **표가 있는 것만으로는 안 된다 — 그 표가 어디를 가리키는지 봐야 한다.**
+    #   처음 릴리스를 내 보고서야 알았다(2026-09-26): 표를 붙여야 굽기가 도는데,
+    #   그 굽기가 바로 이 막이에 걸려 **릴리스를 낼 수가 없었다.** 낼 때는 표가
+    #   있는 것이 정상이다. 막고 싶은 것은 「**이미 나간 판인데 코드가 더 바뀐 것**」이다.
+    #   그러니 표가 **지금 이 커밋**을 가리키면 그것은 바로 그 판을 굽는 중이다.
+    def _깃(*인자) -> str:
         import subprocess
 
-        있는태그 = subprocess.run(
-            ["git", "-C", str(Path(__file__).resolve().parent.parent), "tag", "--list",
-             f"v{VERSION}"], capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        있는태그 = ""
-    assert not 있는태그, (
-        f"v{VERSION} 태그가 이미 있다 — 이 판은 나갔다. paths.VERSION 을 올려라")
+        try:
+            return subprocess.run(
+                ["git", "-C", str(Path(__file__).resolve().parent.parent), *인자],
+                capture_output=True, text=True, timeout=10, **창안띄우기()).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""          # 소스가 아니면 git 이 없다 — 건너뛴다
+
+    있는태그 = _깃("tag", "--list", f"v{VERSION}")
+    if 있는태그:
+        태그가리킴 = _깃("rev-list", "-n", "1", f"v{VERSION}")
+        지금 = _깃("rev-parse", "HEAD")
+        assert not (태그가리킴 and 지금 and 태그가리킴 != 지금), (
+            f"v{VERSION} 태그는 이미 딴 커밋에 붙어 있다 — 그 판은 나갔다. "
+            f"paths.VERSION 을 올려라 (태그 {태그가리킴[:8]} · 지금 {지금[:8]})")
 
     # ★ **Qt 플러그인 자리 박기** — 경로에 한글이 있으면 Qt 가 제 자리를 못 찾는다.
     #   `pin_qt_plugins()` 를 되돌리면 여기서 터져야 한다.
@@ -1003,7 +1142,7 @@ def _self_check() -> None:
     곳 = qt_plugins_dir()
     assert 곳 is not None and (곳 / "platforms").is_dir(), f"Qt 플러그인 폴더가 없다: {곳}"
     assert pin_qt_plugins() and pin_qt_plugins(), "Qt 플러그인 자리를 못 박는다(두 번 불러도 돼야 한다)"
-    assert str(곳) in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
+    assert 곳.as_posix() in QCoreApplication.libraryPaths(), QCoreApplication.libraryPaths()
     # Qt 가 스스로 말하는 자리는 **한글이 깨져 있을 수 있다** — 그래서 박는 것이다.
     # 깨지지 않는 자리(영문 경로)에서는 둘이 같다. 어느 쪽이든 박은 자리는 살아 있어야 한다.
     스스로 = QLibraryInfo.location(QLibraryInfo.PluginsPath)
@@ -1123,16 +1262,14 @@ def _self_check() -> None:
     assert 창고막혔나(Path(tempfile.gettempdir()), 2.0) == ""
     # ★★ **아직 없는 자리는 막힌 것이 아니다** — 새 기계 첫 실행이 그 꼴이다
     assert 창고막혔나(Path(tempfile.gettempdir()) / "vc-없는자리-zzz", 1.0) == ""
-    # 권한으로 막힌 것은 말한다
-    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
-    _막은곳.mkdir()
-    (_막은곳 / "안").mkdir()
-    os.chmod(_막은곳, 0o000)
-    try:
-        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
-        assert "못 읽는다" in _말막, _말막
-    finally:
-        os.chmod(_막은곳, 0o755)
+    # 권한으로 막힌 것은 말한다.
+    # ★ 이 시험은 `chmod(0o000)` 으로 폴더를 막는데 **윈도우는 그 권한 비트를
+    #   무시한다** — 안 막히니 할 말도 없어 검사만 헛되이 실패한다(실기가 잡았다).
+    #   거기서는 건너뛴다. 없어서 못 재는 것과 재서 틀린 것은 다른 말이다.
+    if os.name != "nt":
+        _권한막힘시험()
+
+
 
     import threading as _실검
     import time as _때검
@@ -1186,7 +1323,60 @@ def _self_check() -> None:
                     os.environ[k] = v
     assert _적어둔자리() != Path(_나스자리), "치웠는데 아직 그 자리를 가리킨다"
 
+    # ★★ **화면 없이 띄우는 자리는 여섯이다.** 저마다 `QT_QPA_PLATFORM` 을 놓고
+    #   있었고, 윈도우 글꼴 자리를 알려 줘야 한다는 것을 알았을 때 여섯 군데를
+    #   따라다녀야 했다. 한 곳(`화면없이`)만 부르게 하고, 새는지 여기서 본다 —
+    #   찾는 쪽과 고치는 쪽이 갈리면 한 군데는 반드시 빠진다.
+    _여기 = Path(__file__).resolve().parent
+    for _판 in sorted(_여기.glob("*.py")):
+        if _판.name == "paths.py":
+            continue
+        _글 = _판.read_text(encoding="utf-8")
+        assert 'environ.setdefault("QT_QPA_PLATFORM"' not in _글, \
+            f"{_판.name} 이 화면 판을 혼자 놓는다 — `paths.화면없이()` 를 부른다"
+    assert 'QT_QPA_FONTDIR' in Path(__file__).read_text(encoding="utf-8"), \
+        "윈도우 offscreen 은 글꼴이 하나도 없다 — 글꼴 자리를 알려 줘야 죽지 않는다"
+
+    # ★★ **한글을 못 찍는 콘솔에서도 죽지 않는다.** 영어권 윈도우는 cp1252 라
+    #   VC 가 켜면서 찍는 첫 줄에서 `UnicodeEncodeError` 로 죽었다(CI 에서 두 번
+    #   밟았다 · 2026-09-25). 오너의 윈도우는 한국어(cp949)라 한 번도 안 났다.
+    #   ★ 기계를 안 가리고 잰다 — 자식에게 `PYTHONIOENCODING=cp1252` 를 물려
+    #     **cp1252 인 척**하게 만든다. 맥에서도 같은 병이 그대로 재현된다.
+    import subprocess as _딴것
+
+    def _찍어보기(딸림: dict) -> tuple:
+        난것 = _딴것.run([sys.executable, "-c", 딸림.pop("_줄")],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120,
+                       env={**os.environ, **딸림}, **창안띄우기())
+        return 난것.returncode, (난것.stdout or "") + (난것.stderr or "")
+
+    _코드, _글 = _찍어보기({"_줄": "import paths; print('한글도 찍힌다')",
+                       "PYTHONIOENCODING": "cp1252",
+                       "PYTHONPATH": str(Path(__file__).resolve().parent)})
+    assert _코드 == 0 and "한글도 찍힌다" in _글, \
+        f"한글을 못 찍는 콘솔에서 죽는다 — 영어권 윈도우가 여기 걸린다: {_코드} {_글[-300:]!r}"
+
+    # ★ 막이가 없으면 진짜로 죽는지도 본다 — 안 그러면 이 검사가 헛도는지 알 수 없다
+    _맨코드, _ = _찍어보기({"_줄": "print('한글도 찍힌다')", "PYTHONIOENCODING": "cp1252"})
+    assert _맨코드 != 0, "cp1252 인 척했는데 그냥 찍힌다 — 이 검사는 아무것도 안 재고 있다"
+
     print("paths self-check 통과")
+
+
+def _권한막힘시험() -> None:
+    import tempfile
+    from pathlib import Path
+
+    _막은곳 = Path(tempfile.mkdtemp()) / "잠긴방"
+    _막은곳.mkdir()
+    (_막은곳 / "안").mkdir()
+    os.chmod(_막은곳, 0o000)
+    try:
+        _말막 = 창고막혔나(_막은곳 / "안", 1.0)
+        assert "못 읽는다" in _말막, _말막
+    finally:
+        os.chmod(_막은곳, 0o755)
 
 
 if __name__ == "__main__":

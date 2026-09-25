@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import paths
+
 import platform
 from typing import Any
 
@@ -57,7 +59,7 @@ def build_modules(backend: Any = None, model: str = "") -> list[ModuleSpec]:
             else:
                 문 = ("set volume output volume 100" if full else
                       f"set volume output volume (output volume of (get volume settings)) + {간격}")
-            난것 = subprocess.run(["osascript", "-e", 문], capture_output=True, text=True)
+            난것 = subprocess.run(["osascript", "-e", 문], capture_output=True, text=True, **paths.창안띄우기())
             if 난것.returncode != 0:
                 raise ModuleFailed("volume", f"소리를 못 바꿨다: {난것.stderr.strip()[:120]}")
             return word

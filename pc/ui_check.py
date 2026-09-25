@@ -21,6 +21,8 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QShortcut, QToolButton
 
 # 앱을 여기 붙들어 둔다 — 창보다 늦게 죽어야 한다(아래 `run` 설명 참고).
 _앱 = None
+# 만든 창도 여기 붙들어 둔다 — 쓰레기 치우기가 검사 도중에 창을 거둬 가면 죽는다.
+_창들: list = []
 
 import notes as notes_module
 import paths
@@ -42,7 +44,7 @@ def run() -> None:
     import os
     import tempfile
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     # ★ **앱이 창보다 먼저 죽으면 프로세스가 통째로 끝난다.**
     # `app` 을 이 함수의 지역 변수로만 두면, 함수가 끝날 때 앱이 먼저 죽고 남은
     # 창들이 그 뒤에 죽는다 — Qt 가 이미 없는 것을 만져 접근 위반이 난다.
@@ -53,6 +55,29 @@ def run() -> None:
     global _앱
     _앱 = QApplication.instance() or QApplication([])
     app = _앱
+
+    # ★★ **만든 창을 다 붙들어 둔다.** 검사는 주 창을 스무 개 넘게 만들고 그냥 버리는데,
+    #   창과 창이 물린 람다가 서로를 붙들어 **고리**가 된다. 파이썬의 쓰레기 치우기가
+    #   그 고리를 **아무 때나** 끊고, 마침 그 창 앞으로 온 신호를 꺼내는 중이면
+    #   이미 없는 것을 만져 프로세스가 통째로 죽는다(접근 위반).
+    #
+    #   윈도우에서 **서른 번에 다섯 번** 그랬다(2026-09-25 · CI 에서 재서 잡았다).
+    #   자국은 늘 같은 꼴이었다 — `ui.py` 의 <lambda> · 바로 앞은 `processEvents()`.
+    #   자리는 매번 달랐다(323 · 2259 …). 때를 못 잡으니 「다시 돌리면 되겠지」로
+    #   넘어가기 쉬운 꼴이고, 실제로 그래서 하루를 흘렸다.
+    #
+    #   ★ 앱을 붙들어 둔 것과 **같은 까닭**이다(위 설명). 거기서 창까지 붙들었어야 했다.
+    #   ★ 진짜로 켤 때는 주 창이 하나뿐이고 `main()` 이 붙들고 있어 이 자리가 없다.
+    global _창들
+    if not getattr(MainWindow, "_VC붙듦", False):
+        _원래만들기 = MainWindow.__init__
+
+        def _붙들고만들기(자기, *것들, **딸림):
+            _원래만들기(자기, *것들, **딸림)
+            _창들.append(자기)
+
+        MainWindow.__init__ = _붙들고만들기
+        MainWindow._VC붙듦 = True
 
     with tempfile.TemporaryDirectory() as tmp:
         notes = Notes(Path(tmp) / "notes")
@@ -285,8 +310,15 @@ def run() -> None:
         import threading as _실묻기
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
+        받은몸 = []
+
         class _가짜문(BaseHTTPRequestHandler):
             def do_POST(self):
+                # ★★ **몸을 반드시 읽고 답한다.** 안 읽고 닫으면 **윈도우가 연결을
+                #   끊어버려**(RST) 부르는 쪽이 `ConnectionAbortedError` 를 받는다.
+                #   맥·리눅스는 안 읽은 것을 조용히 버려 줘서 거기서는 안 났고,
+                #   윈도우에서만 「서버에 못 물었다」로 떨어졌다(2026-09-25).
+                받은몸.append(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 몸 = _json묻기.dumps({"answer": "짧은 답 [[회의록]]",
                                     "sources": ["회의록"], "looked": ["회의록"],
                                     "why": ""}).encode()
@@ -319,6 +351,9 @@ def run() -> None:
             assert 난것묻기["답"].startswith("짧은 답"), 난것묻기
             assert 난것묻기["근거"] == ["회의록"], 난것묻기
             assert 본것 and 본것[0][1].startswith("짧은 답"), 본것
+            # 끝까지 태운다면서 **무엇을 보냈는지는 안 보고 있었다** — 물음이 실려
+            # 갔는지까지 재야 「끝까지」다
+            assert 받은몸 and "아무거나 물어본다?" in 받은몸[0].decode(), 받은몸
         finally:
             win._묻기보이기 = 옛보이기
             win.link.base, win.link.token = 옛base, 옛token
@@ -742,7 +777,7 @@ def run() -> None:
 
             reply = {"kind": "result", "text": "볼륨 올렸어", "module": "volume"}
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 return self.reply if path == "/eb/v1/ask" else None
 
         runner = Runner()
@@ -881,6 +916,20 @@ def run() -> None:
         lit = [n for n in win.graph.nodes.values() if n.graphicsEffect() is not None]
         assert lit and lit[0].title == "카페 단골", "발광이 딴 데 붙었다"
         assert win.say.text().startswith("카페 단골 얘기야."), win.say.text()
+
+        # ★★ **한 번 물었는데 같은 말이 두 줄 찍히면 안 된다.** 찾기가 하나로 좁히면
+        #   `show_note` 가 한 번 말하고 찾기 끝에서 또 한 번 말해, 대화 칸에
+        #   「… 얘기야.」가 **두 줄** 남았다(실기 · 2026-09-25 · 윈도우에서 두 번 다 그랬다).
+        #   ★ 화면 글자만 보면 **마지막 줄만 보여 안 걸린다** — 말한 횟수를 세야 한다.
+        _한말 = []
+        _옛말하기 = win.report
+        win.report = lambda 글, 근=(), **ㄴ: (_한말.append(글), _옛말하기(글, 근, **ㄴ))[1]
+        try:
+            win._ask("카페 단골")          # 하나로 좁히는 물음
+            _얘기 = [ㄱ for ㄱ in _한말 if "얘기야" in ㄱ]
+            assert len(_얘기) <= 1, f"한 번 물었는데 같은 말이 {len(_얘기)}줄: {_얘기}"
+        finally:
+            win.report = _옛말하기
         assert win.detail_kind.currentData() == "preference"
 
         # 고칠 수 있는 칸이라 본문은 **파일에 있는 그대로** 보인다. 대괄호를 벗겨
@@ -922,7 +971,7 @@ def run() -> None:
             def __init__(self):
                 self.waiting = []
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 calls.append((method, path, payload))
                 if path == "/eb/v1/remote/pending":
                     return {"sessions": self.waiting}
@@ -1033,7 +1082,7 @@ def run() -> None:
                   "state": "idle", "key": "", "label": "", "percent": 0,
                   "done_mb": 0, "total_mb": 0, "error": "", "busy": False}
 
-            def call(self, method, path, payload=None):
+            def call(self, method, path, payload=None, **_):
                 if path == "/eb/v1/models/download":
                     if method == "GET":
                         return self.dl
@@ -1052,6 +1101,32 @@ def run() -> None:
         assert picker.boxes["chat"].itemData(0) == ""
         assert "자동" in picker.boxes["chat"].itemText(0)
         assert picker.boxes["chat"].count() == 3, picker.boxes["chat"].count()
+
+        # ★★ **열자마자 채워져 있어야 한다.** 여태 이 검사는 `_chose` 를 먼저 부른
+        #   **뒤에** 목록을 읽어서, 「모델을 고른 뒤에만 채워지는」 버그를 그대로
+        #   지나쳤다 — 검사가 버그와 같은 차례로 재고 있었던 것이다.
+        #   모델이 하나도 없는 사람에게는 이 칸이 **모델을 받는 유일한 길**이라,
+        #   비어 있으면 거기서 막힌다(실기 · 오너 2026-09-25 · 구운 판을 처음 깔고).
+        assert picker.get_list.count() > 0, "열자마자 받을 목록이 비어 있다"
+        assert picker.get_box.isVisibleTo(picker), "받기 칸이 아예 안 보인다"
+
+        # ★★ **긴 항목이 칸을 밀면 안 된다.** 목록을 채우자마자 「Qwen2.5-VL 7B
+        #   (사진, 정확) 5536MB ⚠ 이 PC엔 버거움」 같은 항목이 오른쪽 칸을 밀어
+        #   **«받기» 단추가 잘리고** 창이 화면보다 크게 떴다(실기 · 2026-09-25 ·
+        #   4K 250% 윈도우 · 창 1397 인데 화면 1382). 목록이 비어 있던 동안에는
+        #   안 보이던 탈이라, 「열 때 채운다」 고침과 함께 나왔다.
+        #
+        # ★ **이 검사는 약하다 — 그렇게 적어 둔다.** 정작 재고 싶은 것(칸이 안 밀린다)은
+        #   픽셀이고, 그 값은 글꼴을 타서 기계마다 다르다. 맥에서 손으로 재 보니
+        #   판 최소 너비가 **205 → 114** 로 갈렸지만, 그 숫자를 박으면 윈도우에서
+        #   흔들린다. 그래서 **막이가 걸려 있는지**만 본다. 픽셀은 사람이 봐야 한다.
+        from PyQt5.QtWidgets import QSizePolicy as _자람검
+
+        for _칸검 in [picker.get_list, *picker.boxes.values()]:
+            assert _칸검.sizePolicy().horizontalPolicy() == _자람검.Ignored, \
+                "칸이 고른 글만큼 넓어진다 — 옆 단추가 잘린다"
+            assert _칸검.sizeAdjustPolicy() == QComboBox.AdjustToMinimumContentsLengthWithIcon, \
+                "칸이 가장 긴 항목에 맞춰 커진다"
 
         picker.boxes["chat"].setCurrentIndex(2)  # b-7b
         picker._chose("chat")
@@ -2261,10 +2336,10 @@ def run() -> None:
         import agentcli as _시엘검
 
         _맡자리 = _뿌리검사 / "CodePanel"
-        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True)
-        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True, **paths.창안띄우기())
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
-                    "commit", "-qm", "첫"], capture_output=True)
+                    "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
         _창코드.notes.write(Note(title="프로젝트 · CodePanel", kind="엔티티", body="시험"))
         _창코드.notes.reindex()
 
@@ -2309,9 +2384,9 @@ def run() -> None:
 
         # ★★ **협업도 창에서 돌아간다** — 문만 있고 창에 길이 없으면 만든 것이 아니다.
         #   짓는 손이 고치고, 보는 손은 **읽기만** 한다(둘 다 가짜로 잰다).
-        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
-                    "commit", "-qm", "둘째"], capture_output=True)
+                    "commit", "-qm", "둘째"], capture_output=True, **paths.창안띄우기())
 
         class _본손검(_시엘검.가짜):
             이름 = "보는이"
@@ -2554,6 +2629,55 @@ def run() -> None:
     app.processEvents()
     _창묻기.close()
     app.processEvents()
+
+
+    # ★★ **설정에서 크기를 바꿀 수 있어야 한다.** `Ctrl +/-` 로만 되던 것이라
+    #   단축키를 모르면 크게 뜬 화면을 줄일 길이 없었다(오너 2026-09-25).
+    #   ★ **고르는 순간 바뀌어야 한다** — 「저장」을 눌러야 보이면 몇 %가 맞는지
+    #     고를 수가 없다. 크기는 눈으로 맞추는 것이다.
+    #   ★ 여기서 잰다(설정 쪽이 아니라) — 설정 자체점검의 `win` 은 대역이라
+    #     대역에 맞춰 고치면 **진짜 주 창이 깨져도 초록불**이 뜬다.
+    import settings as _설정검
+    import theme as _꼴검
+
+    _옛배율 = _꼴검.배율()
+    try:
+        _크기창 = _설정검.open_dialog(_창묻기, _창묻기.notes)
+        assert hasattr(_크기창, "글자배율"), "설정에 크기 고르는 칸이 없다"
+        _크기창.글자배율.setCurrentIndex(_크기창.글자배율.findData(2.0))
+        app.processEvents()
+        assert abs(_꼴검.배율() - 2.0) < 0.01, f"골랐는데 안 커졌다: {_꼴검.배율()}"
+        assert abs(paths.load_config().get("글자배율", 0) - 2.0) < 0.01, \
+            "바꾼 크기가 안 남는다 — 다시 켜면 되돌아간다"
+        # 「기본」은 기계마다 다르다(맥 1.2 · 윈도우 1.0) — 그 값으로 돌아와야 한다
+        _크기창.글자배율.setCurrentIndex(_크기창.글자배율.findData(0.0))
+        app.processEvents()
+        assert abs(_꼴검.배율() - _꼴검.기본배율) < 0.01, \
+            f"「기본」이 이 기계의 기본으로 안 간다: {_꼴검.배율()}"
+        _크기창.deleteLater()
+    finally:
+        _창묻기.글자배율로(_옛배율, 말할까=False)
+
+    # ★★ **글 카드가 색 범례를 덮으면 안 된다.** 카드 높이에 바닥값(280)이 있어서
+    #   그래프가 그보다 짧아지면 카드가 그래프 밖으로 넘쳐 **바로 밑 범례 줄**을
+    #   깔고 앉았다(실기 · 2026-09-25 · 윈도우에서 오너가 봤다).
+    #   ★ **낮은 창에서 잰다** — 넓고 높은 창에서는 영영 안 걸린다. 창 크기 하나로만
+    #     재는 검사는 「우리 화면에서만 맞는」 검사가 된다.
+    _창덮 = MainWindow(Notes(Path(tempfile.mkdtemp()) / "n", ":memory:"), Store(":memory:"))
+    _창덮.show()
+    for _높이 in (1000, 700, 520, 420, 360):
+        _창덮.resize(1180, _높이)
+        app.processEvents()
+        _창덮.show_note(ROOT)
+        app.processEvents()
+        _칸 = _창덮.detail_card.geometry()
+        _범 = _창덮.legend.geometry()
+        _범 = _범.translated(_창덮.legend.parentWidget().mapTo(_창덮, _범.topLeft()) - _범.topLeft())
+        assert not _칸.intersects(_범), (
+            f"창 높이 {_높이}: 글 카드가 색 범례를 덮는다 카드={_칸} 범례={_범}")
+        assert _칸.bottom() <= _창덮.graph.geometry().bottom() + 1, (
+            f"창 높이 {_높이}: 카드가 그래프 밖으로 넘친다 {_칸} / {_창덮.graph.geometry()}")
+    _창덮.close()
 
     print("ui self-check 통과", flush=True)
     # ★★ **통과하고도 0 이 아닌 채 끝나는 일이 있었다** — 세 번에 한 번쯤 Qt 가 정리하다

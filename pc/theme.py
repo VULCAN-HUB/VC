@@ -15,6 +15,7 @@ from __future__ import annotations
 import paths
 import wiki as _위키
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,6 +48,28 @@ def _theme_file() -> Path:
 #   글꼴 목록을 뒤지느라 0.2초를 쓰고 「Malgun Gothic 없음」 경고를 찍는다.
 import sys as _sys
 _맥 = _sys.platform == "darwin"
+
+
+def 고해상도켜기() -> None:
+    """화면 배율(150%·200% …)을 따르게 한다. **`QApplication` 을 만들기 전에** 부른다.
+
+    ★★ **윈도우 Qt5 는 켜 주지 않으면 화면 배율을 무시한다.** 4K 화면에 150% 를
+    쓰는 윈도우에서 창이 손바닥만 하게 뜨고, **전체화면으로 키워도 속은 그대로
+    작았다**(실기 · 2026-09-25). 맥은 Qt 가 알아서 해서 여기서는 티가 안 났다 —
+    또 하나의 「바닥이 다른 자리」다.
+
+    ★ 반드시 앱보다 먼저다. 뒤에 부르면 Qt 가 조용히 무시한다 — 그래서 이미
+      앱이 있으면 **말을 하고** 넘어간다. 잠잠히 안 먹는 것이 제일 나쁘다.
+    """
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    if QApplication.instance() is not None:
+        import sys as _시
+        print("!! 고해상도켜기 를 앱보다 늦게 불렀다 — 배율이 안 먹는다", file=_시.stderr)
+        return
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)   # 아이콘·로고도 또렷하게
 MONO = ('"Apple SD Gothic Neo", "Menlo", monospace' if _맥 else
         '"Malgun Gothic", "Apple SD Gothic Neo", "Consolas", "Menlo", monospace')
 
@@ -55,8 +78,13 @@ MONO = ('"Apple SD Gothic Neo", "Menlo", monospace' if _맥 else
 # 한 자리에서 곱한다. 쓰는 쪽은 `theme.글자(11)` 로 적고, 배율만 바꾸면 다 같이 큰다.
 #   ※ 배율은 화면이 켜질 때 설정에서 읽어 넣는다(`theme.배율바꾸기`).
 _배율 = 1.0
-# ★ 맥 레티나에서 픽셀로 박힌 9~11px 글씨가 너무 작았다(2026-09-18 창 점검). 설정에 값이 없을 때의 시작 배율.
-기본배율 = 1.2 if _맥 else 1.0
+# 설정에 값이 없을 때의 시작 배율. **기계마다 다르다** — 한 숫자로 묶으면 한쪽이 틀어진다.
+#   맥 1.2 : 레티나에서 픽셀로 박힌 9~11px 글씨가 너무 작았다(2026-09-18 창 점검).
+#   윈도우 0.9 : 고해상도 대비를 켜자(`고해상도켜기`) 운영체제 배율이 그대로 곱해져
+#     이번엔 커졌다. 재 보고 90% 가 편하다고 했다(오너 · 2026-09-25 · 4K 윈도우).
+#   ★ 이 값은 **처음 켜는 사람에게만** 쓰인다. 한 번이라도 설정에서 고르면 그 값이
+#     남아 여기를 안 본다 — 그래서 값을 바꿔도 쓰던 사람의 화면은 안 흔들린다.
+기본배율 = 1.2 if _맥 else 0.9
 
 
 def 배율바꾸기(값: float) -> float:
@@ -454,6 +482,48 @@ def _self_check() -> None:
     for k in ("mic", "inspect", "search", "panel", "theme"):
         assert not glyph_icon(k, T.ACCENT).isNull(), k
 
+    # ★★ **앱보다 먼저 불러야만 먹는다.** 여기서는 이미 앱이 떠 있어서 못 잰다 —
+    #   딴 프로세스를 하나 띄워 **진짜로 켜지는지** 본다. 「불렀다」가 아니라
+    #   「켜졌다」를 재야 한다. 늦게 부르면 Qt 는 잠잠히 무시하므로,
+    #   말로만 재면 안 먹는 채로 초록불이 뜬다.
+    import subprocess as _딴것
+    import sys as _시스
+
+    _잰줄 = (
+        "import theme; theme.고해상도켜기();"
+        "from PyQt5.QtCore import Qt;"
+        "from PyQt5.QtWidgets import QApplication;"
+        "a=QApplication([]);"
+        "print(a.testAttribute(Qt.AA_EnableHighDpiScaling), a.testAttribute(Qt.AA_UseHighDpiPixmaps))")
+    _난것 = _딴것.run([_시스.executable, "-c", _잰줄], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                   cwd=str(Path(__file__).resolve().parent), timeout=120,
+                   env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, **paths.창안띄우기())
+    # ★ `stdout` 이 `None` 으로 오는 자리가 있었다(윈도우 CI). 무엇이 왔는지 모르면
+    #   고칠 수가 없으니 **둘을 합쳐 보고 끝난 코드까지 적는다** — 잠잠한 실패가 제일 나쁘다.
+    _나온글 = (_난것.stdout or "") + (_난것.stderr or "")
+    assert "True True" in _나온글, (
+        "화면 배율이 안 켜진다 — 윈도우 고해상도에서 창이 손바닥만 해진다 · "
+        f"끝난코드={_난것.returncode} · {_나온글[-500:]!r}")
+
+    # ★ 늦게 부르면 **잠잠히 넘어가지 않고 말을 한다** — 안 먹는데 조용하면 못 찾는다
+    _늦게 = _딴것.run(
+        [_시스.executable, "-c",
+         "from PyQt5.QtWidgets import QApplication; a=QApplication([]);"
+         "import theme; theme.고해상도켜기()"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(Path(__file__).resolve().parent), timeout=120,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, **paths.창안띄우기())
+    _늦은글 = (_늦게.stdout or "") + (_늦게.stderr or "")
+    assert "늦게 불렀다" in _늦은글, (
+        f"늦게 불러도 잠잠하다 · 끝난코드={_늦게.returncode} · {_늦은글[-300:]!r}")
+
+    # ★ 진짜로 켜는 자리가 부르고 있나 — 부르는 줄이 앱 만드는 줄보다 **앞**인지까지 본다
+    for _문 in ("eb.py", "ui.py"):
+        _글 = (Path(__file__).resolve().parent / _문).read_text(encoding="utf-8")
+        _켠데 = _글.find("고해상도켜기()")
+        _앱만든데 = _글.find("QApplication(sys.argv)")
+        assert 0 <= _켠데 < _앱만든데, f"{_문} 이 앱보다 먼저 고해상도켜기 를 안 부른다"
+
     print("theme self-check 통과")
 
 
@@ -461,7 +531,7 @@ if __name__ == "__main__":
     import os
     import sys
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     from PyQt5.QtWidgets import QApplication
 
     # QApplication을 변수에 담지 않으면 가비지 컬렉션돼 종료할 때 죽는다.

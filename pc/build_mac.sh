@@ -12,9 +12,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 START=$(date +%s)
 
-PYBIN=$(command -v python3.12 || true)
+# ★ 파이썬을 밖에서 정해 줄 수 있게 한다(`VC_PY=... bash build_mac.sh`).
+#   CI 기계에는 `python3.12` 라는 이름이 PATH 에 없을 수 있는데, 그렇다고
+#   brew 로 다시 까는 것은 십 분짜리다. 이름 하나에 매이지 않게 둔다.
+PYBIN=${VC_PY:-$(command -v python3.12 || true)}
 if [ -z "$PYBIN" ]; then
-  echo "python3.12 가 없다 — brew install python@3.12"
+  echo "python3.12 가 없다 — brew install python@3.12 (또는 VC_PY 로 자리를 준다)"
   exit 1
 fi
 
@@ -53,12 +56,18 @@ echo "== 굽는 중"
 VER=$("$PY" -c "import paths; print(paths.VERSION)")
 "$PY" -m PyInstaller VC.spec --noconfirm --clean
 codesign --force --deep --sign - dist/VC.app
-OUTDIR="../../_빌드파일"
+# ★ 낼 자리도 밖에서 정해 줄 수 있게 한다(`VC_OUT=... bash build_mac.sh`) —
+#   CI 는 제 작업 폴더 밖으로 나간 것을 못 거둬 간다.
+OUTDIR="${VC_OUT:-../../_빌드파일}"
 mkdir -p "$OUTDIR"
 ZIP="$OUTDIR/VC-mac-v$VER.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent dist/VC.app "$ZIP"     # zip 은 심볼릭 링크를 깨뜨린다 — ditto 로 묶는다
-shasum -a 256 "$ZIP"
+# ★★ **셈을 파일로 남긴다.** 찍기만 하면 아무도 못 쓴다 — VC 의 업데이트가
+#   받은 뒤 `<이름>.sha256` 을 찾아 맞춰 보는데, 없으면 **맞춰 보지도 않고 깐다.**
+#   받다 끊긴 것을 실행하는 것이 제일 나쁘다. 윈도우 쪽은 이미 그렇게 낸다.
+shasum -a 256 "$ZIP" | awk '{print $1 "  " FILENAME}' FILENAME="$(basename "$ZIP")" > "$ZIP.sha256"
+cat "$ZIP.sha256"
 
 # ★★ **단일 설치 파일(.dmg)도 같이 낸다.** zip 은 받아서 「어디로 옮기지?」가 남는다 —
 #   dmg 는 열면 «응용 프로그램» 이 옆에 있어 끌어다 놓으면 끝이다.
@@ -72,6 +81,7 @@ ln -s /Applications "$STAGE/응용 프로그램"
 rm -f "$DMG"
 hdiutil create -volname "VC $VER" -srcfolder "$STAGE" -ov -quiet -format UDZO "$DMG"
 rm -rf "$STAGE"
-shasum -a 256 "$DMG"
+shasum -a 256 "$DMG" | awk '{print $1 "  " FILENAME}' FILENAME="$(basename "$DMG")" > "$DMG.sha256"
+cat "$DMG.sha256"
 
 echo "== 끝. $ZIP · $DMG · $(( ($(date +%s) - START) / 60 ))분"

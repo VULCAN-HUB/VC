@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import paths
+
 import base64
 import os
 import subprocess
@@ -62,7 +64,7 @@ def put(name: str, value: str) -> bool:
     if sys.platform == "darwin":
         싼것 = _맥표 + base64.b64encode(value.encode("utf-8")).decode("ascii")
         return subprocess.run(["security", "add-generic-password", "-U", "-a", "VC",
-                               "-s", 앞말 + name, "-w", 싼것], capture_output=True).returncode == 0
+                               "-s", 앞말 + name, "-w", 싼것], capture_output=True, **paths.창안띄우기()).returncode == 0
     return False
 
 
@@ -79,7 +81,7 @@ def get(name: str) -> str | None:
             adv.CredFree(p)
     if sys.platform == "darwin":
         r = subprocess.run(["security", "find-generic-password", "-a", "VC", "-s", 앞말 + name, "-w"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, **paths.창안띄우기())
         if r.returncode != 0:
             return None
         나온것 = r.stdout.rstrip("\n")
@@ -98,7 +100,7 @@ def delete(name: str) -> bool:
         return bool(adv.CredDeleteW(앞말 + name, 1, 0))
     if sys.platform == "darwin":
         return subprocess.run(["security", "delete-generic-password", "-a", "VC", "-s", 앞말 + name],
-                              capture_output=True).returncode == 0
+                              capture_output=True, **paths.창안띄우기()).returncode == 0
     return False
 
 

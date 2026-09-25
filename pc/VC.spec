@@ -22,6 +22,13 @@ from PyInstaller.utils.hooks import collect_all
 # 찾다 죽었다. 손으로 돌릴 때는 cwd 가 실제 경로로 풀려 우연히 맞아서 안 보였다.
 # `SPECPATH` 는 PyInstaller 가 넣어 준다.
 HERE = Path(SPECPATH).resolve()
+
+# ★★ **여기서 찍는 한글도 UTF-8 이어야 한다.** 이 파일은 PyInstaller 가 제 프로세스에서
+#   돌리므로 VC 의 막이(`paths._한글도찍히게`)를 안 지난다 — 영어권 윈도우(cp1252)에서
+#   굽다가 **찍는 줄 하나 때문에** 통째로 멈췄다(CI · 2026-09-25).
+#   찍기는 굽기의 곁다리지 굽기 자체가 아니다. 한 자리에 둔 그 막이를 여기서도 부른다.
+sys.path.insert(0, str(HERE))
+import paths as _자리  # noqa: E402  (막이가 불러오는 순간 돈다)
 MODELS = HERE.parent / "models"
 # 상자에 담을 대화 엔진은 **CPU 판**이다. 아래 「엔진 담기」 설명 참고.
 ENGINE = HERE.parent / "빌드전용"
@@ -33,12 +40,26 @@ ENGINE = HERE.parent / "빌드전용"
 # **딸려 보내는 것은 늘 작은 쪽(e5-small)이다.** 큰 것(e5-base 279MB)은 앱 안에서
 # 받는다 — 상자를 가볍게 두기로 한 결정이고, 받으면 `paths.meaning_dir()` 이 알아서
 # 그쪽을 먼저 쓴다.
-bundle = [
-    (str(MODELS / "model.onnx"), "models"),
-    (str(MODELS / "tokenizer.json"), "models"),
-]
+# ★★ **없으면 안 넣고 굽는다 — 다만 크게 알린다.** 예전에는 꼭 있어야 했고, 없으면
+#   PyInstaller 가 「Unable to find model.onnx」로 굽기를 통째로 멈췄다. 그런데
+#   저장소에는 모델을 안 두기로 했고(쓰는 사람이 VC 안에서 받는다), 그러면 새 기계나
+#   CI 에서는 **아예 구울 수가 없다**(실제로 CI 맥이 여기서 멈췄다 · 2026-09-25).
+#   ★ 「꺼진 줄도 모른다」던 걱정은 이제 앱이 맡는다 — 켤 때 모델이 없으면 VC 가
+#     말해 주고 받는 자리를 띄운다(`모델없으면알리기`). 굽기가 막을 일이 아니다.
+bundle = []
+_빠진것 = []
+for _이름 in ("model.onnx", "tokenizer.json"):
+    if (MODELS / _이름).exists():
+        bundle.append((str(MODELS / _이름), "models"))
+    else:
+        _빠진것.append(_이름)
 if (MODELS / "piper").exists():
     bundle.append((str(MODELS / "piper"), "models/piper"))
+else:
+    _빠진것.append("piper")
+if _빠진것:
+    print(f"[VC.spec] !! 모델이 없어 안 담았다: {', '.join(_빠진것)}  ({MODELS})")
+    print("[VC.spec]    깔고 처음 켜면 VC 가 알려 주고 그 자리에서 받는다 — 굽기는 막지 않는다")
 
 # 안 넣는 것. 넣으면 상자가 몇 GB가 되고, 정작 없어도 기록 프로그램으로는 다 돌아간다.
 DROP = [
@@ -85,14 +106,28 @@ ort_datas, ort_bins, ort_hidden = collect_all("onnxruntime")
 #   (한 줄로 이어서 친다. PyPI 에는 미리 구운 휠이 없어 `--extra-index-url` 이 있어야
 #    받아진다 — 없으면 「No matching distribution found」 로 끝난다.)
 MAC = sys.platform == "darwin"
-# 맥: CUDA 가 없어 그 사슬 문제가 없다. pip 로 깐 llama-cpp-python(Metal)을 그대로 담는다 — build_mac.sh
-if MAC and not (ENGINE / "llama_cpp").is_dir():
-    ENGINE = Path(__import__("site").getsitepackages()[0])
+# ★★ **`빌드전용/` 이 없으면 깔려 있는 것을 쓴다.** 이 폴더는 오너의 개발 PC 를
+#   지키려고 만든 길이다 — 거기엔 CUDA 판이 깔려 있고, 그걸 건드리면 시험 속도가 바뀐다.
+#   그런데 **깨끗한 기계(CI·새로 받은 사람)에는 CUDA 판이 아예 없고**
+#   `requirements-win.txt` 가 CPU 판을 받아 놓는다. 그런 기계에까지 이 폴더를
+#   요구하면 **아무도 못 굽는다**(CI 윈도우가 여기서 멈췄다 · 2026-09-25).
+#   ★ 잘못 집는 걱정은 그대로 막힌다 — 아래에서 CUDA 조각이 있으면 멈춘다.
+#     「있으면 쓴다」가 아니라 **「집은 것이 CPU 판인지 본다」**가 진짜 막이다.
+if not (ENGINE / "llama_cpp").is_dir():
+    import site as _사이트
+
+    # ★ 윈도우 venv 는 `getsitepackages()[0]` 이 venv 뿌리다(맥과 다르다) —
+    #   첫 칸만 보면 못 찾는다. 다 훑는다.
+    for _곳 in [*_사이트.getsitepackages(), _사이트.getusersitepackages()]:
+        if (Path(_곳) / "llama_cpp").is_dir():
+            ENGINE = Path(_곳)
+            break
 if not (ENGINE / "llama_cpp").is_dir():
     raise SystemExit(chr(10).join([
-        f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'}",
+        f"[VC.spec] 대화 엔진이 없다: {ENGINE / 'llama_cpp'} — 깔려 있지도 않다",
         "  위 주석의 pip 한 줄로 CPU 판을 받아라. 그거 없이 구우면 흡수의 비싼",
         "  문지기가 설치본에서 한 번도 안 돈다(그런데 셈은 「다 통과」로 보인다)."]))
+print(f"[VC.spec] 대화 엔진 자리: {ENGINE}")
 sys.path.insert(0, str(ENGINE))
 llama_datas, llama_bins, llama_hidden = collect_all("llama_cpp")
 # 링크용 `.lib` 는 도는 데 필요 없다. CUDA 판을 잘못 집었는지도 여기서 걸린다.

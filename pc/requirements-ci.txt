@@ -1,0 +1,16 @@
+# CI 가 자체점검을 돌리는 데 **필요한 만큼만**.
+#
+# ★★ 무거운 것(llama-cpp-python · faster-whisper · piper-tts · pyinstaller)은 뺐다.
+#    맥 기계에서 llama-cpp-python 을 소스로 구우면 십 분이 넘는데, 검사는 그것을
+#    안 쓴다 — 모듈 맨 위에서 부르는 데가 한 군데도 없고, 쓰는 자리는 다 안에서
+#    부르며 없으면 비켜 간다. 재 보고 뺐다(모델도 없어도 된다).
+#
+# ★ 굽는 것은 딴 목록이다(`requirements-mac.txt` · `requirements-win.txt`) —
+#   거기엔 전부 들어 있어야 한다. 검사만 여윈 것으로 돈다.
+PyQt5==5.15.11
+numpy
+Pillow
+segno
+onnxruntime
+tokenizers
+sounddevice

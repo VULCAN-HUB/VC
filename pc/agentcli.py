@@ -293,7 +293,16 @@ class 가짜(손):
         # ★ 지시를 **따옴표 안에 그대로 박으면 안 된다.** 여러 줄·따옴표가 든 지시가
         #   오면 스크립트가 깨진다(협업 리뷰 지시가 실제로 그랬다). `repr` 로 감싼다.
         한줄 = " ".join((지시 or "").split())[:60]
-        조각 = ["import sys", f"print('가짜 손이 돌았다: ' + {한줄!r})"]
+        # ★★ **자식이 UTF-8 로 찍게 한다.** 안 그러면 콘솔 코드페이지를 따르는데,
+        #   영어권 윈도우는 cp1252 라 한글에서 `UnicodeEncodeError` 로 죽는다
+        #   (CI 윈도우에서 열 번 중 아홉 번 · 2026-09-25). 한국어 윈도우(cp949)에서는
+        #   안 나서 여태 몰랐다. `--모두검사` 로 돌리면 부모가 `PYTHONIOENCODING` 을
+        #   물려줘 가려졌고, `python ui.py --check` 를 곧바로 돌리면 났다 —
+        #   **사람이 손으로 돌리는 바로 그 길**이다.
+        조각 = ["import sys",
+              "sys.stdout.reconfigure(encoding='utf-8')",
+              "sys.stderr.reconfigure(encoding='utf-8')",
+              f"print('가짜 손이 돌았다: ' + {한줄!r})"]
         if self.고칠파일 and not 읽기전용:
             조각.append(
                 f"open({self.고칠파일!r}, 'w', encoding='utf-8').write({self.새글!r})")
@@ -316,7 +325,7 @@ def 손고르기(이름: str) -> 손 | None:
 def _git(자리: Path, *인자: str) -> str:
     try:
         난것 = subprocess.run(["git", "-C", str(자리), *인자],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, **paths.창안띄우기())
     except (OSError, subprocess.SubprocessError):
         return ""
     return 난것.stdout if 난것.returncode == 0 else ""
@@ -416,7 +425,8 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
         #   input from stdin…」 하고 기다린다 — 창에는 stdin 이 없으니 굳을 수 있다.
         판 = subprocess.Popen(명령줄, cwd=str(자리), env=판환경,
                             stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace", **paths.창안띄우기())
     except (OSError, ValueError) as e:
         그손.말자리 = None
         shutil.rmtree(말집, ignore_errors=True)
@@ -669,10 +679,10 @@ def _self_check() -> None:
         자리 = 뿌리 / "CliApp"
         자리.mkdir(parents=True)
         (자리 / "a.py").write_text("x = 1\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(자리), "init", "-q"], capture_output=True)
-        subprocess.run(["git", "-C", str(자리), "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", str(자리), "init", "-q"], capture_output=True, **paths.창안띄우기())
+        subprocess.run(["git", "-C", str(자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         subprocess.run(["git", "-C", str(자리), "-c", "user.name=T",
-                        "-c", "user.email=t@t", "commit", "-qm", "첫"], capture_output=True)
+                        "-c", "user.email=t@t", "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
 
         # --- 아무것도 안 바꾸는 손 ---
         난것 = 돌리기("CliApp", "가만히 있어라", 뿌리=뿌리, 손물건=가짜())

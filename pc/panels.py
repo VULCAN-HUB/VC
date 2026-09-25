@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QTextBrowser,
     QTextEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -1128,6 +1129,18 @@ class Gaps(QWidget):
             self.buttons.append(b)
 
 
+def _좁게(칸: QComboBox) -> None:
+    """고른 글이 아무리 길어도 **칸 너비를 안 밀게** 한다.
+
+    Qt 의 기본값(`AdjustToContentsOnFirstShow`)은 **가장 긴 항목에 맞춰 칸을 넓힌다.**
+    옆 칸이 좁아지거나 창이 화면보다 커지는 것이 그 대가다 — 실제로 «받기» 단추가
+    잘렸다. 글은 「…」으로 줄고, 펼치면 다 보인다.
+    """
+    칸.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    칸.setMinimumContentsLength(8)
+    칸.setSizePolicy(QSizePolicy.Ignored, 칸.sizePolicy().verticalPolicy())
+
+
 class ModelPicker(HudPanel):
     """쓸 모델을 고르는 칸 (결정 42).
 
@@ -1160,6 +1173,13 @@ class ModelPicker(HudPanel):
         self.get_label.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.5)}; font-size:{theme.글자(10)};")
         self.get_list = QComboBox()
         self.get_list.setObjectName("pick")
+        # ★★ **고른 글이 칸 너비를 정하면 안 된다.** 목록을 채우자마자
+        #   「Qwen2.5-VL 7B (사진, 정확) 5536MB ⚠ 이 PC엔 버거움」 같은 긴 항목이
+        #   오른쪽 칸을 밀어, **«받기» 단추가 칸 밖으로 잘리고** 창이 화면보다
+        #   크게 떴다(실기 · 2026-09-25 · 4K 250% 윈도우 · 창이 1397 인데 화면이 1382).
+        #   목록이 비어 있던 동안에는 안 보이던 탈이라, 목록을 채우자 같이 나왔다.
+        #   ★ 글은 「…」으로 줄고 펼치면 다 보인다 — 칸이 밀리는 것보다 낫다.
+        _좁게(self.get_list)
         self.get_button = QPushButton("받기")
         self.get_button.setObjectName("quiet")
         self.get_button.setCursor(Qt.PointingHandCursor)
@@ -1185,12 +1205,24 @@ class ModelPicker(HudPanel):
             name.setStyleSheet(f"color:{theme.css(theme.T.DIM, 0.55)}; font-size:{theme.글자(11)};")
             combo = QComboBox()
             combo.setObjectName("pick")
+            _좁게(combo)          # 모델 이름이 길어도 칸을 안 민다
             combo.activated.connect(lambda _, r=role: self._chose(r))
             self.boxes[role] = combo
             row.addWidget(name)
             row.addWidget(combo, 1)
             box.addLayout(row)
+
+        # ★★ **열 때 한 번 채운다.** 여태 `refresh_downloads()` 가 **모델을 고른 뒤에만**
+        #   돌았다 — 그래서 처음 켠 사람은 「받을 모델」 칸이 **영영 비어 있었고**
+        #   «받기» 를 눌러도 아무 일이 없었다(실기 · 오너 2026-09-25).
+        #   모델이 하나도 없는 사람에게 **모델을 받는 유일한 길**이 이 칸이다.
+        # ★ 진행률 타이머는 여기서 만들고 **받는 동안만** 돈다 — 가만있을 때
+        #   1.5초마다 서버를 두들길 까닭이 없다.
+        self._tick = QTimer(self)
+        self._tick.setInterval(1500)
+        self._tick.timeout.connect(self.refresh_downloads)
         self.refresh()
+        self.refresh_downloads()
 
     def refresh(self) -> None:
         out = self.link.call("GET", "/eb/v1/models")
@@ -1225,6 +1257,8 @@ class ModelPicker(HudPanel):
         self.get_box.show()
 
         if out["busy"] or out["state"] == "downloading":
+            if not self._tick.isActive():
+                self._tick.start()
             self.get_label.setText(
                 f"{out['label']} 받는 중 {out['percent']}% "
                 f"({out['done_mb']}/{out['total_mb']}MB)")
@@ -1239,6 +1273,7 @@ class ModelPicker(HudPanel):
         else:
             self.get_label.setText("받을 모델")
 
+        self._tick.stop()          # 다 받았거나 안 받는 중 — 두들길 까닭이 없다
         self.get_button.setText("받기")
         self.get_list.setEnabled(True)
         self.get_list.blockSignals(True)
@@ -1254,20 +1289,23 @@ class ModelPicker(HudPanel):
 
     def _get_clicked(self) -> None:
         if self.get_button.text() == "멈추기":
-            self.link.call("POST", "/eb/v1/models/download", {"cancel": True})
+            self.link.call("POST", "/eb/v1/models/download", {"cancel": True},
+                           기다림=ServerLink.느린일)
             self.refresh_downloads()
             return
         key = self.get_list.currentData()
         if not key:
             return
-        out = self.link.call("POST", "/eb/v1/models/download", {"key": key})
+        out = self.link.call("POST", "/eb/v1/models/download", {"key": key},
+                             기다림=ServerLink.느린일)
         self.say("받기 시작했어. 다 받으면 목록에 뜬다." if out and out.get("ok")
                  else "지금은 못 받아.")
         self.refresh_downloads()
 
     def _chose(self, role: str) -> None:
         name = self.boxes[role].currentData() or ""
-        out = self.link.call("POST", "/eb/v1/models", {"role": role, "name": name})
+        out = self.link.call("POST", "/eb/v1/models", {"role": role, "name": name},
+                             기다림=ServerLink.느린일)   # 모델을 내리고 올린다 — 실기 2.4초
         if out is None or not out.get("ok"):
             self.say("그 모델은 못 쓰겠어.")
             self.refresh()
@@ -1284,10 +1322,6 @@ class ModelPicker(HudPanel):
                      " 받아쓰기·목소리는 다시 켤 때 적용돼.")
         self.refresh()
         self.refresh_downloads()
-        # 받는 동안 진행률이 움직여야 멈춘 건지 도는 건지 안다.
-        self._tick = QTimer(self)
-        self._tick.timeout.connect(self.refresh_downloads)
-        self._tick.start(1500)
 
 
 class ServerLink:
@@ -1328,7 +1362,15 @@ class ServerLink:
     #   아무도 가를 수 없었다. 부드럽게 실패하되 **그 길로 갔다는 것은 보인다.**
     last_fail = ""
 
-    def call(self, method: str, path: str, payload: dict | None = None) -> dict | None:
+    # ★★ **오래 걸리는 일은 따로 잰다.** 0.35초는 「살아 있나」를 묻는 값이지,
+    #   **일을 시키는** 값이 아니다. 모델을 바꾸면 서버가 옛것을 내리고 새것을
+    #   올리느라 실기에서 **2.4초**가 걸렸는데, 화면은 0.35초에 끊고
+    #   「그 모델은 못 쓰겠어 · 서버 꺼짐」을 띄웠다 — **설정은 실제로 바뀌었는데도**.
+    #   게다가 5초 쉬기에 들어가 칸이 전부 비었다(실기 · 2026-09-25).
+    느린일 = 15.0
+
+    def call(self, method: str, path: str, payload: dict | None = None,
+             기다림: float | None = None) -> dict | None:
         if not self.token:
             self.last_fail = "토큰이 없다 (설정 파일을 못 읽었다)"
             return None
@@ -1341,14 +1383,18 @@ class ServerLink:
                      "Content-Type": "application/json"})
         t0 = time.monotonic()
         try:
-            with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+            with urllib.request.urlopen(req, timeout=기다림 or self.TIMEOUT) as r:
                 raw = r.read().decode()
                 self.down_until = 0.0
                 return json.loads(raw) if raw else {}
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
             self.last_fail = (f"{method} {path} {type(e).__name__}: {e}"
                               f" ({(time.monotonic() - t0) * 1000:.0f}ms)")
-            self.down_until = time.monotonic() + self.QUIET_SEC
+            # ★ **사람이 눌러서 가는 느린 길은 쉬기에 안 넣는다.** 넣었더니 한 번
+            #   느렸다는 이유로 5초 동안 모든 칸이 비었다 — 사람은 제가 무엇을
+            #   망가뜨린 줄 안다. 서버가 진짜 꺼졌으면 다음 물음이 알아서 잡는다.
+            if 기다림 is None:
+                self.down_until = time.monotonic() + self.QUIET_SEC
             return None
 
 
@@ -1968,7 +2014,7 @@ if __name__ == "__main__":
     import os
     import sys
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    paths.화면없이()
     from PyQt5.QtWidgets import QApplication
 
     app = QApplication(sys.argv)

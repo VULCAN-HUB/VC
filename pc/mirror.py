@@ -210,6 +210,9 @@ def _self_check() -> None:
 
     from notes import Note, Notes
 
+    # ★★ **열었으면 닫는다.** 안 닫힌 sqlite 손잡이가 남으면 맥은 그냥 지워지지만
+    #   **윈도우는 임시폴더를 못 치운다** — `PermissionError: [WinError 32]` 로
+    #   검사가 통째로 실패한다(윈도우 실기가 잡았다 · 2026-09-24).
     with tempfile.TemporaryDirectory() as tmp:
         손님 = Notes(Path(tmp) / "손님창고", str(Path(tmp) / "손님.db"))
         자국 = Path(tmp) / MEMO
@@ -303,6 +306,8 @@ def _self_check() -> None:
         보낸것들.clear()
         b5 = 보내기(손님, 보내는부르기, 자국)
         assert b5.보냄 == 1 and "못 보낼 줄" in 보낸것들[-1]["text"], (b5, 보낸것들)
+
+        손님.conn.close()      # 윈도우는 열린 db 가 있으면 임시폴더를 못 치운다
 
     print("mirror self-check 통과")
 

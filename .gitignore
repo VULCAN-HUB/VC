@@ -53,3 +53,4 @@ vc-*.lock
 pc/vc-*.lock
 vc-*
 pc/vc-*
+pc/version.txt
