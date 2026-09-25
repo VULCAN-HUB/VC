@@ -1110,16 +1110,28 @@ def _self_check() -> None:
     #   구운 판이 `--doctor` 에 「v0.1.98」 을 찍어서야 알았다.
     #   **사람이 눈으로 볼 일이 아니다.** 여기서 막는다.
     #   (소스가 아니면 `git` 이 없다 — 그때는 건너뛴다.)
-    try:
+    #   ★★ **표가 있는 것만으로는 안 된다 — 그 표가 어디를 가리키는지 봐야 한다.**
+    #   처음 릴리스를 내 보고서야 알았다(2026-09-26): 표를 붙여야 굽기가 도는데,
+    #   그 굽기가 바로 이 막이에 걸려 **릴리스를 낼 수가 없었다.** 낼 때는 표가
+    #   있는 것이 정상이다. 막고 싶은 것은 「**이미 나간 판인데 코드가 더 바뀐 것**」이다.
+    #   그러니 표가 **지금 이 커밋**을 가리키면 그것은 바로 그 판을 굽는 중이다.
+    def _깃(*인자) -> str:
         import subprocess
 
-        있는태그 = subprocess.run(
-            ["git", "-C", str(Path(__file__).resolve().parent.parent), "tag", "--list",
-             f"v{VERSION}"], capture_output=True, text=True, timeout=10, **창안띄우기()).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        있는태그 = ""
-    assert not 있는태그, (
-        f"v{VERSION} 태그가 이미 있다 — 이 판은 나갔다. paths.VERSION 을 올려라")
+        try:
+            return subprocess.run(
+                ["git", "-C", str(Path(__file__).resolve().parent.parent), *인자],
+                capture_output=True, text=True, timeout=10, **창안띄우기()).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""          # 소스가 아니면 git 이 없다 — 건너뛴다
+
+    있는태그 = _깃("tag", "--list", f"v{VERSION}")
+    if 있는태그:
+        태그가리킴 = _깃("rev-list", "-n", "1", f"v{VERSION}")
+        지금 = _깃("rev-parse", "HEAD")
+        assert not (태그가리킴 and 지금 and 태그가리킴 != 지금), (
+            f"v{VERSION} 태그는 이미 딴 커밋에 붙어 있다 — 그 판은 나갔다. "
+            f"paths.VERSION 을 올려라 (태그 {태그가리킴[:8]} · 지금 {지금[:8]})")
 
     # ★ **Qt 플러그인 자리 박기** — 경로에 한글이 있으면 Qt 가 제 자리를 못 찾는다.
     #   `pin_qt_plugins()` 를 되돌리면 여기서 터져야 한다.
