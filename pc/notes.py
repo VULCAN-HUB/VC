@@ -3763,7 +3763,7 @@ def _self_check() -> None:
         #   검사가 통째로 터진다(맥에서 실제로 그랬다). 되돌이를 만드는 방법만 다르고
         #   재려는 것은 같다 — 윈도우는 정션, 그 밖은 심볼릭 링크.
         if _os0.name == "nt":
-            _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True)
+            _sp.run(["cmd", "/c", "mklink", "/J", str(고리), str(n.root)], capture_output=True, **paths.창안띄우기())
         else:
             try:
                 _os0.symlink(n.root, 고리, target_is_directory=True)

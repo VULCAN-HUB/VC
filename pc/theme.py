@@ -497,7 +497,7 @@ def _self_check() -> None:
         "print(a.testAttribute(Qt.AA_EnableHighDpiScaling), a.testAttribute(Qt.AA_UseHighDpiPixmaps))")
     _난것 = _딴것.run([_시스.executable, "-c", _잰줄], capture_output=True, text=True, encoding="utf-8", errors="replace",
                    cwd=str(Path(__file__).resolve().parent), timeout=120,
-                   env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+                   env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, **paths.창안띄우기())
     # ★ `stdout` 이 `None` 으로 오는 자리가 있었다(윈도우 CI). 무엇이 왔는지 모르면
     #   고칠 수가 없으니 **둘을 합쳐 보고 끝난 코드까지 적는다** — 잠잠한 실패가 제일 나쁘다.
     _나온글 = (_난것.stdout or "") + (_난것.stderr or "")
@@ -512,7 +512,7 @@ def _self_check() -> None:
          "import theme; theme.고해상도켜기()"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         cwd=str(Path(__file__).resolve().parent), timeout=120,
-        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, **paths.창안띄우기())
     _늦은글 = (_늦게.stdout or "") + (_늦게.stderr or "")
     assert "늦게 불렀다" in _늦은글, (
         f"늦게 불러도 잠잠하다 · 끝난코드={_늦게.returncode} · {_늦은글[-300:]!r}")

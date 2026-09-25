@@ -253,6 +253,26 @@ def _상자안띄우기() -> None:
     QMessageBox._VC안띄움 = True
 
 
+def 창안띄우기() -> dict:
+    """자식 프로세스를 부를 때 덧붙인다 — **윈도우에서 검은 창이 안 뜨게.**
+
+    ★★ **창 있는 앱이 자식을 부를 때마다 윈도우는 콘솔 창을 띄웠다 지운다.**
+    구운 판을 처음 깔아 켜 보니 화면 한가운데서 **검은 창이 계속 깜빡였다**
+    (실기 · 2026-09-25). 훑기·`tailscale status`·`nvidia-smi` 처럼 자주 부르는
+    것마다 한 번씩 뜬다. 맥에는 이 개념이 아예 없어 여태 안 보였다.
+
+    ★ 부르는 자리가 스물이 넘는다. 자리마다 적으면 **새로 만든 자리에서 또 샌다** —
+      그래서 여기 하나만 두고 `eb` 검사가 빠진 자리를 잡는다.
+
+        subprocess.run([...], **창안띄우기())
+    """
+    if os.name != "nt":
+        return {}
+    import subprocess
+
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+
+
 def frozen() -> bool:
     """설치본으로 도는 중인가."""
     return getattr(sys, "frozen", False)
@@ -1095,7 +1115,7 @@ def _self_check() -> None:
 
         있는태그 = subprocess.run(
             ["git", "-C", str(Path(__file__).resolve().parent.parent), "tag", "--list",
-             f"v{VERSION}"], capture_output=True, text=True, timeout=10).stdout.strip()
+             f"v{VERSION}"], capture_output=True, text=True, timeout=10, **창안띄우기()).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         있는태그 = ""
     assert not 있는태그, (
@@ -1316,7 +1336,7 @@ def _self_check() -> None:
         난것 = _딴것.run([sys.executable, "-c", 딸림.pop("_줄")],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=120,
-                       env={**os.environ, **딸림})
+                       env={**os.environ, **딸림}, **창안띄우기())
         return 난것.returncode, (난것.stdout or "") + (난것.stderr or "")
 
     _코드, _글 = _찍어보기({"_줄": "import paths; print('한글도 찍힌다')",

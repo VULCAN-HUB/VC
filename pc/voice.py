@@ -272,7 +272,7 @@ class Mouth:
                 elif self._voice is not None:
                     self._voice.Speak(text)
                 elif platform.system() == "Darwin":
-                    subprocess.run(["say", text], check=False)
+                    subprocess.run(["say", text], check=False, **paths.창안띄우기())
             except Exception as 탈:
                 # ★ **말하기가 하던 일을 끌고 죽으면 안 된다.** 소리 장치가 없거나
                 #   목소리가 안 깔린 기계에서 나는 탈이다 — 조용히 넘기지는 않는다.

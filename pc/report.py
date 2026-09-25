@@ -257,7 +257,7 @@ def _유닉스메모리() -> tuple[int, int]:
     최고 //= 1048576 if sys.platform == "darwin" else 1024
     try:
         지금 = int(subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
-                                text=True, timeout=5).stdout.strip()) // 1024
+                                text=True, timeout=5, **paths.창안띄우기()).stdout.strip()) // 1024
     except (OSError, ValueError, subprocess.SubprocessError):
         지금 = 최고
     if not 최고:

@@ -2296,10 +2296,10 @@ def run() -> None:
         import agentcli as _시엘검
 
         _맡자리 = _뿌리검사 / "CodePanel"
-        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True)
-        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "init", "-q"], capture_output=True, **paths.창안띄우기())
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
-                    "commit", "-qm", "첫"], capture_output=True)
+                    "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
         _창코드.notes.write(Note(title="프로젝트 · CodePanel", kind="엔티티", body="시험"))
         _창코드.notes.reindex()
 
@@ -2344,9 +2344,9 @@ def run() -> None:
 
         # ★★ **협업도 창에서 돌아간다** — 문만 있고 창에 길이 없으면 만든 것이 아니다.
         #   짓는 손이 고치고, 보는 손은 **읽기만** 한다(둘 다 가짜로 잰다).
-        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True)
+        _깃맡검.run(["git", "-C", str(_맡자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃맡검.run(["git", "-C", str(_맡자리), "-c", "user.name=T", "-c", "user.email=t@t",
-                    "commit", "-qm", "둘째"], capture_output=True)
+                    "commit", "-qm", "둘째"], capture_output=True, **paths.창안띄우기())
 
         class _본손검(_시엘검.가짜):
             이름 = "보는이"

@@ -3760,7 +3760,7 @@ class MainWindow(QWidget):
                 self.update_found.emit({"탈": 잰것.get("왜") or "못 받았다"})
                 return
             try:
-                _돌림.Popen(_새판.깔기명령(잰것["자리"]))
+                _돌림.Popen(_새판.깔기명령(잰것["자리"]), **paths.창안띄우기())
                 self.update_found.emit({"열었다": 잰것["자리"]})
             except Exception as e:
                 self.update_found.emit({"탈": f"못 열었다: {type(e).__name__}"})

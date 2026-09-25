@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+import paths
+
 import re
 import subprocess
 from pathlib import Path
@@ -65,7 +67,7 @@ def _git(자리: Path, *인자: str) -> bool:
     """git 한 번. **없거나 실패해도 프로젝트는 선다** — git 은 있으면 좋은 것이지 조건이 아니다."""
     try:
         난것 = subprocess.run(["git", "-C", str(자리), *인자],
-                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, **paths.창안띄우기())
         return 난것.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -456,10 +458,10 @@ def _self_check() -> None:
         # git 이 있으면 신원까지 박는다. 없어도 프로젝트는 선다.
         if "git" in 난것["만든것"]:
             이름난것 = subprocess.run(["git", "-C", str(자리), "config", "user.name"],
-                                   capture_output=True, text=True, encoding="utf-8")
+                                   capture_output=True, text=True, encoding="utf-8", **paths.창안띄우기())
             assert 이름난것.stdout.strip() == GIT_이름, 이름난것.stdout
             메일난것 = subprocess.run(["git", "-C", str(자리), "config", "user.email"],
-                                   capture_output=True, text=True, encoding="utf-8")
+                                   capture_output=True, text=True, encoding="utf-8", **paths.창안띄우기())
             assert 메일난것.stdout.strip() == GIT_메일
 
         # ★ **이미 있으면 안 덮는다**
@@ -516,9 +518,9 @@ def _self_check() -> None:
         난것맡 = 차리기(창고맡, "HandOff", "맡기기 시험", 뿌리=뿌리맡)
         자리맡 = Path(난것맡["자리"])
         (자리맡 / "a.py").write_text("x = 1\n", encoding="utf-8")
-        _깃맡.run(["git", "-C", str(자리맡), "add", "-A"], capture_output=True)
+        _깃맡.run(["git", "-C", str(자리맡), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃맡.run(["git", "-C", str(자리맡), "-c", "user.name=T", "-c", "user.email=t@t",
-                  "commit", "-qm", "첫"], capture_output=True)
+                  "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
         창고맡.reindex()
 
         난것 = 맡기기(창고맡, "HandOff", "a.py 의 x 를 2로 바꿔라", 뿌리=뿌리맡,
@@ -556,9 +558,9 @@ def _self_check() -> None:
         창고둘.reindex()
         자리둘 = Path(차리기(창고둘, "Duet", "협업 시험", 뿌리=뿌리둘)["자리"])
         (자리둘 / "a.py").write_text("x = 1\n", encoding="utf-8")
-        _깃둘.run(["git", "-C", str(자리둘), "add", "-A"], capture_output=True)
+        _깃둘.run(["git", "-C", str(자리둘), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃둘.run(["git", "-C", str(자리둘), "-c", "user.name=T", "-c", "user.email=t@t",
-                  "commit", "-qm", "첫"], capture_output=True)
+                  "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
         창고둘.reindex()
 
         class _보는가짜(_시둘.가짜):
@@ -605,9 +607,9 @@ def _self_check() -> None:
         # ★★ **보는 손이 고치면 탈로 잡는다.**
         #   ★ 앞 판에서 고친 것을 커밋해 둔다 — 안 그러면 「원래 더럽던 것」으로 잡혀
         #     바뀐 것이 없다고 보고 보는 손을 안 부른다(검사 짜임이 틀렸던 자리다).
-        _깃둘.run(["git", "-C", str(자리둘), "add", "-A"], capture_output=True)
+        _깃둘.run(["git", "-C", str(자리둘), "add", "-A"], capture_output=True, **paths.창안띄우기())
         _깃둘.run(["git", "-C", str(자리둘), "-c", "user.name=T", "-c", "user.email=t@t",
-                  "commit", "-qm", "둘째"], capture_output=True)
+                  "commit", "-qm", "둘째"], capture_output=True, **paths.창안띄우기())
         class _말안듣는보는손(_시둘.손):
             """읽기전용이라 해도 **고치는** 손. 진짜 CLI 가 말을 안 들을 수 있다."""
 

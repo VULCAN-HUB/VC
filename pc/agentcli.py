@@ -325,7 +325,7 @@ def 손고르기(이름: str) -> 손 | None:
 def _git(자리: Path, *인자: str) -> str:
     try:
         난것 = subprocess.run(["git", "-C", str(자리), *인자],
-                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, **paths.창안띄우기())
     except (OSError, subprocess.SubprocessError):
         return ""
     return 난것.stdout if 난것.returncode == 0 else ""
@@ -426,7 +426,7 @@ def 돌리기(프로젝트: str, 지시: str, 손이름: str = "claude", 제한�
         판 = subprocess.Popen(명령줄, cwd=str(자리), env=판환경,
                             stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", **paths.창안띄우기())
     except (OSError, ValueError) as e:
         그손.말자리 = None
         shutil.rmtree(말집, ignore_errors=True)
@@ -679,10 +679,10 @@ def _self_check() -> None:
         자리 = 뿌리 / "CliApp"
         자리.mkdir(parents=True)
         (자리 / "a.py").write_text("x = 1\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(자리), "init", "-q"], capture_output=True)
-        subprocess.run(["git", "-C", str(자리), "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", str(자리), "init", "-q"], capture_output=True, **paths.창안띄우기())
+        subprocess.run(["git", "-C", str(자리), "add", "-A"], capture_output=True, **paths.창안띄우기())
         subprocess.run(["git", "-C", str(자리), "-c", "user.name=T",
-                        "-c", "user.email=t@t", "commit", "-qm", "첫"], capture_output=True)
+                        "-c", "user.email=t@t", "commit", "-qm", "첫"], capture_output=True, **paths.창안띄우기())
 
         # --- 아무것도 안 바꾸는 손 ---
         난것 = 돌리기("CliApp", "가만히 있어라", 뿌리=뿌리, 손물건=가짜())

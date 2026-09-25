@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import paths
+
 from pathlib import Path
 
 import hermes
@@ -99,7 +101,7 @@ def _git이아는것(바닥: Path) -> list[str] | None:
         난것 = subprocess.run(
             ["git", "-C", str(바닥), "ls-files", "-z",
              "--cached", "--others", "--exclude-standard"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, **paths.창안띄우기())
     except (OSError, subprocess.SubprocessError):
         return None
     if 난것.returncode != 0:
@@ -311,12 +313,12 @@ def _self_check() -> None:
         import subprocess as _깃
 
         깃있나 = _깃.run(["git", "-C", str(바닥), "init", "-q"],
-                      capture_output=True).returncode == 0
+                      capture_output=True, **paths.창안띄우기()).returncode == 0
         if 깃있나:
             (바닥 / ".gitignore").write_text("무시할것/\n", encoding="utf-8")
             (바닥 / "무시할것").mkdir(exist_ok=True)
             (바닥 / "무시할것" / "쓰레기.txt").write_text("x", encoding="utf-8")
-            _깃.run(["git", "-C", str(바닥), "add", "-A"], capture_output=True)
+            _깃.run(["git", "-C", str(바닥), "add", "-A"], capture_output=True, **paths.창안띄우기())
             난것깃 = 나무("DemoApp", 뿌리)
             assert "src/main.py" in 난것깃["파일"], 난것깃["파일"][:8]
             assert not any(f.startswith("무시할것") for f in 난것깃["파일"]), \

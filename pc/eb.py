@@ -516,7 +516,7 @@ def _나를(*인자: str, 기한: int = 900) -> tuple[int | None, float, str]:
     t0 = time.perf_counter()
     try:
         r = subprocess.run(머리 + list(인자), capture_output=True, timeout=기한,
-                           env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8"), **paths.창안띄우기())
     except subprocess.TimeoutExpired:
         return None, time.perf_counter() - t0, f"{기한}초 넘어 끊었다"
     # ★ 구운 exe 의 표준출력은 UTF-8 이 아닐 수 있다(cp949 로 와서 「통과」가 깨졌다)
@@ -743,7 +743,7 @@ def _self_check() -> None:
         났다 = subprocess.run(
             [sys.executable, __file__, "--그물시험"],
             env=dict(os.environ, VC_DATA=tmp, PYTHONIOENCODING="utf-8"),
-            capture_output=True, timeout=90)
+            capture_output=True, timeout=90, **paths.창안띄우기())
         # 나가기만 하면 된다 — 멈추지 않는 것이 핵심이라 종료값은 안 본다.
         죽음, 자국 = Path(tmp) / report.DEATH, Path(tmp) / report.TRAIL
         assert 죽음.exists(), "스위치가 터졌는데 죽음 기록이 아예 안 생겼다"
@@ -1099,6 +1099,33 @@ def _self_check() -> None:
         "한글 이름을 singleShot 에 그대로 물렸다 — 윈도우에서 UnicodeEncodeError 로 죽는다. "
         "`lambda: 함수()` 로 감싼다: " + " · ".join(_한글걸린것))
 
+    # ★★ **자식을 부를 때마다 윈도우는 검은 창을 띄운다.** 구운 판을 처음 깔아 켜 보니
+    #   화면 한가운데서 창이 계속 깜빡였다(실기 · 2026-09-25) — 훑기·`tailscale status`·
+    #   `nvidia-smi` 처럼 자주 부르는 것마다 한 번씩 뜬다. 맥에는 이 개념이 없어
+    #   여태 안 보였다. 부르는 자리가 마흔이 넘어 자리마다 적으면 반드시 하나는
+    #   빠진다 — `paths.창안띄우기()` 하나만 두고 여기서 빠진 자리를 잡는다.
+    _창뜨는것 = []
+    for _파일 in sorted(_자리스펙.glob("*.py")):
+        _글판 = _파일.read_text(encoding="utf-8")
+        try:
+            _뿌리 = _나무.parse(_글판)
+        except SyntaxError:
+            continue
+        _별명 = {_이름.asname or "subprocess"
+               for _마디 in _나무.walk(_뿌리) if isinstance(_마디, _나무.Import)
+               for _이름 in _마디.names if _이름.name == "subprocess"}
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Call) and isinstance(_마디.func, _나무.Attribute)
+                    and _마디.func.attr in ("run", "Popen")
+                    and isinstance(_마디.func.value, _나무.Name)
+                    and _마디.func.value.id in _별명):
+                continue
+            if "창안띄우기" not in (_나무.get_source_segment(_글판, _마디) or ""):
+                _창뜨는것.append(f"{_파일.name}:{_마디.lineno}")
+    assert not _창뜨는것, (
+        "자식을 부르는데 `**paths.창안띄우기()` 가 없다 — 윈도우에서 검은 창이 깜빡인다: "
+        + " · ".join(_창뜨는것))
+
     # ★ `connect` 는 정말 괜찮은지 **여기서 직접 재 본다.** 괜찮다고 믿고 넘어가면,
     #   어느 날 PyQt 가 바뀌어 같은 병이 나도 창이 안 뜰 때까지 모른다.
     #   깨지면 위 막이를 `connect` 까지 넓히고 물린 자리를 감싸야 한다는 뜻이다.
@@ -1249,7 +1276,7 @@ def _모두검사() -> int:
                              str(자리 / f"{이름}.py"), "--check"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace",
                              cwd=str(자리), timeout=600,
-                             env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **paths.창안띄우기())
         초 = time.perf_counter() - t0
         잰것.append((이름, 난것.returncode, 초))
         if 난것.returncode != 0:

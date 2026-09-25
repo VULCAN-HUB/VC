@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import math
 import random
+
+import paths
 import time
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
@@ -1876,7 +1878,7 @@ def _self_check() -> None:
              "sys.stdout.write(graph3d.멈칫셈.읽어오기())"],
             env=dict(os.environ, VC_DATA=임시, PYTHONIOENCODING="utf-8",
                      PYTHONPATH=str(Path(__file__).resolve().parent)),
-            capture_output=True, text=True, encoding="utf-8", timeout=90)
+            capture_output=True, text=True, encoding="utf-8", timeout=90, **paths.창안띄우기())
         # 적은 프로세스가 죽지 않았고, 남긴 값을 그 자리에서 도로 읽는다.
         assert "3판" in 났다.stdout, (났다.stdout, 났다.stderr[-300:])
 
@@ -1886,7 +1888,7 @@ def _self_check() -> None:
              "import graph3d, sys; sys.stdout.write(graph3d.멈칫셈.읽어오기())"],
             env=dict(os.environ, VC_DATA=임시, PYTHONIOENCODING="utf-8",
                      PYTHONPATH=str(Path(__file__).resolve().parent)),
-            capture_output=True, text=True, encoding="utf-8", timeout=90)
+            capture_output=True, text=True, encoding="utf-8", timeout=90, **paths.창안띄우기())
         assert "3판" in 딴쪽.stdout, (딴쪽.stdout, 딴쪽.stderr[-300:])
 
     # 아무것도 안 적힌 자리에서는 「안 돌았다」다 — 없는 값을 지어내지 않는다.
@@ -1896,7 +1898,7 @@ def _self_check() -> None:
              "import graph3d, sys; sys.stdout.write(graph3d.멈칫셈.읽어오기())"],
             env=dict(os.environ, VC_DATA=빈자리, PYTHONIOENCODING="utf-8",
                      PYTHONPATH=str(Path(__file__).resolve().parent)),
-            capture_output=True, text=True, encoding="utf-8", timeout=90)
+            capture_output=True, text=True, encoding="utf-8", timeout=90, **paths.창안띄우기())
         assert 빈.stdout.strip() == "안 돌았다", 빈.stdout
     assert "제일 느린 판 300ms" in 셈.말(), 셈.말()
 

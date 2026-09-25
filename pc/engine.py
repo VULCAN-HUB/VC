@@ -21,6 +21,8 @@ Ollama를 따로 깔고 관리하지 않는다. 사용자는 VC 하나만 설치
 
 from __future__ import annotations
 
+import paths
+
 import gc
 import os
 import platform
@@ -100,7 +102,7 @@ def detect_hardware() -> dict[str, Any]:
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=5, **paths.창안띄우기())
         if out.returncode == 0 and out.stdout.strip():
             first = out.stdout.strip().splitlines()[0]
             name, mb = (x.strip() for x in first.split(",", 1))
@@ -117,7 +119,7 @@ def detect_hardware() -> dict[str, Any]:
     if not vram and platform.system() == "Darwin" and platform.machine() == "arm64":
         try:
             난것 = subprocess.run(["sysctl", "-n", "hw.memsize"],
-                                capture_output=True, text=True, timeout=5)
+                                capture_output=True, text=True, timeout=5, **paths.창안띄우기())
             바이트 = int((난것.stdout or "0").strip() or 0)
             if 바이트 > 0:
                 vram = int(바이트 / (1024 * 1024) / 2)

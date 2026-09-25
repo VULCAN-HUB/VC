@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import paths
+
 import ipaddress
 import os
 import re
@@ -28,7 +30,7 @@ Runner = Callable[[list[str]], "str | None"]
 
 def _run(cmd: list[str]) -> str | None:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=4, **paths.창안띄우기())
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
