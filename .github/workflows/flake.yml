@@ -11,7 +11,7 @@ on:
 #   「Unexpected symbol: '몇번'」 으로 판을 아예 안 읽었다 — 표현식에 쓰는 이름은
 #   영문이어야 한다(PyQt·zsh·bash 와 같은 자리다. 오늘만 다섯 번째다).
 env:
-  TIMES: '10'
+  TIMES: '30'
 
 jobs:
   flake:
