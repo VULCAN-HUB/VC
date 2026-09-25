@@ -634,7 +634,14 @@ def _self_check() -> None:
     #
     # 낱말이 그대로 살아 오기도 요구하지 않는다. 같은 문장이 "일정"→"일참"→"일전"으로
     # 흔들려서, 그걸로 막으면 우리 코드가 아니라 모델의 그날 컨디션을 검사하게 된다.
-    with tempfile.TemporaryDirectory() as tmp:
+    # ★★ **윈도우는 열린 파일을 못 지운다.** 받아쓰기 라이브러리가 wav 를 붙들고
+    #   있어 뒷정리에서 `PermissionError [WinError 32]` 로 검사가 빨개졌다 —
+    #   그리고 그것이 **굽기를 막았다**(CI 윈도우 · 2026-09-25). 붙드는 것은 우리
+    #   코드가 아니라 남의 라이브러리고, 여기는 검사의 뒷정리일 뿐이다.
+    #   맥·리눅스는 열려 있어도 지워져서 거기서는 안 났다.
+    #   ★ 검사가 **재는 것**은 하나도 안 줄었다 — 뒷정리만 너그러워졌다.
+    #     임시 폴더는 운영체제가 나중에 치운다.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         ears = Ears()
         for name, must in (("브이씨", True), ("불칸", False)):
             wav = Path(tmp) / f"{name}.wav"
