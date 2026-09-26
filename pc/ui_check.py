@@ -911,9 +911,12 @@ def run() -> None:
         # 말할 때만 발광 효과가 붙는다(성능). 말이 끝나면 떼어 낸다.
         for node in win.graph.nodes.values():
             node.set_speaking(False)
-        assert all(n.graphicsEffect() is None for n in win.graph.nodes.values())
+        # ★ 발광은 이제 **그려서** 낸다. 마디가 Qt 항목이 아니게 되면서
+        #   `QGraphicsDropShadowEffect` 를 붙일 데가 없어졌다 — 재는 곳도 `speaking` 이다.
+        #   (마디를 항목으로 두면 2800장에 한 판 320ms 다. 그래서 걷어냈다 · 2026-09-26)
+        assert all(n.speaking == 0 for n in win.graph.nodes.values())
         win.show_note("카페 단골")
-        lit = [n for n in win.graph.nodes.values() if n.graphicsEffect() is not None]
+        lit = [n for n in win.graph.nodes.values() if n.speaking > 0]
         assert lit and lit[0].title == "카페 단골", "발광이 딴 데 붙었다"
         assert win.say.text().startswith("카페 단골 얘기야."), win.say.text()
 
