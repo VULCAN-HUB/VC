@@ -474,6 +474,7 @@ class MainWindow(QWidget):
         #   VC 다**(오너가 그렇게 못 박았다 · 2026-09-24). 그래서 칸도 하나고, 고르는
         #   것은 「누구에게 말하나」가 아니라 「무엇으로 답하나」다.
         #   ★ 처음엔 접혀 있다 — 늘 펴 두면 그래프가 좁아진다. 말하는 자리를 누르면 올라온다.
+        graph_box.addWidget(self._새판띠만들기())
         graph_box.addWidget(self._채팅칸만들기())
         left = QFrame()
         left.setLayout(graph_box)
@@ -3702,6 +3703,42 @@ class MainWindow(QWidget):
                     "여기서 바로 받아 — 글자·사진·목소리·뜻 검색 다 있어.", [])
         return True
 
+    def _새판띠만들기(self):
+        """새 판을 알리는 **띠**. 평소엔 접혀 있다.
+
+        ★★ 예전에는 맨 `QMessageBox` 를 띄웠다. 설정 창은 VC 옷을 입혔는데 여기만
+        빠져서 **이 창만 옛날 프로그램처럼** 보였고(오너: 「투박하다」 · 2026-09-26),
+        받는 동안 아무 표시도 없었다. 창을 띄우지 않고 **화면 안에서** 알린다 —
+        하던 일을 안 끊는다.
+        """
+        from PyQt5.QtWidgets import QProgressBar
+
+        self._새판띠 = HudPanel(corner=7)
+        칸 = QHBoxLayout(self._새판띠)
+        칸.setContentsMargins(12, 7, 12, 7)
+        칸.setSpacing(8)
+        self._새판말 = QLabel("")
+        self._새판말.setStyleSheet(
+            f"color:{theme.T.TEXT.name()}; font-size:{theme.글자(11)};")
+        self._새판자 = QProgressBar()
+        self._새판자.setTextVisible(False)
+        self._새판자.setFixedHeight(4)
+        self._새판자.hide()
+        self._새판받기단추 = QPushButton("받아서 깔기")
+        self._새판받기단추.setObjectName("quiet")
+        self._새판받기단추.setCursor(Qt.PointingHandCursor)
+        self._새판받기단추.clicked.connect(lambda: self.새판받기())
+        self._새판나중단추 = QPushButton("나중에")
+        self._새판나중단추.setObjectName("quiet")
+        self._새판나중단추.setCursor(Qt.PointingHandCursor)
+        self._새판나중단추.clicked.connect(lambda: self._새판띠.hide())
+        칸.addWidget(self._새판말, 1)
+        칸.addWidget(self._새판자, 1)
+        칸.addWidget(self._새판받기단추)
+        칸.addWidget(self._새판나중단추)
+        self._새판띠.hide()
+        return self._새판띠
+
     def 새판찾기(self) -> None:
         """켤 때 깃허브에 새 판이 있는지 **딴 실에서** 물어본다.
 
@@ -3720,29 +3757,45 @@ class MainWindow(QWidget):
         report.딴실로("새 판 보기", 일)
 
     def _새판보이기(self, 난것: dict) -> None:
-        """새 판이 있다고 **말하고 묻는다.** 조용히 갈아 끼우지 않는다."""
+        """새 판이 있다고 **말하고 묻는다.** 조용히 갈아 끼우지 않는다.
+
+        ★ 창을 띄우지 않고 화면 안 띠로 알린다 — 하던 일을 안 끊는다.
+        """
+        if "진행" in 난것:
+            받은, 전체 = 난것["진행"]
+            self._새판자.show()
+            self._새판자.setRange(0, max(1, 전체))
+            self._새판자.setValue(받은)
+            self._새판말.setText(
+                f"받는 중 {받은 * 100 // max(1, 전체)}% "
+                f"({받은 // 1048576}/{max(1, 전체) // 1048576}MB)")
+            return
         if 난것.get("탈"):
-            return self.report(f"새 판을 못 받았어 — {난것['탈']}", [])
+            self._새판자.hide()
+            self._새판받기단추.setEnabled(True)
+            self._새판말.setText(f"못 받았어 — {난것['탈']}")
+            return
         if 난것.get("열었다"):
-            return self.report("받았어. 뜬 창에서 깔면 돼 — 기록은 그대로야.", [])
+            self._새판자.hide()
+            self._새판말.setText("받았어. 뜬 창에서 깔면 돼 — 기록은 그대로야.")
+            self._새판받기단추.hide()
+            # ★ 못 맞춰 본 것은 「맞았다」가 아니다 — 그랬으면 그렇다고 말한다
+            if 난것.get("못맞춤"):
+                self._새판말.setText(
+                    self._새판말.text() + f"  (셈은 못 맞춰 봤어 — {난것['못맞춤']})")
+            return
         판 = 난것.get("판") or ""
         if not 난것.get("받을곳"):
             self.report(f"새 판 {판} 이 나왔어 — 이 기계에 맞는 파일이 아직 없네. "
                         f"{난것.get('쪽') or ''}", [])
             return
         self._새판 = 난것
-        box = QMessageBox(self)
-        box.setWindowTitle("새 판이 있어")
-        box.setText(f"새 판 {판} 이 나왔어. 받아서 깔까?\n\n"
-                    "기록·설정·모델은 그대로 남아 — 프로그램만 갈린다.")
-        받기단추 = box.addButton("받아서 깔기", QMessageBox.AcceptRole)
-        box.addButton("나중에", QMessageBox.RejectRole)
-        box.setModal(False)          # 창을 막지 않는다
-        box.setAttribute(Qt.WA_DeleteOnClose)
-        box.buttonClicked.connect(
-            lambda 누른것: self.새판받기() if 누른것 is 받기단추 else None)
-        self._새판상자 = box
-        box.show()
+        self._새판말.setText(f"새 판 {판} 이 나왔어 — 기록·설정·모델은 그대로 남아")
+        self._새판자.hide()
+        self._새판받기단추.show()
+        self._새판받기단추.setEnabled(True)
+        self._새판나중단추.show()
+        self._새판띠.show()
 
     def 새판받기(self) -> None:
         """받아서 **연다.** 우리가 직접 덮어쓰지 않는다 — 돌던 제 몸을 갈면 위험하다."""
@@ -3752,22 +3805,28 @@ class MainWindow(QWidget):
         import paths as _자리
 
         낼자리 = _자리.state_dir() / "받은판" / (난것.get("이름") or "VC-새판")
-        self.report(f"새 판 {난것.get('판')} 받는 중…", [])
+        self._새판받기단추.setEnabled(False)
+        self._새판나중단추.hide()
+        self._새판말.setText("받는 중…")
+        self._새판띠.show()
 
         def 일() -> None:
             import subprocess as _돌림
 
             import update as _새판
 
+            # ★★ **진행률을 보낸다.** 여기 `if False` 가 붙어 있어서 받는 동안
+            #   아무 표시도 안 났다 — 사람은 멈춘 줄 안다(오너: 「투박하다」).
             잰것 = _새판.받기(난것["받을곳"], 낼자리, 난것.get("셈곳") or "",
                           알림=lambda 온것, 전체: self.update_found.emit(
-                              {"진행": (온것, 전체)}) if False else None)
+                              {"진행": (온것, 전체)}))
             if not 잰것.get("됐나"):
                 self.update_found.emit({"탈": 잰것.get("왜") or "못 받았다"})
                 return
             try:
                 _돌림.Popen(_새판.깔기명령(잰것["자리"]), **paths.창안띄우기())
-                self.update_found.emit({"열었다": 잰것["자리"]})
+                self.update_found.emit({"열었다": 잰것["자리"],
+                                        "못맞춤": 잰것.get("못맞춤") or ""})
             except Exception as e:
                 self.update_found.emit({"탈": f"못 열었다: {type(e).__name__}"})
 

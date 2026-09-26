@@ -2052,23 +2052,38 @@ def run() -> None:
         notes.use_embedder(None)
 
         # ★★ **새 판이 있으면 말하고 묻는다** — 조용히 갈아 끼우지 않는다.
+        #   ★ 창을 띄우지 않고 **화면 안 띠**로 알린다. 예전에는 맨 `QMessageBox` 라
+        #     이 창만 옛날 프로그램처럼 보였고(오너: 「투박하다」 · 2026-09-26)
+        #     받는 동안 아무 표시도 없었다.
         win._새판보이기({"판": "v9.9.9", "받을곳": "https://x/a.dmg",
                      "이름": "a.dmg", "셈곳": "", "쪽": "https://x"})
         app.processEvents()
-        _상자새판 = getattr(win, "_새판상자", None)
-        assert _상자새판 is not None, "새 판이 있는데 아무 말도 안 한다"
-        assert not _상자새판.isModal(), "새 판 상자가 창을 막는다"
-        assert "9.9.9" in _상자새판.text() and "기록" in _상자새판.text(), _상자새판.text()
-        _상자새판.close(); win._새판상자 = None
+        assert win._새판띠.isVisibleTo(win), "새 판이 있는데 아무 말도 안 한다"
+        assert "9.9.9" in win._새판말.text() and "기록" in win._새판말.text(), win._새판말.text()
+        assert win._새판받기단추.isVisibleTo(win._새판띠), "받을 길이 없다"
+
+        # ★★ **받는 동안 얼마나 왔는지 보여야 한다.** 이 길이 `if False` 로 막혀 있어서
+        #   받는 내내 아무 표시가 없었다 — 사람은 멈춘 줄 안다.
+        win._새판보이기({"진행": (52428800, 104857600)})
+        assert win._새판자.isVisibleTo(win._새판띠), "진행 막대가 안 보인다"
+        assert "50%" in win._새판말.text(), win._새판말.text()
+
+        # 「나중에」를 누르면 접힌다 — 하던 일을 안 막는다
+        win._새판나중단추.click()
         app.processEvents()
-        # 받을 것이 없으면 상자를 안 띄우고 말만 한다
+        assert not win._새판띠.isVisibleTo(win), "나중에 를 눌렀는데 안 접힌다"
+
+        # 받을 것이 없으면 띠를 안 띄우고 말만 한다
         win._새판보이기({"판": "v9.9.9", "받을곳": "", "쪽": "https://x"})
         assert "9.9.9" in win._say_text, win._say_text
-        # 탈·끝남도 말로 나온다
+        # 탈·끝남은 띠에 적힌다
         win._새판보이기({"탈": "셈이 안 맞는다"})
-        assert "못 받았어" in win._say_text, win._say_text
+        assert "못 받았어" in win._새판말.text(), win._새판말.text()
         win._새판보이기({"열었다": "/tmp/a.dmg"})
-        assert "받았어" in win._say_text and "기록은 그대로" in win._say_text, win._say_text
+        assert "받았어" in win._새판말.text() and "기록은 그대로" in win._새판말.text()
+        # ★ 셈을 못 맞춰 봤으면 그렇다고 말한다 — 「맞았다」로 넘어가면 안 된다
+        win._새판보이기({"열었다": "/tmp/a.dmg", "못맞춤": "그 판에 셈 파일이 없다"})
+        assert "못 맞춰" in win._새판말.text(), win._새판말.text()
 
         # ★★ **아랫단이 본문을 밀어내면 안 된다.** 카드 높이는 고정인데 링크·가리킨
         #   곳은 글마다 제멋대로 길다. 안 가두던 때는 620짜리 카드에서 본문이 최소
