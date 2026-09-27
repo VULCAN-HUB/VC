@@ -690,6 +690,19 @@ def open_dialog(win, notes: Notes):
     창.사본역할.setCurrentIndex(max(0, 창.사본역할.findData(쓰던사본.get("역할") or "메인")))
     줄(사본틀, "이 VC 의 자리", 창.사본역할)
 
+    # ★★ **문은 기본으로 좁혀 둔다.** 서버가 0.0.0.0 에 열려 있어 같은 공유기의
+    #   누구든 두드릴 수 있었다 — 카페·호텔 와이파이에서는 거기 있는 누구에게나
+    #   문이 보인다. 내 기계와 테일넷만 기본으로 열고, 같은 공유기는 여기서 켠다.
+    #   폰을 집 와이파이로 쓰는 사람은 한 번 켜면 되고, 밖에서는 꺼진 채가 안전하다.
+    창.공유기열기 = QComboBox()
+    창.공유기열기.setObjectName("pick")
+    for 보일, 값 in (("잠금 — 내 기계와 테일스케일만 (권함)", False),
+                   ("열기 — 같은 공유기의 기기도", True)):
+        창.공유기열기.addItem(보일, 값)
+    창.공유기열기.setCurrentIndex(
+        1 if paths.load_config().get("같은공유기도열까") else 0)
+    줄(사본틀, "같은 공유기에서 붙는 것", 창.공유기열기)
+
     창.사본주소 = QLineEdit(쓰던사본.get("main_url", ""))
     창.사본주소.setObjectName("field")
     창.사본주소.setPlaceholderText("메인 주소 — http://100.x.x.x:8765 (테일스케일 주소)")
@@ -1027,7 +1040,9 @@ def open_dialog(win, notes: Notes):
         되돌림 = int(창.되돌리기.currentData())
         paths.save_config({**paths.load_config(),
                            "화면방식": 방식, "표식되돌리기초": 되돌림,
-                           "기계기록보기": str(창.기록보기.currentData())})
+                           "기계기록보기": str(창.기록보기.currentData()),
+                           # ★ 서버가 이 값을 매 요청마다 본다 — 다시 켤 것 없이 바로 먹는다
+                           "같은공유기도열까": bool(창.공유기열기.currentData())})
         apply_screen(win, 방식)
         # **바로 먹게 한다.** 다시 켜야 적용되면 골라 놓고도 그대로인 줄 안다.
         그래프 = getattr(win, "graph", None)

@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import time
@@ -76,9 +77,14 @@ class 그물:
     """
 
     def __init__(self, 열쇠: str, 받으면: Callable[[dict], None],
-                 포트: int = 기본포트, 여는이: Callable | None = None) -> None:
+                 포트: int = 기본포트, 여는이: Callable | None = None,
+                 붙으면: Callable[[str], None] | None = None) -> None:
         self.열쇠 = 열쇠 or ""
         self.받으면 = 받으면
+        # ★★ **붙는 순간 한 번 부른다.** 신호는 붙어 있는 동안 것만 나른다 —
+        #   꺼져 있던 사이, 끊겼던 사이에 바뀐 것은 아무도 안 알려 준다.
+        #   붙자마자 한 번 따라잡아야 그 구멍이 메워진다. 다시 붙을 때도 부른다.
+        self.붙으면 = 붙으면
         self.포트 = 포트
         self._여는이 = 여는이 or self._열기
         self._붙은것: dict[str, threading.Thread] = {}
@@ -104,6 +110,11 @@ class 그물:
                 if self._그만.wait(쉬는초):
                     return
                 continue
+            if self.붙으면 is not None:
+                try:
+                    self.붙으면(주소)
+                except Exception:
+                    pass          # 따라잡다 터져도 귀는 붙어 있는다
             try:
                 for 줄 in 응답:
                     if self._그만.is_set():
@@ -117,7 +128,15 @@ class 그물:
                         continue
                     self.받은수 += 1
                     try:
-                        self.받으면(것)
+                        # ★★ **누가 보냈는지도 넘긴다.** 예전에는 신호만 넘기고
+                        #   받은 쪽이 제 창고를 다시 봤다 — 창고가 하나일 때 맞던 일이다.
+                        #   이제는 **기계마다 제 창고**라(행성), 바뀐 글을 그 기계에서
+                        #   받아 와야 한다. 어디서 왔는지 모르면 받아 올 데를 모른다.
+                        #   ★ 옛 꼴(인자 하나)도 그대로 받는다 — 부르는 쪽이 여럿이다.
+                        try:
+                            self.받으면(것, 주소)
+                        except TypeError:
+                            self.받으면(것)
                     except Exception:
                         pass              # 받아서 하는 일이 터져도 귀는 붙어 있는다
             except (OSError, ValueError):
@@ -229,6 +248,31 @@ def _self_check() -> None:
         assert 셈["n"] >= 2, "하나 터지자 뒤 신호를 못 받았다"
     finally:
         둘째.그만두기()
+
+    # ★★ **붙는 순간 한 번 부른다.** 신호는 붙어 있는 동안 것만 나른다 —
+    #   꺼져 있던 사이에 바뀐 것은 아무도 안 알려 주므로, 붙자마자 따라잡아야
+    #   그 구멍이 메워진다. 다시 붙을 때도 불러야 끊겼던 사이가 메워진다.
+    붙은것: list = []
+    한번 = {"했나": False}
+
+    def 한번만열기(주소):
+        if 한번["했나"]:
+            raise OSError("이제 그만")
+        한번["했나"] = True
+        return io.BytesIO(b'data: {"kind":"note","what":"write","title":"\xea\xb0\x80"}\n')
+
+    귀 = 그물("열쇠", lambda 것, 주소="": None, 여는이=한번만열기,
+           붙으면=붙은것.append)
+    귀._그만.clear()
+    ㅅ = threading.Thread(target=귀._한이웃, args=("100.64.0.5",), daemon=True)
+    ㅅ.start()
+    for _ in range(200):
+        if 붙은것:
+            break
+        time.sleep(0.01)
+    귀.그만두기()
+    ㅅ.join(timeout=2)
+    assert 붙은것 == ["100.64.0.5"], f"붙는 순간을 안 알려 준다: {붙은것}"
 
     print("mesh self-check 통과")
 

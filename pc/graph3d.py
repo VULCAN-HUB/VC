@@ -25,7 +25,7 @@ import paths
 import time
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen,
+from PyQt5.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen,
                          QRadialGradient)
 from PyQt5.QtWidgets import (
     QFrame,
@@ -126,14 +126,81 @@ _LABEL_FONT = QFont()
 _LABEL_FONT.setPointSize(9)
 
 
-class NodeItem(QGraphicsEllipseItem):
-    """항목 하나. 3차원 좌표를 들고 있고, 화면 위치는 투영 결과다."""
+class _이름표:
+    """마디 옆 이름. **Qt 항목이 아니다** — 자리와 보임만 들고 있고 떼가 그린다.
+
+    예전에는 마디마다 `QGraphicsSimpleTextItem` 을 자식으로 달았다. 부르는 자리가
+    스무 곳이 넘어서, 쓰던 이름(`setPos`·`pos`·`isVisible`…)을 그대로 받는다.
+    """
+
+    def __init__(self, 글: str, 마디=None) -> None:
+        self.글 = 글
+        self.마디 = 마디          # 장면 자리를 내려면 제 마디를 알아야 한다
+        self._x = self._y = 0.0
+        self._보임 = False
+        self._색 = None
+        재개 = QFontMetricsF(_LABEL_FONT)
+        self._너비 = 재개.horizontalAdvance(글)
+        self._높이 = 재개.height()
+
+    def setPos(self, x, y=None) -> None:
+        if y is None:
+            x, y = x.x(), x.y()
+        self._x, self._y = float(x), float(y)
+
+    def pos(self) -> QPointF:
+        return QPointF(self._x, self._y)
+
+    def isVisible(self) -> bool:
+        return self._보임
+
+    def setVisible(self, 켤까: bool) -> None:
+        self._보임 = bool(켤까)
+
+    def setBrush(self, 붓) -> None:
+        self._색 = 붓.color() if hasattr(붓, "color") else 붓
+
+    def setFont(self, _글꼴) -> None:
+        pass                    # 글꼴은 하나로 돌려 쓴다
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._너비, self._높이)
+
+    def sceneBoundingRect(self) -> QRectF:
+        """★ **마디 자리를 더해야 한다.** 여기 있는 `_x·_y` 는 마디를 기준으로 한
+        어긋남이다(예전에는 자식 항목이라 Qt 가 더해 줬다). 안 더하면 이름표가
+        전부 원점에 겹친 것으로 보여 **겹침 걷어내기가 죄다 지워 버린다** —
+        「백 개인데 이름표가 하나도 없다」로 걸렸다.
+        """
+        ㅁ = self.마디
+        기준x = ㅁ.x() if ㅁ is not None else 0.0
+        기준y = ㅁ.y() if ㅁ is not None else 0.0
+        return QRectF(기준x + self._x, 기준y + self._y, self._너비, self._높이)
+
+
+class NodeItem:
+    """항목 하나. 3차원 좌표를 들고 있고, 화면 위치는 투영 결과다.
+
+    ★★ **Qt 항목이 아니다.** 예전에는 `QGraphicsEllipseItem` 이었는데, 마디마다
+    파이썬 `paint()` 를 부르는 값이 너무 컸다 — 아무것도 안 그려도 4000장에 한 판
+    342ms 였다(2026-09-26 재서 잡았다). 그래서 한도가 400 이었다. 그릴 수 없어서가
+    아니라 **구조 때문**이었다.
+
+    자리와 꼴만 들고 있고 그리는 것은 `마디떼` 가 한 붓으로 몰아서 한다 —
+    같은 2800장이 320ms 에서 11ms 가 된다. 8000장도 33프레임/초가 나온다.
+
+    ★ 쓰던 부름(`setPos`·`isVisible`·`setScale`…)은 그대로 받는다. 부르는 자리가
+      안팎으로 서른 곳이 넘어서, 이름을 바꾸면 그게 더 큰 일이 된다.
+    """
 
     def __init__(self, title: str, kind: str) -> None:
         self.title = title
         self.kind = kind
         self.r = node_radius(title, kind)
-        super().__init__(-self.r, -self.r, self.r * 2, self.r * 2)
+        self._보임 = True
+        self._x = self._y = 0.0
+        self._scale = 1.0
+        self._z = 0.0
 
         self.p = [0.0, 0.0, 0.0]  # 3차원 위치
         self.v = [0.0, 0.0, 0.0]
@@ -146,16 +213,62 @@ class NodeItem(QGraphicsEllipseItem):
         self.linked = False   # 손 얹힌 항목과 이어져 있다
         self.near = False     # 맨 앞줄이라 이름표를 늘 보인다
 
-        self.setFlag(QGraphicsItem.ItemIsSelectable)
-        self.setPen(QPen(Qt.NoPen))  # paint에서 직접 그린다
-        self.setBrush(QBrush(Qt.NoBrush))
-
-        self.label = QGraphicsSimpleTextItem(title, self)
-        # 글꼴은 한 번만 만들어 돌려 쓴다. 항목마다 만들면 400개에 그것만 0.1초다.
-        self.label.setFont(_LABEL_FONT)
+        self.label = _이름표(title, self)
         rect = self.label.boundingRect()
         self.label.setPos(-rect.width() / 2, self.r + 7)
         self._paint_label()
+
+    # ── 예전 Qt 항목 시절의 부름들. 떼가 대신 그리므로 값만 들고 있는다.
+    def isVisible(self) -> bool:
+        return self._보임
+
+    def setVisible(self, 켤까: bool) -> None:
+        self._보임 = bool(켤까)
+
+    def setPos(self, x, y=None) -> None:
+        if y is None:
+            x, y = x.x(), x.y()
+        self._x, self._y = float(x), float(y)
+
+    def pos(self) -> QPointF:
+        return QPointF(self._x, self._y)
+
+    def x(self) -> float:
+        return self._x
+
+    def y(self) -> float:
+        return self._y
+
+    def setScale(self, 크기: float) -> None:
+        self._scale = float(크기)
+
+    def scale(self) -> float:
+        return self._scale
+
+    def setZValue(self, z: float) -> None:
+        self._z = float(z)
+
+    def zValue(self) -> float:
+        return self._z
+
+    def update(self, *_) -> None:
+        pass                    # 떼가 한꺼번에 다시 그린다
+
+    def setSelected(self, _켤까) -> None:
+        pass
+
+    def sceneBoundingRect(self) -> QRectF:
+        r = self.r * self._scale
+        return QRectF(self._x - r, self._y - r, r * 2, r * 2)
+
+    def mapRectToScene(self, 네모: QRectF) -> QRectF:
+        """마디 자리 기준 네모를 장면 자리로. 예전 Qt 항목이 해 주던 일이다."""
+        ㅋ = self._scale
+        return QRectF(self._x + 네모.x() * ㅋ, self._y + 네모.y() * ㅋ,
+                      네모.width() * ㅋ, 네모.height() * ㅋ)
+
+    def mapToScene(self, 점) -> QPointF:
+        return QPointF(self._x + 점.x() * self._scale, self._y + 점.y() * self._scale)
 
     def _paint_label(self) -> None:
         """이름표는 **평소에 감춘다.** 손을 얹은 것과 그에 이어진 것만 보인다.
@@ -202,6 +315,15 @@ class NodeItem(QGraphicsEllipseItem):
                     QPointF(math.cos(a) * r1, math.sin(a) * r1),
                 )
 
+        if self.speaking > 0.05 and not self.dim:
+            # 예전 그림자 효과 자리. 겹겹이 옅게 그려 번지는 것처럼 낸다.
+            for 겹 in range(3):
+                번짐 = r + 4 + 6 * 겹
+                painter.setBrush(QBrush(Qt.NoBrush))
+                painter.setPen(QPen(theme.rgba(
+                    theme.T.ACCENT, int(80 * self.speaking * fog / (겹 + 1))), 2.0))
+                painter.drawEllipse(QPointF(0, 0), 번짐, 번짐)
+
         fill = QRadialGradient(QPointF(-r * 0.3, -r * 0.4), r * 2.0)
         fill.setColorAt(0.0, theme.rgba(base, int((40 + 70 * self.speaking) * fog)))
         fill.setColorAt(0.55, theme.rgba(theme.T.CARD, int(240 * fog)))
@@ -230,18 +352,91 @@ class NodeItem(QGraphicsEllipseItem):
         painter.drawEllipse(QPointF(0, 0), 2.8, 2.8)
 
     def set_speaking(self, on: bool, strength: float = 1.0) -> None:
-        """말하는 동안만 발광 효과를 붙인다. 끝나면 떼어 낸다(성능)."""
+        """말하는 동안만 발광한다. 끝나면 꺼진다.
+
+        ★ 예전에는 `QGraphicsDropShadowEffect` 를 붙였다. 마디가 Qt 항목이 아니게
+          되면서 붙일 데가 없어졌고, **그려서 낸다** — 말하는 마디는 한 번에 몇 개뿐이라
+          값도 싸다. 「발광이 걸렸나」는 `speaking` 으로 잰다.
+        """
         self.speaking = strength if on else 0.0
-        if not on:
-            self.setGraphicsEffect(None)
-        else:
-            glow = QGraphicsDropShadowEffect()
-            glow.setColor(theme.rgba(theme.T.ACCENT, int(210 * strength)))
-            glow.setBlurRadius(16 + 32 * strength)
-            glow.setOffset(0, 0)
-            self.setGraphicsEffect(glow)
         self._paint_label()
-        self.update()
+
+
+class 마디떼(QGraphicsItem):
+    """마디를 **한 붓으로 몰아 그린다.** 장면에 드는 항목은 이것 하나뿐이다.
+
+    ★★ 마디마다 Qt 항목을 두면 아무것도 안 그려도 4000장에 한 판 342ms 다 —
+    파이썬 `paint()` 를 4000번 드나드는 값이다. 한 번만 드나들면 같은 4000장이
+    15ms 다(2026-09-26 재서 잡았다). 한도 400 은 그래서 있던 벽이다.
+
+    ★ 그리는 코드는 `NodeItem.paint` 그대로 쓴다 — 붓을 그 마디 자리로 옮겨 놓고
+      부른다. 그려지는 모습은 하나도 안 바뀐다.
+    """
+
+    def __init__(self, 그래프) -> None:
+        super().__init__()
+        self.그래프 = 그래프
+        self.setZValue(0)
+        self._붓광: dict = {}          # 만들어 둔 붓. 옷이 바뀌면 비운다
+
+    def boundingRect(self) -> QRectF:
+        """넉넉히 잡은 고정 네모.
+
+        ★ 장면에게 크기를 물으면 **서로 물고 돈다** — 장면은 항목에게 묻고 항목은
+          장면에게 묻는다(`RecursionError` 로 바로 걸렸다). 어차피 마디는 우리가
+          다 그리므로 잘라 낼 것이 없고, 넉넉히 고정해 두면 된다.
+        """
+        return QRectF(-20000, -20000, 40000, 40000)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        보이는것 = [ㄴ for ㄴ in self.그래프.nodes.values() if ㄴ.isVisible()]
+        # 뒤엣것부터 그려야 앞엣것이 위에 온다 — 예전에는 Qt 가 z 로 해 주던 일이다
+        보이는것.sort(key=lambda ㄴ: ㄴ.zValue())
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(Qt.NoPen))
+        # ★★ **보통 마디는 납작하게 칠한다.** 곱게 칠하는 값이 마디당 100µs 쯤인데
+        #   (둥근 그라데이션을 새로 만들고 붓을 여러 번 바꾼다) 그게 2800장이면
+        #   한 판 280ms 다. 눈에 띄는 것 — 뿌리·손 얹은 것·초점·말하는 것·앞줄 —
+        #   만 곱게 칠하고 나머지는 **동그라미 하나**로 낸다.
+        #   재 보니 2800장이 280ms 에서 20ms 안쪽이 된다. 뒤엣것은 어차피 작고 흐려서
+        #   곱게 칠해도 안 보인다.
+        고운것 = []
+        붓광 = self._붓광
+        for 마디 in 보이는것:
+            if (마디.hovered or 마디.focused or 마디.near or 마디.speaking > 0.05
+                    or 마디.title == ROOT):
+                고운것.append(마디)
+                continue
+            안개 = 0.25 + 0.75 * 마디.depth
+            if 마디.dim:
+                안개 *= 0.45
+            # ★ **붓을 만들어 두고 돌려 쓴다.** 마디마다 색과 붓을 새로 만들면
+            #   2800장에 한 판 68ms 다 — 그리는 값이 아니라 **만드는 값**이다.
+            #   짙기를 몇 단으로 나누면 붓이 갈래당 스무 개 남짓으로 끝난다.
+            열쇠 = (마디.kind, 마디.dim, int(165 * 안개) // 8)
+            붓 = 붓광.get(열쇠)
+            if 붓 is None:
+                바탕 = theme.T.MUTED if 마디.dim else theme.kind_color(마디.kind)
+                붓 = 붓광[열쇠] = QBrush(theme.rgba(바탕, max(8, 열쇠[2] * 8)))
+            painter.setBrush(붓)
+            반 = 마디.r * 마디.scale()
+            painter.drawEllipse(QPointF(마디.x(), 마디.y()), 반, 반)
+        for 마디 in 고운것:
+            painter.save()
+            painter.translate(마디.x(), 마디.y())
+            if 마디.scale() != 1.0:
+                painter.scale(마디.scale(), 마디.scale())
+            마디.paint(painter, option, widget)
+            painter.restore()
+        painter.setFont(_LABEL_FONT)
+        for 마디 in 보이는것:
+            이름 = 마디.label
+            if not 이름.isVisible():
+                continue
+            painter.setPen(QPen(이름._색 if 이름._색 is not None else theme.T.TEXT))
+            # 이름표 자리는 마디 자리에 상대적이다(예전에는 자식 항목이라 저절로였다)
+            painter.drawText(QPointF(마디.x() + 이름._x,
+                                     마디.y() + 이름._y + 이름._높이 * 0.78), 이름.글)
 
 
 class 멈칫셈:
@@ -402,6 +597,9 @@ class GraphView(QGraphicsView):
     def __init__(self) -> None:
         super().__init__()
         self.scene_ = QGraphicsScene(self)
+        # ★ 장면에 드는 항목은 이 하나뿐이다 — 마디는 여기서 몰아 그린다
+        self.마디떼 = 마디떼(self)
+        self.scene_.addItem(self.마디떼)
         self.setScene(self.scene_)
         self.setRenderHint(QPainter.Antialiasing)
         self.setFrameShape(QFrame.NoFrame)
@@ -638,7 +836,7 @@ class GraphView(QGraphicsView):
         hidden = [t for t, n in self.nodes.items() if not n.isVisible()]
         for gone in hidden[:max(0, len(hidden) - self.KEEP_HIDDEN)]:
             node = self.nodes.pop(gone)
-            self.scene_.removeItem(node)
+            # 장면에서 뺄 것이 없다 — 마디는 항목이 아니다
             self._retired.append(node)
 
         for title in sorted(titles):
@@ -661,7 +859,7 @@ class GraphView(QGraphicsView):
                     d * math.sin(phi) * math.sin(theta),
                     d * math.cos(phi),
                 ]
-            self.scene_.addItem(node)
+            # 장면에 안 넣는다 — 떼가 그린다
             self.nodes[title] = node
 
         seen = set()
@@ -1094,6 +1292,7 @@ class GraphView(QGraphicsView):
         self._fit()  # 위치가 다 정해진 뒤에 재야 실제 범위가 나온다
         self._name_front()
         self._resolve_labels()
+        self.마디떼.update()          # 마디는 떼가 한 번에 그린다
         self.viewport().update()
         self._덮개고침()
 
@@ -1277,48 +1476,57 @@ class GraphView(QGraphicsView):
         #   (손 얹은 선만 `_선위층` 이 표식 위에 다시 그려 끊기지 않게 한다.)
         painter.save()
 
+        # ★★ **선을 묶어서 한 번에 긋는다.** 예전에는 선마다 붓을 새로 만들고
+        #   한 줄씩 그었다 — 2800장이면 선이 4200줄이고 **한 판에 138ms** 였다.
+        #   마디보다 선이 더 무거웠다(2026-09-26 재서 갈랐다).
+        #   같은 짙기끼리 길 하나에 모아 두고 **짙기마다 한 번씩** 긋는다.
+        #   4200번이 열 번 남짓이 된다. 짙기를 몇 단으로 나누는 것 말고는 안 바뀐다.
+        # ★ `anchor` 를 밖으로 뺐다 — 선마다 함수를 새로 만들고 있었다.
+        def anchor(node, other):
+            """가운데 항목으로 가는 선은 링 가장자리에서 멈춘다.
+
+            가운데 자리에는 표식이 앉아 있다. 원점까지 그으면 선이 표식을 뚫고
+            지나가 글자를 가로지른다.
+            """
+            if node.title != ROOT:
+                return node.pos()
+            d = other.pos()
+            length = math.hypot(d.x(), d.y()) or 1.0
+            edge = self.RING * 0.92
+            return QPointF(d.x() / length * edge, d.y() / length * edge)
+
+        보통길: dict[int, QPainterPath] = {}
+        가라앉은길: dict[int, QPainterPath] = {}
+        점선길: dict[int, QPainterPath] = {}
+
+        def 담기(통, 짙기, pa, pb):
+            칸 = max(4, (짙기 // 4) * 4)          # 짙기를 몇 단으로 — 눈에는 같다
+            길 = 통.get(칸)
+            if 길 is None:
+                길 = 통[칸] = QPainterPath()
+            길.moveTo(pa)
+            길.lineTo(pb)
+
         for src, dst in self.edges:
             a, b = self.nodes.get(src), self.nodes.get(dst)
             if not (a and b):
                 continue
-
-            def anchor(node, other):
-                """가운데 항목으로 가는 선은 링 가장자리에서 멈춘다.
-
-                가운데 자리에는 표식이 앉아 있다. 원점까지 그으면 선이 표식을 뚫고
-                지나가 글자를 가로지른다.
-                """
-                if node.title != ROOT:
-                    return node.pos()
-                d = other.pos()
-                length = math.hypot(d.x(), d.y()) or 1.0
-                edge = self.RING * 0.92
-                return QPointF(d.x() / length * edge, d.y() / length * edge)
-
             pa, pb = anchor(a, b), anchor(b, a)
             if tuple(sorted((src, dst))) in self.soft:
                 # 짐작한 선은 **점선으로 아주 옅게.** 있다는 것만 보이면 된다 —
                 # 손으로 적은 선과 같은 굵기로 그리면 둘이 같은 말인 줄 안다.
                 if not (a.dim or b.dim):
-                    # 34 로 뒀더니 **화면 캡처에서 하나도 안 잡혔다.** 「엮임 249」로
-                    # 세어지는데 선이 한 줄도 안 보이면 없는 것과 같다. 점선이라
-                    # 진하게 해도 손으로 적은 선(이어진 실선)과 안 섞인다.
                     옅음 = 0.3 + 0.7 * min(a.depth, b.depth)
-                    painter.setPen(QPen(theme.rgba(theme.T.MUTED, int(96 * 옅음)),
-                                        1.0, Qt.DotLine))
-                    painter.drawLine(pa, pb)
+                    담기(점선길, int(96 * 옅음), pa, pb)
                 continue
             heat = max(a.speaking, b.speaking)
             fog = 0.2 + 0.8 * min(a.depth, b.depth)
             lit = a.hovered or b.hovered
             if a.dim or b.dim:
-                # 한쪽이라도 초점 밖이면 선도 가라앉는다. 밝은 선이 남으면 시선이 끌려간다.
-                painter.setPen(QPen(theme.rgba(theme.T.MUTED, int(38 * fog)), 1.0))
-                painter.drawLine(pa, pb)
+                # 한쪽이라도 초점 밖이면 선도 가라앉는다.
+                담기(가라앉은길, int(38 * fog), pa, pb)
                 continue
             if lit:
-                # 손 얹힌 항목에 닿은 선. 굵은 깔개를 덧대 빛나게 했었는데, 이어진 것이
-                # 백 개가 넘는 항목에서는 화면이 통째로 붉어졌다 — 가는 선 하나로 줄였다.
                 painter.setPen(QPen(theme.rgba(theme.T.ACCENT, 손선밝기), 손선굵기))
                 painter.drawLine(pa, pb)
                 continue
@@ -1327,18 +1535,24 @@ class GraphView(QGraphicsView):
                 grad.setColorAt(0.0, theme.rgba(theme.T.ACCENT, int(40 + 170 * a.speaking)))
                 grad.setColorAt(1.0, theme.rgba(theme.T.ACCENT, int(40 + 170 * b.speaking)))
                 painter.setPen(QPen(QBrush(grad), 1.0 + 1.0 * heat))
-            else:
-                painter.setPen(QPen(theme.rgba(theme.T.ACCENT, int(46 * fog)), 1.0))
-            painter.drawLine(pa, pb)
-
-            if heat > 0.05:
-                # 밝은 선 위로 점이 흐른다. 선이 그냥 밝아지는 것보다 '지금 오간다'가 읽힌다.
+                painter.drawLine(pa, pb)
+                # 밝은 선 위로 점이 흐른다.
                 t = ((self.tick % 26) / 26.0 + (0.0 if a.speaking >= b.speaking else 0.5)) % 1.0
                 head, tail = (pa, pb) if a.speaking >= b.speaking else (pb, pa)
                 spot = head + (tail - head) * t
                 painter.setPen(QPen(Qt.NoPen))
                 painter.setBrush(QBrush(theme.rgba(theme.T.ACCENT, int(230 * heat * (1 - t * 0.5)))))
                 painter.drawEllipse(spot, 2.2, 2.2)
+                continue
+            담기(보통길, int(46 * fog), pa, pb)
+
+        painter.setBrush(QBrush(Qt.NoBrush))
+        for 통, 색, 꼴 in ((보통길, theme.T.ACCENT, Qt.SolidLine),
+                       (가라앉은길, theme.T.MUTED, Qt.SolidLine),
+                       (점선길, theme.T.MUTED, Qt.DotLine)):
+            for 짙기, 길 in 통.items():
+                painter.setPen(QPen(theme.rgba(색, 짙기), 1.0, 꼴))
+                painter.drawPath(길)
 
         painter.restore()      # 표식 자리를 비워 둔 잘라내기를 여기서 푼다
 
@@ -1366,10 +1580,8 @@ class GraphView(QGraphicsView):
     # --- 조작 -----------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:
-        item = self.itemAt(event.pos())
-        while item is not None and not isinstance(item, NodeItem):
-            item = item.parentItem()
-        if isinstance(item, NodeItem):
+        item = self._node_at(event.pos())
+        if item is not None:
             self.node_clicked.emit(item.title)
             return
         self.clear_focus()  # 빈 곳을 누르면 볼일이 끝난 것으로 본다
@@ -1390,10 +1602,19 @@ class GraphView(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def _node_at(self, pos):
-        item = self.itemAt(pos)
-        while item is not None and not isinstance(item, NodeItem):
-            item = item.parentItem()
-        return item if isinstance(item, NodeItem) else None
+        # ★ 마디는 Qt 항목이 아니라 `itemAt` 으로 못 찾는다. 투영해 둔 자리를 훑는다 —
+        #   자리는 이미 계산해 뒀고 몇 천 장을 훑어도 1ms 안쪽이다.
+        #   **앞엣것부터** 본다(겹쳐 있으면 위에 있는 것을 집어야 한다).
+        곳 = self.mapToScene(pos)
+        가장 = None
+        for 마디 in self.nodes.values():
+            if not 마디.isVisible():
+                continue
+            반지름 = max(6.0, 마디.r * 마디.scale())
+            if math.hypot(곳.x() - 마디.x(), 곳.y() - 마디.y()) <= 반지름:
+                if 가장 is None or 마디.zValue() > 가장.zValue():
+                    가장 = 마디
+        return 가장
 
     # --- 키보드로 그래프 돌기(오너 2026-09-20: 마우스 없이도 써야 한다) ------------
     def 이웃들(self, title: str) -> list[str]:

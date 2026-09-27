@@ -23,6 +23,7 @@ from dataclasses import asdict
 import secrets
 import threading
 import time
+import ipaddress as _망
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -188,6 +189,38 @@ class Handler(BaseHTTPRequestHandler):
         """
         return hmac.compare_digest(온것.encode("utf-8", "surrogatepass"),
                                    우리것.encode("utf-8", "surrogatepass"))
+
+    # 고리(내 기계)와 테일넷만 기본으로 연다. 테일넷은 CGNAT 대역을 쓴다.
+    _고리 = (_망.ip_network("127.0.0.0/8"), _망.ip_network("::1/128"))
+    _테일넷 = (_망.ip_network("100.64.0.0/10"), _망.ip_network("fd7a:115c:a1e0::/48"))
+
+    def _닿아도되나(self) -> str:
+        """어디서 왔는지 본다. **열쇠를 재기 전에** 문을 좁힌다. 괜찮으면 빈 글.
+
+        ★★ 서버가 `0.0.0.0` 에 열려 있어 **같은 공유기의 누구든** 문을 두드릴 수 있었다.
+        막는 것이 베어러 열쇠 하나뿐인데, 그 열쇠는 한 번 깃허브에 올라간 적이 있다.
+        카페·호텔 와이파이에 붙으면 거기 있는 누구에게나 문이 보인다.
+
+        그래서 **내 기계와 테일넷만** 기본으로 연다. 같은 공유기에서 붙는 것은
+        설정에서 켜야 한다 — 폰을 집 와이파이로 쓰던 사람은 한 번 켜면 되고,
+        밖에 나갔을 때는 꺼진 채가 안전하다.
+
+        ★ 주소로 거르는 것은 **열쇠를 대신하지 않는다.** 앞에 문을 하나 더 두는 것뿐이다.
+        ★ 조용히 끊지 않는다 — 왜 막혔고 어떻게 여는지 말해 준다.
+        """
+        곳 = self.client_address[0] if self.client_address else ""
+        try:
+            주소 = _망.ip_address(곳.split("%")[0])          # fe80::1%en0 같은 꼴
+        except ValueError:
+            return f"어디서 왔는지 모르겠다: {곳!r}"
+        if 주소.is_loopback or any(주소 in ㄱ for ㄱ in self._고리):
+            return ""
+        if any(주소 in ㄱ for ㄱ in self._테일넷):
+            return ""
+        if (self.server.cfg or {}).get("같은공유기도열까"):
+            return ""
+        return ("같은 공유기에서 온 요청은 기본으로 막는다 — "
+                "설정 → 외부 연결 에서 「같은 공유기도 열기」를 켜거나 테일스케일로 붙어라")
 
     def _authorized(self, path: str = "") -> bool:
         """폰·내 PC는 페어링 토큰으로, 외부 PC는 폰이 승인한 원격 토큰으로 들어온다.
@@ -448,6 +481,9 @@ class Handler(BaseHTTPRequestHandler):
         return 답
 
     def do_GET(self) -> None:
+        막힌까닭 = self._닿아도되나()
+        if 막힌까닭:
+            return self._send(403, {"error": 막힌까닭})
         # ★ 읽는 쪽도 마찬가지다 — 파일이 읽는 사이 사라지거나(밖에서 지움) 깨져 있으면
         #   예외가 그대로 새 나가 **답도 없이 연결이 끊긴다.** 끊긴 연결은 아무 말도 안 한다.
         try:
@@ -953,6 +989,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, self._길없다(url.path))
 
     def do_POST(self) -> None:
+        막힌까닭 = self._닿아도되나()
+        if 막힌까닭:
+            return self._send(403, {"error": 막힌까닭})
         # ★★ **쓰기가 막히면 서버가 답도 없이 끊겼다.** 읽기 전용 파일·잠긴 파일·꽉 찬
         #   디스크에서 `WriteBlocked` 가 그대로 새 나간다 — 창은 잡는데(ui.py) 문은 안 잡았다.
         #   AI 는 성공인지 실패인지도 모른 채 다음 일을 한다. **왜 못 썼는지 말한다.**
@@ -2182,15 +2221,41 @@ class EBServer(ThreadingHTTPServer):
         if not 열쇠:
             return
 
-        def 받으면(것: dict) -> None:
+        def 받으면(것: dict, 주소: str = "") -> None:
             if not isinstance(것, dict) or 것.get("kind") != "note":
                 return                 # 제안 신호 따위는 그물이 안 다룬다
             try:
                 self.notes.reindex()
             except Exception as e:
                 _알림(f"[그물] 다시 보다 탈: {type(e).__name__}: {e}")
+            if not 주소:
+                return
+            # ★★ **그 기계의 사본을 따라잡는다**(행성 · 오너 2026-09-27).
+            #   예전에는 제 창고만 다시 봤다 — 창고가 NAS 에 하나일 때 맞던 일이다.
+            #   이제는 기계마다 제 창고라, 바뀐 글은 **그 기계에 가서 받아 와야** 한다.
+            #   ★ 신호를 놓쳐도 자국이 어디까지 받았는지 들고 있어 다음에 메워진다.
+            try:
+                import 행성 as _행성
 
-        self.그물 = mesh.그물(열쇠, 받으면)
+                난것 = _행성.따라잡기(주소, 열쇠)
+                if 난것.까닭:
+                    _알림(f"[행성] 따라잡다 걸림: {난것.까닭}")
+            except Exception as e:
+                _알림(f"[행성] 따라잡다 탈: {type(e).__name__}: {e}")
+
+        def 붙으면(주소: str) -> None:
+            """붙는 순간 한 번 따라잡는다 — 꺼져 있던 사이에 바뀐 것을 메운다."""
+            try:
+                import 행성 as _행성
+
+                난것 = _행성.따라잡기(주소, 열쇠)
+                if 난것.새로 or 난것.고침 or 난것.지움:
+                    _알림(f"[행성] 따라잡았다 — 새로 {난것.새로} · 고침 {난것.고침} "
+                         f"· 지움 {난것.지움}")
+            except Exception as e:
+                _알림(f"[행성] 붙어서 따라잡다 탈: {type(e).__name__}: {e}")
+
+        self.그물 = mesh.그물(열쇠, 받으면, 붙으면=붙으면)
         self.그물.돌기()
 
     def start_mirror(self, every_sec: int = 60) -> None:
@@ -2330,6 +2395,28 @@ def _self_check() -> None:
 
     # 토큰은 헤더에 실리므로 ASCII다(token_urlsafe). 틀린 값도 ASCII로 시험한다.
     assert call("GET", "/eb/v1/hello", token="wrong-token")[0] == 401
+
+    # ★★ **열쇠를 재기 전에 어디서 왔는지 본다.** 서버가 0.0.0.0 에 열려 있어
+    #   같은 공유기의 누구든 두드릴 수 있었다 — 카페 와이파이에서는 거기 있는
+    #   누구에게나 문이 보인다. 내 기계와 테일넷만 기본으로 열고, 같은 공유기는
+    #   설정에서 켠다(2026-09-27 · 오너가 미뤄 뒀던 것을 진행).
+    #   ★ **맞는 열쇠를 들고 와도 막혀야** 문이 앞에 선 것이다 — 그걸로 잰다.
+    class _어디서(Handler):
+        _닿아도되나 = Handler._닿아도되나
+        def __init__(자기, 곳, 설정):        # 진짜 연결 없이 주소만 흉내 낸다
+            자기.client_address = (곳, 1234)
+            자기.server = type("ㅅ", (), {"cfg": 설정})()
+    for 곳, 열까, 막혀야 in (("127.0.0.1", False, False), ("::1", False, False),
+                          ("100.101.102.103", False, False),   # 테일넷
+                          ("fd7a:115c:a1e0::1", False, False),
+                          ("192.168.0.42", False, True),       # 같은 공유기 — 기본 막힘
+                          ("192.168.0.42", True, False),       # 켜면 열린다
+                          ("8.8.8.8", False, True),
+                          ("말도 안 되는 주소", False, True)):
+        까닭 = _어디서(곳, {"같은공유기도열까": 열까})._닿아도되나()
+        assert bool(까닭) is 막혀야, (곳, 열까, 까닭)
+        if 막혀야 and "모르겠다" not in 까닭:
+            assert "설정" in 까닭, f"막으면서 여는 길을 안 알려 준다: {까닭}"
     assert call("GET", "/eb/v1/hello", token="")[0] == 401
 
     # 큰 본문을 **적어 내기만** 해도 굳으면 안 된다. 서버가 0.0.0.0에 열려 있어서

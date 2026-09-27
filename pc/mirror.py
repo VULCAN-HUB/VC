@@ -119,9 +119,19 @@ def 한판(store, 부르기, where: Path, 한번에수: int = 한번에) -> 받�
         제목 = str(것.get("title") or "").strip()
         if not 제목:
             continue
-        몸답 = 부르기("GET", f"/eb/v1/memory/note?title={제목}")
+        # ★★ **`full=1` 을 꼭 붙인다.** 그 문은 AI 가 읽으라고 만든 것이라 2만 자가
+        #   넘으면 **말없이 자른다**(`server.MAX_NOTE_CHARS`). 안 붙이고 받았더니
+        #   25,001자 글이 20,001자로 들어왔는데 받은 쪽은 「새로 2」라고 성공을
+        #   알렸다 — 사본은 **메인이 죽어도 살아남으라고** 두는 것인데, 잘린 줄도
+        #   모르고 살아남는다(2026-09-27 재서 잡았다).
+        몸답 = 부르기("GET", f"/eb/v1/memory/note?title={제목}&full=1")
         if not 몸답 or not isinstance(몸답.get("text"), str):
             continue                      # 그 글만 건너뛴다 — 다음 번에 다시 걸린다
+        if 몸답.get("cut"):
+            # ★ **잘린 것은 안 쌓는다.** 쌓으면 지문까지 적혀 다시 안 받는다 —
+            #   잘린 사본이 영영 굳는다. 건너뛰고 까닭을 남긴다.
+            결과.까닭 = (결과.까닭 + " · " if 결과.까닭 else "") + f"{제목}: 잘려서 안 받았다"
+            continue
         받은몸 = 몸답["text"]
         있던 = store.read(제목)
         # ★ 받은 판의 **지문**을 적어 둔다 — 나중에 이 PC 에서 고쳐 보낼 때 「내가 본 판」으로 쓴다
@@ -217,7 +227,8 @@ def _self_check() -> None:
         손님 = Notes(Path(tmp) / "손님창고", str(Path(tmp) / "손님.db"))
         자국 = Path(tmp) / MEMO
 
-        메인글 = {"가": "가의 몸", "나": "나의 몸"}
+        # ★ **긴 글을 하나 섞는다.** 짧은 글만으로 재면 「말없이 잘린다」를 영영 못 잡는다.
+        메인글 = {"가": "가의 몸", "나": "나의 몸", "긴글": "가" * 25000}
         지운것: list[str] = []
         부른것: list[str] = []
 
@@ -232,22 +243,42 @@ def _self_check() -> None:
                 return {"changes": 바뀜, "trashed": [{"title": t} for t in 지운것],
                         "next_since": max([c["mtime"] for c in 바뀜], default=뒤로)}
             if path.startswith("/eb/v1/memory/note"):
-                제목 = path.split("title=")[1]
-                return {"text": 메인글.get(제목, "")} if 제목 in 메인글 else None
+                # ★★ **진짜 문처럼 자른다.** 그 문은 2만 자가 넘으면 말없이 자르고
+                #   `cut` 을 붙인다(`server.MAX_NOTE_CHARS`). 대역이 안 자르면
+                #   **받는 쪽이 `full=1` 을 빼먹어도 검사가 통과한다** — 실제로
+                #   빼먹고 있었고 25,001자 글이 20,001자로 사본에 들어갔다.
+                import urllib.parse as _주소
+
+                인자 = _주소.parse_qs(_주소.urlsplit(path).query)
+                제목 = (인자.get("title") or [""])[0]
+                if 제목 not in 메인글:
+                    return None
+                몸 = 메인글[제목]
+                통째 = (인자.get("full") or ["0"])[0] not in ("0", "", "false")
+                if not 통째 and len(몸) > 20000:
+                    return {"text": 몸[:20000], "cut": True}
+                return {"text": 몸}
             return None
 
         # ① 처음 받으면 둘 다 새로 생긴다
         r = 한판(손님, 부르기, 자국)
-        assert (r.새로, r.고침, r.지움) == (2, 0, 0), r
+        assert (r.새로, r.고침, r.지움) == (3, 0, 0), r   # 가·나·긴글
         assert 손님.read("가").body.strip() == "가의 몸"
 
         # ② 바뀐 게 없으면 아무 일도 안 한다 — 같은 것을 다시 쓰지 않는다
         r2 = 한판(손님, 부르기, 자국)
         assert r2.몇개 == 0, r2
-        assert "since=11.0" in 부른것[-1], 부른것[-1]      # 받은 자리부터 이어서 묻는다
+        assert "since=12.0" in 부른것[-1], 부른것[-1]      # 받은 자리부터 이어서 묻는다
 
         # ③ 메인에서 고치면 사본도 고쳐진다 — 갈래·고정은 그대로
         손님.write(Note(title="가", body="가의 몸", kind="결정", pinned=True))
+        # ★★ **긴 글이 통째로 와야 한다.** `full=1` 을 빼면 2만 자에서 잘리는데,
+        #   받은 쪽은 「새로 받았다」고 성공을 알린다 — 사본은 메인이 죽어도
+        #   살아남으라고 두는 것인데 잘린 줄도 모르고 살아남는다(2026-09-27).
+        긴것 = 손님.read("긴글")
+        assert 긴것 is not None, "긴 글이 사본에 아예 안 왔다"
+        assert len(긴것.body.rstrip()) == 25000, f"긴 글이 잘려서 왔다: {len(긴것.body)}자"
+
         메인글["가"] = "가의 몸 · 고침"
         _자국쓰기(자국, {"since": 0})
         r3 = 한판(손님, 부르기, 자국)

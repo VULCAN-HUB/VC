@@ -911,9 +911,12 @@ def run() -> None:
         # 말할 때만 발광 효과가 붙는다(성능). 말이 끝나면 떼어 낸다.
         for node in win.graph.nodes.values():
             node.set_speaking(False)
-        assert all(n.graphicsEffect() is None for n in win.graph.nodes.values())
+        # ★ 발광은 이제 **그려서** 낸다. 마디가 Qt 항목이 아니게 되면서
+        #   `QGraphicsDropShadowEffect` 를 붙일 데가 없어졌다 — 재는 곳도 `speaking` 이다.
+        #   (마디를 항목으로 두면 2800장에 한 판 320ms 다. 그래서 걷어냈다 · 2026-09-26)
+        assert all(n.speaking == 0 for n in win.graph.nodes.values())
         win.show_note("카페 단골")
-        lit = [n for n in win.graph.nodes.values() if n.graphicsEffect() is not None]
+        lit = [n for n in win.graph.nodes.values() if n.speaking > 0]
         assert lit and lit[0].title == "카페 단골", "발광이 딴 데 붙었다"
         assert win.say.text().startswith("카페 단골 얘기야."), win.say.text()
 
@@ -2052,23 +2055,69 @@ def run() -> None:
         notes.use_embedder(None)
 
         # ★★ **새 판이 있으면 말하고 묻는다** — 조용히 갈아 끼우지 않는다.
-        win._새판보이기({"판": "v9.9.9", "받을곳": "https://x/a.dmg",
-                     "이름": "a.dmg", "셈곳": "", "쪽": "https://x"})
+        #   ★ 창을 띄우지 않고 **화면 안 띠**로 알린다. 예전에는 맨 `QMessageBox` 라
+        #     이 창만 옛날 프로그램처럼 보였고(오너: 「투박하다」 · 2026-09-26)
+        #     받는 동안 아무 표시도 없었다.
+        # ★★ **창을 다시 잡으면 새 판을 본다.** 세 시간마다만 보면 그 사이에 난 판을
+        #   몇 시간씩 모른다(오너 2026-09-27 · 「실시간」). 다만 창을 왔다 갔다 할
+        #   때마다 깃허브를 두들기면 안 되니 10분은 쉰다 — 그 쉼도 잰다.
+        _본횟수 = []
+        _옛찾기 = win.새판찾기
+        win.새판찾기 = lambda 너무잦으면건너뛸까=False: (
+            _본횟수.append(1) if not (너무잦으면건너뛸까 and _본횟수) else None)
+        try:
+            win.changeEvent(QEvent(QEvent.ActivationChange))
+            _첫번 = len(_본횟수)
+            win.changeEvent(QEvent(QEvent.ActivationChange))
+            assert len(_본횟수) == _첫번, "창을 잡을 때마다 깃허브를 두들긴다"
+        finally:
+            win.새판찾기 = _옛찾기
+
+        # ★★ **찾자마자 띠를 띄우지 않는다 — 조용히 받아 두고 그때 묻는다**
+        #   (오너 2026-09-27). 예전에는 「새 판이 나왔어」를 먼저 띄우고 사람이
+        #   누르면 그때부터 90MB 를 받았다 — 누른 뒤에 기다려야 했다.
+        #   ★ 「조용히 갈아 끼우지 않는다」는 그대로다: 받는 것만 조용하고
+        #     **바꾸는 순간은 사람이 누른다.**
+        _받으러갔나 = []
+        _옛받기 = win.새판받기
+        win.새판받기 = lambda 조용히=False: _받으러갔나.append(조용히)
+        try:
+            win._새판보이기({"판": "v9.9.9", "받을곳": "https://x/a.dmg",
+                         "이름": "a.dmg", "셈곳": "", "쪽": "https://x"})
+            app.processEvents()
+            assert _받으러갔나 == [True], f"찾자마자 조용히 받으러 안 갔다: {_받으러갔나}"
+            assert not win._새판띠.isVisibleTo(win), "받기도 전에 띠부터 띄운다"
+        finally:
+            win.새판받기 = _옛받기
+
+        # 다 받으면 **그때** 묻는다
+        win._새판보이기({"받아뒀다": "/tmp/a.dmg"})
         app.processEvents()
-        _상자새판 = getattr(win, "_새판상자", None)
-        assert _상자새판 is not None, "새 판이 있는데 아무 말도 안 한다"
-        assert not _상자새판.isModal(), "새 판 상자가 창을 막는다"
-        assert "9.9.9" in _상자새판.text() and "기록" in _상자새판.text(), _상자새판.text()
-        _상자새판.close(); win._새판상자 = None
+        assert win._새판띠.isVisibleTo(win), "받아 뒀는데 아무 말도 안 한다"
+        assert "9.9.9" in win._새판말.text() and "지금 갈까" in win._새판말.text(), win._새판말.text()
+        assert win._새판받기단추.text() == "지금 바꾸기", win._새판받기단추.text()
+
+        # 「나중에」를 누르면 접힌다 — 하던 일을 안 막는다
+        win._새판나중단추.click()
         app.processEvents()
-        # 받을 것이 없으면 상자를 안 띄우고 말만 한다
+        assert not win._새판띠.isVisibleTo(win), "나중에 를 눌렀는데 안 접힌다"
+
+        # 손으로 누른 받기는 진행률이 보인다(조용히가 아니다)
+        win._새판보이기({"진행": (52428800, 104857600)})
+        assert win._새판자.isVisibleTo(win._새판띠), "진행 막대가 안 보인다"
+        assert "50%" in win._새판말.text(), win._새판말.text()
+
+        # 받을 것이 없으면 띠를 안 띄우고 말만 한다
         win._새판보이기({"판": "v9.9.9", "받을곳": "", "쪽": "https://x"})
         assert "9.9.9" in win._say_text, win._say_text
-        # 탈·끝남도 말로 나온다
+        # ★ 조용히 받다 틀어져도 **말은 한다.** 잠잠하면 영영 업데이트가 안 된다
         win._새판보이기({"탈": "셈이 안 맞는다"})
-        assert "못 받았어" in win._say_text, win._say_text
+        assert "못 받았어" in win._새판말.text(), win._새판말.text()
         win._새판보이기({"열었다": "/tmp/a.dmg"})
-        assert "받았어" in win._say_text and "기록은 그대로" in win._say_text, win._say_text
+        assert "바꾸는 중" in win._새판말.text(), win._새판말.text()
+        # ★ 셈을 못 맞춰 봤으면 그렇다고 말한다 — 「맞았다」로 넘어가면 안 된다
+        win._새판보이기({"받아뒀다": "/tmp/a.dmg", "못맞춤": "그 판에 셈 파일이 없다"})
+        assert "못 맞춰" in win._새판말.text(), win._새판말.text()
 
         # ★★ **아랫단이 본문을 밀어내면 안 된다.** 카드 높이는 고정인데 링크·가리킨
         #   곳은 글마다 제멋대로 길다. 안 가두던 때는 620짜리 카드에서 본문이 최소
