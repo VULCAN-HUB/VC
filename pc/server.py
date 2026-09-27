@@ -2147,7 +2147,10 @@ class EBServer(ThreadingHTTPServer):
         got = self.cfg.get("사본") or {}
         if not isinstance(got, dict) or got.get("역할") != "손님":
             return {}
-        주소, 열쇠 = str(got.get("main_url") or "").strip(), str(got.get("main_token") or "").strip()
+        # ★ **여기 한 자리에서 다듬는다.** 부르는 쪽마다 맡기면 반드시 한 군데가 빠진다 —
+        #   옛 설정에 스킴 없이 적혀 있는 것도 이 길로 들어온다.
+        주소 = paths.메인주소다듬기(str(got.get("main_url") or ""))
+        열쇠 = str(got.get("main_token") or "").strip()
         return {"main_url": 주소, "main_token": 열쇠} if 주소 and 열쇠 else {}
 
     def _메인부르기(self, 설정: dict):
@@ -2173,8 +2176,12 @@ class EBServer(ThreadingHTTPServer):
                     if 바이트:
                         return raw
                     return json.loads(raw.decode()) if raw else {}
-            except (urllib.error.URLError, OSError, ValueError):
+            except (urllib.error.URLError, OSError, ValueError) as 탈:
                 # 못 닿아도 **사본은 그대로 둔다** — 부르는 쪽이 까닭을 말한다.
+                # ★★ **까닭을 챙겨 둔다.** 앞서는 그냥 `None` 이라 화면에
+                #   「못 닿았어」한 줄만 떴다 — 주소를 잘못 적었는지, 꺼져 있는지,
+                #   열쇠가 틀렸는지 **가릴 길이 없었다**(오너가 실기에서 걸렸다).
+                self._메인탈 = f"{type(탈).__name__}: {str(탈)[:120]}"
                 return None
 
         return 부르기
@@ -2185,13 +2192,34 @@ class EBServer(ThreadingHTTPServer):
 
         설정 = self.손님설정()
         if not 설정:
+            # ★★ **「메인이라서」와 「손님인데 반쪽이라서」는 다르다.**
+            #   `손님설정()` 은 둘 다 빈 표를 준다 — 그걸 통째로 「메인이야」로 읽어서,
+            #   **손님으로 골라 둔 PC 가 「이 VC 는 메인이야」라고 답했다**
+            #   (오너가 윈도우에서 걸렸다 · 2026-09-28). 골라 둔 것과 반대로 말하면
+            #   사람은 설정이 안 먹은 줄 안다. 여기서 갈라 말한다.
+            것 = self.cfg.get("사본") or {}
+            것 = 것 if isinstance(것, dict) else {}
+            if 것.get("역할") == "손님":
+                없는것 = []
+                if not str(것.get("main_url") or "").strip():
+                    없는것.append("메인 주소")
+                if not str(것.get("main_token") or "").strip():
+                    없는것.append("메인 열쇠")
+                return (f"손님으로 골라 뒀는데 {' 과 '.join(없는것)} 가 비었어 — "
+                        f"메인 PC 의 페어링 열쇠(`eb_config.json` 의 `pair_token`)를 적어야 한다.")
             return "이 VC 는 메인이야 — 받을 곳이 없다."
         자국 = paths.기계자리(mirror.MEMO)
         부르기 = self._메인부르기(설정)
         받 = mirror.한판(self.notes, 부르기, 자국)
         보 = mirror.보내기(self.notes, 부르기, 자국)
         if 받.까닭 or 보.까닭:
-            return f"메인({설정['main_url']})에 못 닿았어."
+            까닭 = getattr(self, "_메인탈", "")
+            덧 = f" — {까닭}" if 까닭 else ""
+            if "unknown url type" in 까닭:
+                덧 = " — 주소에 `http://` 가 빠졌다"
+            elif "401" in 까닭 or "403" in 까닭:
+                덧 = " — 열쇠가 안 맞는다(메인 PC 의 페어링 열쇠를 적어야 한다)"
+            return f"메인({설정['main_url']})에 못 닿았어{덧}."
         말 = []
         if 받.몇개:
             말.append(f"받음 새로 {받.새로} · 고침 {받.고침} · 지움 {받.지움}"
@@ -2513,11 +2541,34 @@ def _self_check() -> None:
     # 주소·열쇠가 반쪽이면 손님이 아니다(빈 주소로 부르다 터지는 것을 막는다)
     server.cfg["사본"] = {"역할": "손님", "main_url": "", "main_token": "k"}
     assert server.손님설정() == {}
+    # ★★ **손님으로 골라 뒀으면 「메인이야」라고 하면 안 된다.**
+    #   반쪽이라 못 도는 것인데 「이 VC 는 메인이야」로 답해서, 손님으로 골라 둔 PC 가
+    #   **고른 것과 반대로 말했다**(오너가 윈도우에서 걸렸다). 사람은 설정이 안
+    #   먹은 줄 안다 — 안 되는 까닭을 짚어 말한다.
+    _말2 = server.사본한판()
+    assert "메인이야" not in _말2, _말2
+    assert "손님" in _말2 and "메인 주소" in _말2, _말2
+    server.cfg["사본"] = {"역할": "손님", "main_url": "http://x:1", "main_token": ""}
+    _말3 = server.사본한판()
+    assert "메인이야" not in _말3 and "메인 열쇠" in _말3, _말3
+    assert "pair_token" in _말3, _말3
     # 닿지 않는 메인이면 **까닭을 말하고 창고는 그대로 둔다**
     server.cfg["사본"] = {"역할": "손님", "main_url": "http://127.0.0.1:9", "main_token": "k"}
     _장수 = server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0]
     assert "못 닿았어" in server.사본한판(), server.사본한판()
     assert server.notes.conn.execute("SELECT count(*) FROM notes").fetchone()[0] == _장수, "못 닿았다고 창고가 줄었다"
+    # ★★ **`http://` 를 안 적어도 붙는다**(오너 2026-09-28).
+    #   테일스케일이 보여 주는 것은 `100.x.x.x` 뿐이라 사람은 포트만 붙여 적는다.
+    #   그러면 `urllib` 이 「unknown url type」으로 튕기고, 부르는 쪽이 그 탈을
+    #   삼켜 **「못 닿았어」한 줄만** 떴다 — 시킨 대로 적었는데 안 되는 자리였다.
+    server.cfg["사본"] = {"역할": "손님", "main_url": "127.0.0.1:9", "main_token": "k"}
+    assert server.손님설정()["main_url"] == "http://127.0.0.1:9", server.손님설정()
+    # 그리고 **까닭을 말한다** — 주소가 틀렸는지 꺼져 있는지 열쇠가 틀렸는지 갈려야 한다
+    _말 = server.사본한판()
+    assert "못 닿았어" in _말 and "—" in _말, _말
+    # 이미 스킴을 적었으면 **건드리지 않는다**
+    server.cfg["사본"] = {"역할": "손님", "main_url": "https://a.b:1/", "main_token": "k"}
+    assert server.손님설정()["main_url"] == "https://a.b:1", server.손님설정()
     server.cfg.pop("사본", None)
 
     # --- 바뀐 것만 내어 주기(결정 30) — 딴 PC 의 VC 가 사본을 쌓는 문 ---

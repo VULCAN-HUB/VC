@@ -469,6 +469,100 @@ def open_dialog(win, notes: Notes):
     화면틀.addStretch(1)
 
     # ── 바깥 AI 제공자(오너 결정 2). 키는 보관소로 간다. 다시 켜면 적용된다.
+    # ── 칸 배치(오너 2026-09-28: 「원하는 위치에 원하는 것들만」)
+    칸틀, _ = 쪽("칸 배치", "오른쪽 줄과 그래프 아래에 **무엇을 어느 차례로** 둘지. "
+                      "끌어서 옮기고, 안 쓰는 것은 「안 보임」으로 던진다.")
+    import 칸배치 as _칸배치
+
+    창._칸목록 = {}
+
+    def _칸통(자리: str, 이름: str, 풀이: str):
+        """자리 하나에 딸린 목록. **서로 끌어 옮길 수 있다**(Qt 가 해 준다)."""
+        말 = QLabel(f"{이름} — {풀이}")
+        말.setObjectName("ask_label")
+        말.setWordWrap(True)
+        목 = QListWidget()
+        목.setObjectName("pick")
+        목.setDragDropMode(QAbstractItemView.DragDrop)
+        목.setDefaultDropAction(Qt칸.MoveAction)
+        목.setSelectionMode(QAbstractItemView.SingleSelection)
+        목.setMinimumHeight(96)
+        칸틀.addWidget(말)
+        칸틀.addWidget(목)
+        창._칸목록[자리] = 목
+        return 목
+
+    from PyQt5.QtCore import Qt as Qt칸
+    from PyQt5.QtWidgets import QAbstractItemView
+
+    _칸통("우", "오른쪽 줄", "세로로 쌓인다. 위에 있는 것이 먼저 나온다")
+    _칸통("아래", "그래프 아래", "그래프 밑에 깔린다")
+    _칸통("숨김", "안 보임", "안 그린다. 언제든 다시 끌어올 수 있다")
+
+    def _칸그리기(배치) -> None:
+        for 목 in 창._칸목록.values():
+            목.clear()
+        for 이름, 자리 in _칸배치.맞추기(배치):
+            # ★★ **빈 `QListWidget` 은 거짓이다** — PyQt5 가 항목 수를 참/거짓으로
+            #   내놓는다. `목 or 기본` 으로 적었더니 **비어 있는 목록은 다 건너뛰어**
+            #   열여섯 칸이 전부 「오른쪽」으로 흘러갔다(검사가 잡았다 · 2026-09-28).
+            #   Qt 물건은 `is None` 으로만 가른다.
+            목 = 창._칸목록.get(자리)
+            if 목 is None:
+                목 = 창._칸목록["우"]
+            from PyQt5.QtWidgets import QListWidgetItem
+
+            것 = QListWidgetItem(_칸배치.보일이름.get(이름, 이름))
+            것.setData(Qt칸.UserRole, 이름)
+            목.addItem(것)
+
+    def _칸모으기() -> list:
+        """세 목록에 놓인 그대로 읽는다 — **화면이 참이다.**"""
+        난것 = []
+        for 자리, 목 in 창._칸목록.items():
+            for ㄱ in range(목.count()):
+                것 = 목.item(ㄱ)
+                난것.append((str(것.data(Qt칸.UserRole) or ""), 자리))
+        # 자리별로 모아 놓으면 차례가 섞인다 — 우/아래/숨김 차례로 다시 세운다
+        차례 = {ㄱ: ㄴ for ㄴ, ㄱ in enumerate(_칸배치.자리들)}
+        난것.sort(key=lambda ㄱ: 차례.get(ㄱ[1], 9))
+        return 난것
+
+    창.칸모으기 = _칸모으기
+    _칸그리기(win.지금칸배치() if hasattr(win, "지금칸배치") else None)
+
+    칸말 = QLabel("")
+    칸말.setObjectName("hint")
+    칸말.setWordWrap(True)
+
+    def _칸저장() -> None:
+        배치 = _칸모으기()
+        if hasattr(win, "칸배치저장"):
+            win.칸배치저장(배치)
+        else:
+            _칸배치.쓰기(배치)
+        갈린 = _칸배치.자리별(배치)
+        칸말.setText(f"놓았다 — 오른쪽 {len(갈린['우'])}개 · 아래 {len(갈린['아래'])}개 · "
+                   f"안 보임 {len(갈린['숨김'])}개")
+
+    def _칸되돌리기() -> None:
+        _칸그리기(_칸배치.기본())
+        _칸저장()
+        칸말.setText("처음 차례로 되돌렸다.")
+
+    칸단추줄 = QHBoxLayout()
+    창.칸저장단추 = QPushButton("놓기")
+    창.칸저장단추.clicked.connect(_칸저장)
+    칸되돌림 = QPushButton("처음으로")
+    칸되돌림.setObjectName("quiet")
+    칸되돌림.clicked.connect(_칸되돌리기)
+    칸단추줄.addWidget(창.칸저장단추)
+    칸단추줄.addWidget(칸되돌림)
+    칸단추줄.addStretch(1)
+    칸틀.addLayout(칸단추줄)
+    칸틀.addWidget(칸말)
+    칸틀.addStretch(1)
+
     바깥틀, _ = 쪽("바깥 AI", "자체 엔진 대신 클라우드 모델을 쓴다. 키는 운영체제 보관소에 들어가고, 바꾸면 다시 켜야 적용된다.")
     쓰던 = paths.load_config().get("backend") or {}
     창.뒤종류 = QComboBox()
@@ -705,7 +799,7 @@ def open_dialog(win, notes: Notes):
 
     창.사본주소 = QLineEdit(쓰던사본.get("main_url", ""))
     창.사본주소.setObjectName("field")
-    창.사본주소.setPlaceholderText("메인 주소 — http://100.x.x.x:8765 (테일스케일 주소)")
+    창.사본주소.setPlaceholderText("메인 주소 — 100.x.x.x:8765 (테일스케일 주소. http:// 는 알아서 붙인다)")
     줄(사본틀, "메인 주소 (손님일 때)", 창.사본주소)
 
     창.사본열쇠 = QLineEdit()
@@ -744,7 +838,11 @@ def open_dialog(win, notes: Notes):
         그물값 = 창.그물열쇠.text().strip()
         if 그물값 and not 그물값.isascii():
             그물값 = ""
-        새것 = {"역할": 역할, "main_url": 창.사본주소.text().strip(), "main_token": 열쇠}
+        # ★ 적은 그대로 두지 않고 **부를 수 있는 꼴로 고쳐 남긴다** — 다시 열면
+        #   고쳐진 것이 보이므로, 무엇이 달라졌는지 사람이 안다.
+        주소 = paths.메인주소다듬기(창.사본주소.text())
+        창.사본주소.setText(주소)
+        새것 = {"역할": 역할, "main_url": 주소, "main_token": 열쇠}
         paths.save_config({**cfg, "사본": 새것, "그물": {"열쇠": 그물값}})
         # 떠 있는 서버에 곧바로 먹인다 — 다시 켜라고만 하면 켜 놓고도 안 도는 줄 안다
         try:

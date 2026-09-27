@@ -156,6 +156,7 @@ a = Analysis(
         "skills", "engine", "backends", "remote", "phone_relay",
         "product_search", "models_config", "model_store", "eb_protocol",
         "행성",          # 기계마다 제 사본 창고
+        "칸배치",        # 어느 칸을 어디에 둘지
         "ingest", "gate", "settings", "keystore", "connectors", "selflearn", "google_auth",
         # 창고의 네 가지 일과 2단계(헤르메스). 늦게 불러 쓰므로 여기 없으면 구운 판에서 죽는다.
         "wiki", "wikilog", "synth", "audit", "query", "consolidate",

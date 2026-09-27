@@ -183,6 +183,11 @@ class 그물:
     def 붙은수(self) -> int:
         return len(self._붙은것)
 
+    @property
+    def 붙은주소들(self) -> list[str]:
+        """지금 귀를 대고 있는 이웃들. **꺼진 것은 없다** — 화면이 회색으로 그릴 때 쓴다."""
+        return sorted(self._붙은것)
+
 
 def _self_check() -> None:
     import io

@@ -465,8 +465,12 @@ class MainWindow(QWidget):
         caret.timeout.connect(self._blink)
         caret.start(600)
 
-        legend_row = QHBoxLayout()
-        self.legend = Legend()          # 검사가 「카드가 이걸 덮나」를 재려면 잡을 수 있어야 한다
+        # ★ 범례는 **그릇에 담는다** — 자리를 옮기려면 위젯 하나여야 한다
+        #   (`self.legend` 는 그대로 둔다: 검사가 「카드가 이걸 덮나」를 재려고 잡는다).
+        범례칸 = QWidget()
+        legend_row = QHBoxLayout(범례칸)
+        legend_row.setContentsMargins(0, 0, 0, 0)
+        self.legend = Legend()
         legend_row.addWidget(self.legend)
         legend_row.addStretch(1)
 
@@ -476,14 +480,20 @@ class MainWindow(QWidget):
         graph_box.addLayout(head)
         graph_box.addWidget(theme.Divider())
         graph_box.addWidget(self.graph, 1)
-        graph_box.addLayout(legend_row)
-        graph_box.addWidget(self.say)
         # ★★ **VC 와 말을 주고받는 칸.** 엔진이 로컬·claude·codex 로 바뀔 뿐 **전부
         #   VC 다**(오너가 그렇게 못 박았다 · 2026-09-24). 그래서 칸도 하나고, 고르는
         #   것은 「누구에게 말하나」가 아니라 「무엇으로 답하나」다.
         #   ★ 처음엔 접혀 있다 — 늘 펴 두면 그래프가 좁아진다. 말하는 자리를 누르면 올라온다.
-        graph_box.addWidget(self._새판띠만들기())
-        graph_box.addWidget(self._채팅칸만들기())
+        # ★★ **아래 칸들은 박아 두지 않는다**(오너 2026-09-28). 범례·말·새 판 띠·채팅을
+        #   사람이 오른쪽으로 옮기거나 숨길 수 있다 — 차례를 코드가 정하지 않는다.
+        #   `칸다시깔기` 가 설정을 보고 이 줄을 채운다.
+        self._아래칸 = QWidget()
+        self._아래줄 = QVBoxLayout(self._아래칸)
+        self._아래줄.setContentsMargins(0, 0, 0, 0)
+        self._아래줄.setSpacing(9)
+        graph_box.addWidget(self._아래칸)
+        self._칸위젯 = {"범례": 범례칸, "말": self.say,
+                    "새판": self._새판띠만들기(), "채팅": self._채팅칸만들기()}
         left = QFrame()
         left.setLayout(graph_box)
         self.left = left
@@ -836,13 +846,29 @@ class MainWindow(QWidget):
         side = QVBoxLayout()
         side.setContentsMargins(18, 20, 18, 16)
         side.setSpacing(9)
+        # 문 두드리는 알림은 **못 옮긴다** — 승인해야 하는 것은 늘 같은 자리에 뜬다
         side.addWidget(self.gate_card)
-        side.addWidget(self.results_head)
-        side.addWidget(self.results)
-        side.addWidget(self.recent_head)
-        side.addWidget(self.recent_chips)
-        side.addWidget(self.recent)
-        side.addWidget(theme.Divider())
+        # ★★ **칸들이 들어설 자리.** 무엇이 어느 차례로 들어오는지는 `칸다시깔기` 가
+        #   설정을 보고 정한다 — 여기서 박지 않는다(오너 2026-09-28).
+        self._우칸 = QWidget()
+        self._우줄 = QVBoxLayout(self._우칸)
+        self._우줄.setContentsMargins(0, 0, 0, 0)
+        self._우줄.setSpacing(9)
+        side.addWidget(self._우칸)
+
+        # 여러 위젯으로 된 칸은 **그릇에 담는다** — 옮기려면 위젯 하나여야 한다
+        def 그릇(*것들):
+            칸 = QWidget()
+            줄 = QVBoxLayout(칸)
+            줄.setContentsMargins(0, 0, 0, 0)
+            줄.setSpacing(6)
+            for ㄱ in 것들:
+                줄.addWidget(ㄱ)
+            return 칸
+
+        self._칸위젯["찾은것"] = 그릇(self.results_head, self.results)
+        self._칸위젯["최근"] = 그릇(self.recent_head, self.recent_chips, self.recent,
+                              theme.Divider())
         # 가끔 보는 것은 접어 둔다 — 늘 펴 두니 오른쪽 칸이 번잡했다.
         # ★★ **앞머리 칸**(오너 2026-09-20). 오너가 옵시디언에서 **오른쪽에 늘 띄워 두던**
         #   칸이다(볼트의 `workspace.json` 에서 확인했다: 백링크·나가는 링크·태그·속성·목차).
@@ -885,19 +911,18 @@ class MainWindow(QWidget):
 
         self.gaps_fold = Folded("아직 없는 것", "가리키는 링크는 있는데 항목이 없다. 눌러서 만든다", self.gaps)
         self.years_fold = Folded("언제", "해마다 적은 것. 눌러서 그해를 훑는다", self.years)
-        side.addWidget(self.audit_fold)
-        side.addWidget(self.folders_fold)
-        side.addWidget(self.codes_fold)
-        side.addWidget(self.props_fold)
-        side.addWidget(self.gaps_fold)
-        side.addWidget(self.years_fold)
-        side.addWidget(self.proposals_fold)
-        side.addWidget(self.feed_fold)
-        side.addWidget(self.models_fold)
         self.status_fold = Folded("상태·기록", "센 값 — 적은 것 · 보임 · 연결", self.상태글)
-        side.addWidget(self.status_fold)
+        self._칸위젯.update({
+            "살핌": self.audit_fold, "폴더": self.folders_fold,
+            "코드": self.codes_fold, "앞머리": self.props_fold,
+            "아직없는것": self.gaps_fold, "언제": self.years_fold,
+            "제안": self.proposals_fold, "활동": self.feed_fold,
+            "모델": self.models_fold, "상태": self.status_fold,
+        })
         side.addStretch(1)
+        # 아래 띠도 못 옮긴다 — 지금 무슨 일이 도는지 말하는 자리다
         side.addWidget(self.footer)
+        self.칸다시깔기()
 
         side_inner = QWidget()
         side_inner.setLayout(side)
@@ -1092,6 +1117,110 @@ class MainWindow(QWidget):
                 extra={"지은이": "씨앗"},
             ))
 
+    # --- 칸 배치(오너 2026-09-28) -------------------------------------------
+    # 제 사정으로 뜨고 지는 칸들. 자리만 잡아 주고 **보임은 안 건드린다.**
+    _스스로숨는칸 = ("새판", "채팅")
+
+    def 칸숨겼나(self, 이름: str) -> bool:
+        """사람이 그 칸을 「안 보임」으로 던져 뒀나. 그러면 제 사정으로도 안 뜬다."""
+        return 이름 in getattr(self, "_칸숨김", ())
+
+    def 칸다시깔기(self, 배치=None) -> None:
+        """칸들을 설정대로 다시 깐다. **차례도 자리도 사람이 정한다.**
+
+        ★★ **위젯을 없애지 않는다.** 줄에서 빼고 `setVisible(False)` 만 한다 —
+           없애면 그 칸을 잡고 있는 코드(`self.legend` · `self.chat_box` · 검사)가
+           죽은 것을 만진다. 다시 켤 때 그대로 되살아난다.
+        ★ 모르는 이름·없어진 이름은 `칸배치.맞추기` 가 걸러 준다.
+        """
+        import 칸배치 as _칸
+
+        self._칸배치 = _칸.맞추기(배치) if 배치 is not None else _칸.읽기()
+        for 줄 in (self._우줄, self._아래줄):
+            while 줄.count():
+                것 = 줄.takeAt(0)
+                낱 = 것.widget()
+                if 낱 is not None:
+                    낱.setParent(None)
+        갈린것 = _칸.자리별(self._칸배치)
+        self._칸숨김 = set(갈린것.get("숨김") or ())
+        for 자리, 줄 in (("우", self._우줄), ("아래", self._아래줄)):
+            for 이름 in 갈린것.get(자리) or ():
+                낱 = self._칸위젯.get(이름)
+                if 낱 is None:
+                    continue
+                줄.addWidget(낱)
+                # ★★ **스스로 숨는 칸은 억지로 펴지 않는다.** 새 판 띠는 새 판이
+                #   있을 때만, 채팅은 말하는 자리를 눌렀을 때만 올라온다 — 여기서
+                #   펴 버리면 「받기도 전에 띠부터 띄운다」가 된다(검사가 잡았다).
+                낱.setVisible(이름 not in self._스스로숨는칸)
+        for 이름 in 갈린것.get("숨김") or ():
+            낱 = self._칸위젯.get(이름)
+            if 낱 is not None:
+                낱.setVisible(False)
+        self._아래칸.setVisible(bool(갈린것.get("아래")))
+        self._우칸.setVisible(bool(갈린것.get("우")))
+        self._place_reader()
+
+    def 칸배치저장(self, 배치) -> None:
+        """사람이 고른 배치를 남기고 바로 적용한다."""
+        import 칸배치 as _칸
+
+        _칸.쓰기(배치)
+        self.칸다시깔기(배치)
+
+    def 지금칸배치(self) -> list:
+        """지금 깔린 배치. 설정 창이 이걸 보고 목록을 채운다."""
+        import 칸배치 as _칸
+
+        return list(getattr(self, "_칸배치", None) or _칸.읽기())
+
+    # 행성 하나에서 그래프에 올릴 글 수. 내 것(`GRAPH_LIMIT`)보다 적게 잡는다 —
+    # 가운데는 **내 기록**이고 남의 행성은 곁이다(오너 「1 내 행성」).
+    행성한도 = 220
+
+    def _행성들그릴것(self, 내것: set[str]) -> dict:
+        """붙어 있는 행성과 **사본이 남아 있는 행성**을 그래프 조각으로 모은다.
+
+        ★ 꺼진 행성도 **회색 하나로 남는다** — 알맹이는 안 그린다(오너 2026-09-26:
+          「안 보인다, 회색 행성으로만」). 아예 지우면 어제 거기서 쓴 것이
+          **있었다는 사실 자체가 사라진다.**
+        ★ 이름이 내 글과 겹치면 **앞에 행성을 붙여** 보인다(오너 「이름이 겹치면
+          이름 앞에 행성으로 구분」). 안 가르면 남의 것을 내 것이라 믿고 고친다.
+        """
+        빈것 = {"그림": {}, "갈래": {}, "흐리게": {}, "보일": {},
+              "남의것": set(), "마디들": set(), "붙은": set()}
+        try:
+            import server as _서버
+            import 행성 as _행성
+        except Exception:
+            return 빈것
+        돌것 = getattr(_서버, "RUNNING", None)
+        그물 = getattr(돌것, "그물", None) if 돌것 is not None else None
+        붙은 = {_행성.안전한이름(ㄱ) for ㄱ in (getattr(그물, "붙은주소들", None) or [])}
+        이름들 = sorted(set(_행성.사는행성들()) | 붙은)
+        if not 이름들:
+            return 빈것
+
+        모음 = dict(빈것, 그림={}, 갈래={}, 흐리게={}, 보일={},
+                  남의것=set(), 마디들=set(), 붙은=붙은)
+        쓴이름 = set(내것)
+        for 이름 in 이름들:
+            조각 = _행성.그릴것(이름, self.행성한도)
+            허브 = 조각["허브"]
+            모음["그림"].update(조각["그림"])
+            모음["갈래"].update(조각["갈래"])
+            모음["흐리게"].update(조각["매달기"])
+            if 허브 not in 붙은:
+                모음["갈래"][허브] = _행성.꺼진갈래     # 꺼졌다 — 무채색으로 떨어진다
+            for 마디, 제목 in 조각["제목"].items():
+                모음["보일"][마디] = f"{허브} · {제목}" if 제목 in 쓴이름 else 제목
+                쓴이름.add(제목)
+                모음["남의것"].add(마디)
+            모음["마디들"].update(조각["그림"])
+            모음["마디들"].update(조각["제목"])
+        return 모음
+
     def refresh(self, scan: bool = True) -> None:
         """화면을 다시 그린다.
 
@@ -1112,8 +1241,17 @@ class MainWindow(QWidget):
         must = {ROOT} | set(self.graph.focus) | ({self.editing} if self.editing else set())
         picked = self.notes.working_set(GRAPH_LIMIT, keep=must)
         # **고른 것의 종류만** 가져온다. 2만 행을 통째로 끌어오면 그것만 0.1초다.
-        self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
-                        self.notes.kin(picked))
+        그림 = self.notes.subgraph(picked)
+        갈래 = self.notes.kinds_of(picked)
+        흐리게 = self.notes.kin(picked)
+        # 딴 기계는 **합치지 않는다** — 제 행성으로 따로 선다(오너 2026-09-26).
+        조각 = self._행성들그릴것(set(picked))
+        그림.update(조각["그림"])
+        갈래.update(조각["갈래"])
+        흐리게.update(조각["흐리게"])
+        self._행성마디 = 조각["마디들"]
+        self.graph.load(그림, 갈래, 흐리게,
+                        보일=조각["보일"], 남의것=조각["남의것"])
         self.load_proposals()
 
 
@@ -1134,7 +1272,7 @@ class MainWindow(QWidget):
         self.gaps.show_gaps(self.notes.unresolved())
         self.feed.show_rows(self.store.recent(9))
         # 일부만 보이면 **보인다고 말한다.** 잘라 놓고 다 보여주는 척하면 안 된다.
-        shown = len(self.graph.nodes)
+        shown = len([ㄱ for ㄱ in self.graph.nodes if ㄱ not in self._행성마디])
         seen = (f"보임 {shown}/{self._total_notes}"
                 if shown < self._total_notes else f"항목 {self._total_notes}")
         # 같은 제목이 두 폴더에 있으면 **어느 쪽을 여는지 우리가 고른다** — 사용자가
@@ -1183,10 +1321,31 @@ class MainWindow(QWidget):
         # 「⚠ 를 띄웠으면 무엇이 이상한지 볼 길이 하나는 있어야 한다」고 짚었는데,
         # 길은 이미 있었고 **그 길이 잘리고 있었던 것**이다.
         # 값진 것을 앞에 두는 규칙을 아래 띠 가운데에만 쓰고 경고에는 안 썼다.
-        self.상태글.setText(f"적은 것 {굳은}/{모두}  /  {seen}  /  {선}")
+        # ★★ **이 VC 가 메인인지 손님인지 보여 준다**(오너 2026-09-28).
+        #   설정에는 진작 있었는데(`설정 → 딴 PC → 이 VC 의 자리`) **화면에서는
+        #   알 길이 없었다** — 글을 지우려 할 때 한 번 스치는 말이 전부였다.
+        #   고른 것이 실제로 먹었는지 눈으로 확인할 자리가 없으면 설정은 반쪽이다.
+        self.상태글.setText(f"적은 것 {굳은}/{모두}  /  {seen}  /  {선}  /  자리 {self.내자리()}")
         # ★ 늘 보이는 한 줄(결정 17)에는 오류 · 준비 중 · 폰 길만 둔다. 센 값은 「상태·기록」을 펴야 보인다.
         self._띠경고 = warn.removesuffix("  /  ")
         self._그리띠()
+
+    def 내자리(self) -> str:
+        """이 VC 가 **메인인지 손님인지.** 설정(`사본.역할`)이 정한다 — 판이 따로 있는 게 아니다."""
+        것 = {}
+        try:
+            것 = paths.load_config().get("사본") or {}
+        except Exception:
+            것 = {}
+        if not isinstance(것, dict) or 것.get("역할") != "손님":
+            return "메인"
+        주소 = str(것.get("main_url") or "").strip()
+        열쇠 = str(것.get("main_token") or "").strip()
+        if not (주소 and 열쇠):
+            # ★ 골라만 두고 주소·열쇠가 없으면 **손님으로 못 돈다.** 「손님」이라고만
+            #   적으면 사람은 되고 있는 줄 안다 — 안 되는 것은 안 된다고 말한다.
+            return "손님(메인 주소·열쇠가 없어 아직 못 붙는다)"
+        return "손님"
 
     # --- 말로 부르기 -----------------------------------------------------
 
@@ -2556,8 +2715,14 @@ class MainWindow(QWidget):
         바뀐 = 지음.get("바뀐파일") or []
         self.refresh()
         self._later(self.코드그리기)
-        self.report(난것.get("사람말") or agentcli.사람말(지음),
-                    (난것.get("적립") or {}).get("만든것") or [])
+        # ★★ **시키지 않았는데 한 것은 사람에게 바로 말한다**(보안 ③).
+        #   기록에만 남기면 아무도 안 읽는다 — 딸림이 하나 늘어난 것을 다음 기계에서
+        #   터질 때야 알게 된다. 말은 길어져도 **여기서 한 번은 보여야 한다.**
+        제멋 = 난것.get("제멋대로") or []
+        말 = 난것.get("사람말") or agentcli.사람말(지음)
+        if 제멋:
+            말 += f"\n\n★ 시키지 않았는데 한 것 {len(제멋)}개 — " + " / ".join(제멋[:3])
+        self.report(말, (난것.get("적립") or {}).get("만든것") or [])
         if 바뀐:
             self.show_results([(f"{프로젝트}/{f}", "") for f in 바뀐])
         제안 = 난것.get("스킬제안") or {}
@@ -2711,8 +2876,53 @@ class MainWindow(QWidget):
         self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
                         self.notes.kin(picked))
 
+    def 행성글보이기(self, 마디: str, focus: bool = True, 말할까: bool = True) -> None:
+        """남의 행성 글을 **읽기 칸에** 띄운다.
+
+        ★★ **고칠 수 있는 칸에 올리지 않는다.** 그 칸은 저장할 때 `notes.path_of`
+           로 자리를 잡으므로, 남의 글을 거기 올려 두면 다음 저장에 **내 창고에
+           남의 글이 새로 생긴다** — 그때부터 같은 글이 두 기계에 갈라져 앉는다.
+           고치는 길은 주인에게 보내는 것뿐이다(`행성.고치기보내기`).
+        ★ 못 찾으면 **말한다.** 눌렀는데 조용한 것이 가장 나쁘다.
+        """
+        import 행성 as _행성
+
+        행성이름, 제목 = _행성.키풀기(마디)
+        if not 행성이름:
+            return
+        글 = None
+        창고 = None
+        try:
+            창고 = _행성.창고(행성이름)
+            글 = 창고.read(제목)
+        except Exception:
+            글 = None
+        finally:
+            if 창고 is not None:
+                try:
+                    창고.conn.close()
+                except Exception:
+                    pass
+        if focus:
+            self.graph.focus_on([마디], zoom=FOCUS_ZOOM)
+        if 글 is None:
+            self.report(f"{행성이름} 행성의 「{제목}」은 아직 안 받아 뒀어. "
+                        f"그 기계가 켜지면 받아 온다.", [마디])
+            return
+        self.side_open = True
+        self.side_read.show_note(제목, 글.body.strip())
+        self._place_reader()
+        if 말할까:
+            self.report(f"{행성이름} 행성의 「{제목}」이야 — 여기선 읽기만 돼. "
+                        f"고치려면 그 기계가 켜져 있어야 해.", [마디])
+
     def show_note(self, title: str, focus: bool = True, trail: bool = True,
                   말할까: bool = True) -> None:
+        # 남의 행성 글(`행성/제목`)은 **여기서 갈라진다.** 안 가르면 `notes.read` 가
+        # 못 찾아 **아무 일도 안 일어난다** — 눌렀는데 조용한 것이 가장 나쁘다.
+        if "/" in title and getattr(self, "_행성마디", ()) and title in self._행성마디:
+            self.행성글보이기(title, focus=focus, 말할까=말할까)
+            return
         note = self.notes.read(title)
         if note is None:
             return
@@ -3808,7 +4018,7 @@ class MainWindow(QWidget):
             self._새판받기단추.setEnabled(True)
             self._새판받기단추.show()
             self._새판나중단추.show()
-            self._새판띠.show()
+            self._새판띠.setVisible(not self.칸숨겼나("새판"))
             if 난것.get("못맞춤"):
                 self._새판말.setText(
                     self._새판말.text() + f"  (셈은 못 맞춰 봤어 — {난것['못맞춤']})")
@@ -3860,7 +4070,7 @@ class MainWindow(QWidget):
             self._새판받기단추.setEnabled(False)
             self._새판나중단추.hide()
             self._새판말.setText("받는 중…")
-            self._새판띠.show()
+            self._새판띠.setVisible(not self.칸숨겼나("새판"))
 
         def 일() -> None:
             import subprocess as _돌림
@@ -4207,8 +4417,10 @@ class MainWindow(QWidget):
         칸 = getattr(self, "chat", None)
         if 칸 is None:
             return
+        # ★ 사람이 「안 보임」으로 던져 둔 칸은 **눌러도 안 올라온다** — 설정을
+        #   무시하고 올라오면 숨긴 뜻이 없어진다.
         열까 = (not 칸.isVisible()) if 열까 is None else bool(열까)
-        칸.setVisible(열까)
+        칸.setVisible(열까 and not self.칸숨겼나("채팅"))
         if 열까:
             self.chat_box.setFocus()
 

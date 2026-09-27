@@ -54,7 +54,7 @@ OLD_ROOT = "이비"  # 옛 이름. 켤 때 한 번 옮긴다
 손선굵기 = 0.8
 손선밝기 = 105
 
-RADIUS = {"agent": 33.6, "skill": 19.2}
+RADIUS = {"agent": 33.6, "skill": 19.2, "행성": 25.2, "행성꺼짐": 25.2}
 RADIUS_OTHER = 8.4
 
 
@@ -193,9 +193,13 @@ class NodeItem:
       안팎으로 서른 곳이 넘어서, 이름을 바꾸면 그게 더 큰 일이 된다.
     """
 
-    def __init__(self, title: str, kind: str) -> None:
+    def __init__(self, title: str, kind: str, 보일: str = "") -> None:
         self.title = title
         self.kind = kind
+        # 마디 이름과 **보이는 이름이 다를 수 있다.** 남의 행성 글은 이름이
+        # `행성/제목` 이라 그대로 찍으면 화면이 주소로 뒤덮인다.
+        self.보일 = 보일 or title
+        self.남의것 = False   # 남의 행성 글 — 흐리게 깔고 손 대면 밝힌다
         self.r = node_radius(title, kind)
         self._보임 = True
         self._x = self._y = 0.0
@@ -213,7 +217,18 @@ class NodeItem:
         self.linked = False   # 손 얹힌 항목과 이어져 있다
         self.near = False     # 맨 앞줄이라 이름표를 늘 보인다
 
-        self.label = _이름표(title, self)
+        self.이름표놓기()
+
+    def 이름표놓기(self, 보일: str = "") -> None:
+        """이름표를 (다시) 만들어 가운데 맞춘다.
+
+        ★ 다시 그릴 때 **보이는 이름이 바뀔 수 있다** — 남의 행성 글은 이름이
+          겹칠 때만 앞에 행성이 붙으므로, 내 글이 생기거나 없어지면 달라진다.
+          너비를 새로 재지 않으면 이름표가 어긋난 자리에 남는다.
+        """
+        if 보일:
+            self.보일 = 보일
+        self.label = _이름표(self.보일, self)
         rect = self.label.boundingRect()
         self.label.setPos(-rect.width() / 2, self.r + 7)
         self._paint_label()
@@ -410,6 +425,10 @@ class 마디떼(QGraphicsItem):
             안개 = 0.25 + 0.75 * 마디.depth
             if 마디.dim:
                 안개 *= 0.45
+            if 마디.남의것:
+                # 남의 행성 글은 **깔아만 둔다.** 손을 얹으면 위에서 `고운것` 으로
+                # 빠지므로 저절로 밝아진다 — 밝히는 코드를 따로 쓸 일이 없다.
+                안개 *= 0.55
             # ★ **붓을 만들어 두고 돌려 쓴다.** 마디마다 색과 붓을 새로 만들면
             #   2800장에 한 판 68ms 다 — 그리는 값이 아니라 **만드는 값**이다.
             #   짙기를 몇 단으로 나누면 붓이 갈래당 스무 개 남짓으로 끝난다.
@@ -801,7 +820,11 @@ class GraphView(QGraphicsView):
     # --- 그래프 ---------------------------------------------------------
 
     def load(self, graph: dict[str, list[str]], kinds: dict[str, str],
-             soft: dict[str, list[str]] | None = None) -> None:
+             soft: dict[str, list[str]] | None = None,
+             보일: dict[str, str] | None = None,
+             남의것: set[str] | None = None) -> None:
+        """`보일` 은 마디 이름과 **다르게 보일 이름**(남의 행성 글의 제목),
+        `남의것` 은 흐리게 깔 마디들이다. 둘 다 없으면 지금까지와 똑같이 돈다."""
         # **장면을 비우지 않는다.** `scene_.clear()` 는 항목을 C++ 에서 즉시 없애는데,
         # 화면·물리·이름표가 그 항목을 아직 향하고 있으면 프로세스가 통째로 죽는다
         # (파이썬 오류가 아니라 접근 위반이라 잡을 수도 없다).
@@ -843,12 +866,18 @@ class GraphView(QGraphicsView):
             old = self.nodes.get(title)
             if old is not None:
                 old.kind = kinds.get(title, "note")
+                old.남의것 = title in (남의것 or ())
+                볼것 = (보일 or {}).get(title, title)
+                if 볼것 != old.보일:
+                    old.이름표놓기(볼것)      # 겹침이 생기거나 풀리면 이름이 바뀐다
                 old.focused = False
                 old.hovered = False
                 old.linked = False
                 old.setVisible(True)      # 지난번에 꺼 뒀을 수 있다
                 continue
-            node = NodeItem(title, kinds.get(title, "note"))
+            node = NodeItem(title, kinds.get(title, "note"),
+                            보일=(보일 or {}).get(title, ""))
+            node.남의것 = title in (남의것 or ())
             if title != ROOT:
                 # 구면에 고르게 뿌린다. 한 방향에 뭉치면 물리가 풀어내는 데 오래 걸린다.
                 theta = self.rng.uniform(0, math.tau)
