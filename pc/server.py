@@ -2234,6 +2234,33 @@ class EBServer(ThreadingHTTPServer):
 
         return 부르기
 
+    @staticmethod
+    def 막힌말(주소: str, 까닭: str, 받=None) -> str:
+        """주고받다 막혔을 때 사람에게 할 말. **까닭에 따라 갈라 말한다.**
+
+        ★★ **닿은 것과 못 닿은 것은 다르다.** HTTP 로 답이 왔으면 **닿은 것**이다 —
+           그걸 「못 닿았어」라고 하면 사람이 테일스케일과 주소를 뒤진다. 오너가
+           409(메인이 덮기를 막았다)를 받고 네트워크를 의심했다(2026-09-28).
+        ★ 부르는 자리에서 만들면 **진짜 부름이 `_메인탈` 을 덮어써서 잴 수가 없다** —
+          그래서 말 만드는 것만 여기 떼어 뒀다.
+        """
+        머리 = ("메인이 받아 주지 않았어" if "HTTPError" in 까닭
+              else f"메인({주소})에 못 닿았어")
+        덧 = f" — {까닭}" if 까닭 else ""
+        if "unknown url type" in 까닭:
+            덧 = " — 주소에 `http://` 가 빠졌다"
+        elif "401" in 까닭 or "403" in 까닭:
+            덧 = " — 열쇠가 안 맞는다(메인 PC 의 페어링 열쇠를 적어야 한다)"
+        elif "409" in 까닭:
+            덧 = (" — 메인에도 그 글이 바뀌어 있어 덮기를 막았다. "
+                 "받기는 됐으니 잠시 뒤 다시 눌러 봐라")
+        # ★ **받은 것이 있으면 그것도 말한다.** 보내기 하나가 막혔다고 받아 온 것까지
+        #   없던 일처럼 말하면 사람이 헛다리를 짚는다.
+        받은말 = ""
+        if 받 is not None and getattr(받, "몇개", 0):
+            받은말 = f" (받은 건 됐어 — 새로 {받.새로} · 고침 {받.고침} · 지움 {받.지움})"
+        return f"{머리}{덧}.{받은말}"
+
     def 사본한판(self) -> str:
         """메인에서 받고, 이 PC 에서 쓴 것을 보낸다. 사람에게 보일 한 줄."""
         import mirror
@@ -2261,13 +2288,7 @@ class EBServer(ThreadingHTTPServer):
         받 = mirror.한판(self.notes, 부르기, 자국)
         보 = mirror.보내기(self.notes, 부르기, 자국)
         if 받.까닭 or 보.까닭:
-            까닭 = getattr(self, "_메인탈", "")
-            덧 = f" — {까닭}" if 까닭 else ""
-            if "unknown url type" in 까닭:
-                덧 = " — 주소에 `http://` 가 빠졌다"
-            elif "401" in 까닭 or "403" in 까닭:
-                덧 = " — 열쇠가 안 맞는다(메인 PC 의 페어링 열쇠를 적어야 한다)"
-            return f"메인({설정['main_url']})에 못 닿았어{덧}."
+            return self.막힌말(설정["main_url"], getattr(self, "_메인탈", ""), 받)
         말 = []
         if 받.몇개:
             말.append(f"받음 새로 {받.새로} · 고침 {받.고침} · 지움 {받.지움}"
@@ -2633,6 +2654,21 @@ def _self_check() -> None:
     # 그리고 **까닭을 말한다** — 주소가 틀렸는지 꺼져 있는지 열쇠가 틀렸는지 갈려야 한다
     _말 = server.사본한판()
     assert "못 닿았어" in _말 and "—" in _말, _말
+    # ★★ **닿은 것과 못 닿은 것은 다르다.** HTTP 로 답이 왔으면 닿은 것이다 —
+    #   409(메인이 덮기를 막았다)를 「못 닿았어」라고 해서 오너가 테일스케일과
+    #   주소를 뒤졌다(2026-09-28). 말이 사람을 엉뚱한 데로 보냈다.
+    _말409 = server.막힌말("http://x:1", "HTTPError: HTTP Error 409: Conflict")
+    assert "못 닿았" not in _말409, _말409
+    assert "받아 주지 않았어" in _말409 and "덮기를 막았다" in _말409, _말409
+    _말끊김 = server.막힌말("http://x:1", "URLError: [Errno 61] Connection refused")
+    assert "못 닿았" in _말끊김, _말끊김
+    assert "열쇠가 안 맞는다" in server.막힌말("http://x:1", "HTTPError: HTTP Error 401: x")
+    # ★ 받은 것이 있으면 **그것도 말한다** — 보내기가 막혔다고 받은 것까지 묻히면 안 된다
+    import mirror as _사본말
+
+    _받았다 = _사본말.받은것(새로=3, 고침=1)
+    assert "받은 건 됐어" in server.막힌말("http://x:1", "HTTPError: 409", _받았다)
+
     # 이미 스킴을 적었으면 **건드리지 않는다**
     server.cfg["사본"] = {"역할": "손님", "main_url": "https://a.b:1/", "main_token": "k"}
     assert server.손님설정()["main_url"] == "https://a.b:1", server.손님설정()
