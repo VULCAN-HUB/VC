@@ -376,6 +376,16 @@ class Handler(BaseHTTPRequestHandler):
         더할앞머리 = {}
         if isinstance(출처, str) and 출처 in wiki.앞머리규약["출처"]:
             더할앞머리["출처"] = 출처
+        # ★★ **딴 기계에서 온 글은 어느 기계에서 왔는지 적어 둔다**(오너 2026-09-28:
+        #   「메인 PC 자료와 손님 PC 자료를 어디서 보든 행성으로 구분되게」).
+        #   여태 메인은 손님이 올려 보낸 글을 **제 글과 똑같이** 쌓았다 — 그래서
+        #   화면에서 가를 길이 아예 없었다. 짐작할 데가 하나도 없으니 받을 때 적는다.
+        #   ★ 보내는 쪽이 말해 주는 것이 아니라 **문이 본 주소**다 — 남이 제 것이라
+        #     우겨도 안 통한다.
+        #   ★ 내 기계에서 온 것에는 안 적는다 — 그건 그냥 내 글이다.
+        온곳 = self._client_ip() or ""
+        if 온곳 and not (온곳.startswith("127.") or 온곳 in ("::1", "localhost")):
+            더할앞머리["온곳"] = 온곳.replace(":", "-").replace(".", "-")
         갈래 = body.get("kind", old.kind if old else wiki.기본갈래)
         if mode == "append":
             path = self.server.notes.append(title, text, 갈래,
@@ -3159,6 +3169,29 @@ def _self_check() -> None:
     _, 갈래답 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("갈래 실렸나"))
     assert 갈래답.get("kind") == "결정", f"갈래를 안 실어 보낸다: {sorted(갈래답)}"
     assert 갈래답.get("pinned") is True, f"고정을 안 실어 보낸다: {sorted(갈래답)}"
+
+    # ★★ **딴 기계에서 온 글에는 「온곳」이 적힌다**(오너 2026-09-28: 「메인 PC 자료와
+    #   손님 PC 자료를 어디서 보든 행성으로 구분되게」). 여태 메인은 손님이 올려 보낸
+    #   글을 **제 글과 똑같이** 쌓아 **가를 길이 아예 없었다.**
+    #   ★ 내 기계(고리)에서 온 것에는 안 적는다 — 그건 그냥 내 글이다. 여기 검사는
+    #     127.0.0.1 로 부르므로 **안 적히는 쪽**이 걸린다.
+    assert call("POST", "/eb/v1/memory", {"title": "여기서 쓴 글", "text": "몸"})[0] in (200, 201)
+    note_store.reindex()
+    assert "온곳" not in (note_store.read("여기서 쓴 글").extra or {}), \
+        f"내 기계에서 쓴 글에 온곳이 붙었다: {note_store.read('여기서 쓴 글').extra}"
+    # 딴 기계에서 온 것처럼 흉내 내어 **적히는 쪽**도 잰다
+    옛클라 = Handler._client_ip
+    Handler._client_ip = lambda self: "100.9.9.9"
+    try:
+        assert call("POST", "/eb/v1/memory", {"title": "저쪽에서 온 글", "text": "몸"})[0] in (200, 201)
+    finally:
+        Handler._client_ip = 옛클라
+    note_store.reindex()
+    _온것 = (note_store.read("저쪽에서 온 글").extra or {}).get("온곳")
+    assert _온것 == "100-9-9-9", f"딴 기계에서 온 글에 온곳이 안 붙었다: {_온것}"
+    # ★ 색인으로 묶을 수 있어야 한다 — 700장을 파일로 열면 그리기 전에 몇 초가 든다
+    묶 = note_store.앞머리로묶기("온곳", ["저쪽에서 온 글", "여기서 쓴 글"])
+    assert 묶 == {"100-9-9-9": ["저쪽에서 온 글"]}, 묶
     assert call("POST", "/eb/v1/memory/rename", {"title": "새 이름", "to": "가리키는 글"})[0] == 409
 
     # ★ **하다 만 이름 바꾸기**는 링크가 반쯤 끊긴 상태다. 창만 그것을 봤다 —

@@ -2610,6 +2610,24 @@ class Notes:
             args.append(self._NARROW_ARG[base](value))
         return where, args
 
+    def 앞머리로묶기(self, 이름: str, titles) -> dict[str, list[str]]:
+        """그 앞머리 값별로 제목을 묶는다 — `{값: [제목, …]}`.
+
+        ★ `온곳` 처럼 **어느 기계에서 왔나**를 세는 데 쓴다. 글을 읽지 않고
+          색인(`props`)만 본다 — 700장을 파일로 열면 그리기 전에 몇 초가 든다.
+        """
+        titles = [t for t in titles if t]
+        if not titles:
+            return {}
+        낸다: dict[str, list[str]] = {}
+        칸 = ",".join("?" * len(titles))
+        for t, v in self.conn.execute(
+                f"SELECT title, value FROM props WHERE key = ? AND title IN ({칸})",
+                [이름, *titles]):
+            if v:
+                낸다.setdefault(str(v), []).append(t)
+        return {ㄱ: sorted(ㄴ) for ㄱ, ㄴ in 낸다.items()}
+
     def 앞머리모음(self, titles) -> dict:
         """그 글들의 앞머리를 `{제목: {이름: 값}}` 으로. 좁히기 제안이 이것을 센다."""
         titles = [t for t in titles if t]

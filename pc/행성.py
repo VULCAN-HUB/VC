@@ -67,6 +67,40 @@ def 사는행성들() -> list[str]:
     return sorted(ㄱ.name for ㄱ in 뿌리.iterdir() if ㄱ.is_dir())
 
 
+def 사본행성() -> tuple[str, set[str]]:
+    """**손님 모드로 받아 둔 것**을 행성 하나로 본다. `(행성이름, 제목들)`.
+
+    ★★ 손님 모드(`사본`)는 메인 글을 **제 창고에 통째로 쌓는다** — 메인이 죽어도
+       여기서 이어 가라고 그렇게 만든 것이다. 그래서 화면에서는 내 글과 남의 글이
+       **한 덩이로 섞여 보인다.** 오너가 「손님으로 두든 메인으로 두든 전부 행성으로
+       보이게」라고 했다(2026-09-28).
+    ★ 어느 것이 받아 온 것인지는 **이미 자국에 적혀 있다** — `vc-사본.json` 의
+      `받은지문` 이 받은 제목을 들고 있다. 새로 적을 것이 없다.
+    ★ 여기서 돌려주는 제목은 **이 기계의 진짜 글**이다(사본 창고가 아니다). 그래서
+      화면에서는 행성 밑에 모으되 **여는 길은 평소와 같다.**
+    """
+    import mirror
+
+    것 = paths.load_config().get("사본") or {}
+    것 = 것 if isinstance(것, dict) else {}
+    if 것.get("역할") != "손님":
+        return ("", set())
+    주소 = str(것.get("main_url") or "").strip()
+    if not 주소:
+        return ("", set())
+    # `http://100.1.2.3:8765` → `100.1.2.3`
+    집 = 주소.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0]
+    if not 집:
+        return ("", set())
+    try:
+        자국 = json.loads(paths.기계자리(mirror.MEMO).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return (안전한이름(집), set())
+    받은 = 자국.get("받은지문")
+    제목들 = set(받은) if isinstance(받은, dict) else set()
+    return (안전한이름(집), 제목들)
+
+
 def 부르는이(주소: str, 열쇠: str, 포트: int = 기본포트):
     """그 이웃에게 묻는 함수를 만든다. `mirror.한판` 이 이걸 받아 쓴다."""
     바탕 = f"http://{주소}:{포트}"
