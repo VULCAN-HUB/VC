@@ -851,6 +851,36 @@ def open_dialog(win, notes: Notes):
 
     베끼기.clicked.connect(_베끼기)
 
+    def _쪽지내주기() -> None:
+        """**주소와 열쇠를 한 줄로 묶어 준다.** 손님 PC 는 그 한 줄만 붙여 넣으면 된다.
+
+        ★ 주소는 **이 기계의 테일스케일 주소**다 — 손님이 여기로 와야 하니까.
+        """
+        from PyQt5.QtWidgets import QApplication as _앱
+
+        내주소 = 창.테일주소()
+        if not 내주소:
+            창.내열쇠말.setText("테일스케일이 꺼져 있어 내 주소를 모른다 — 켜고 다시 눌러라.")
+            return
+        쪽지 = paths.붙임쪽지(f"{내주소}:8765", 창.내열쇠.text())
+        if not 쪽지:
+            창.내열쇠말.setText("열쇠가 비어 있다 — 먼저 열쇠를 정해라.")
+            return
+        판 = _앱.clipboard()
+        if 판 is None:
+            창.내열쇠말.setText(f"복사판을 못 쓴다 — 이 줄을 손으로 옮겨라:  {쪽지}")
+            return
+        판.setText(쪽지)
+        창.내열쇠말.setText("손님 PC 에 붙일 쪽지를 복사했다 — 거기 "
+                        "「딴 PC → 쪽지 붙여 넣기」에 그대로 붙여라.")
+
+    창.쪽지내주기 = _쪽지내주기
+    쪽지단추 = QPushButton("손님 PC 에 붙일 쪽지 복사")
+    쪽지단추.setToolTip("주소와 열쇠를 한 줄로 묶어 복사한다 — 손님 PC 는 그것만 붙이면 된다")
+    쪽지단추.clicked.connect(_쪽지내주기)
+    창.쪽지단추 = 쪽지단추
+    사본틀.addWidget(쪽지단추)
+
     # 열쇠 길이의 바닥. **문은 테일넷(과 켜 두면 같은 공유기)에 열려 있다** —
     # 네 자리 숫자는 몇 초면 다 두들긴다. 서버가 틀린 횟수를 세어 늦추긴 하지만,
     # 그건 브레이크지 자물쇠가 아니다.
@@ -910,6 +940,33 @@ def open_dialog(win, notes: Notes):
     창.사본열쇠.setEchoMode(QLineEdit.Password)
     창.사본열쇠.setPlaceholderText("메인의 열쇠 — 비우면 쓰던 것 그대로")
     줄(사본틀, "메인 열쇠", 창.사본열쇠)
+
+    # ★★ **쪽지 하나로 두 칸을 채운다**(오너 2026-09-28). 여태 손님 PC 만
+    #   주소를 손으로 치고 열쇠는 파일을 뒤져 옮겼다 — 폰은 QR 로 한 번에 붙는데.
+    #   PC 에는 카메라가 없으니 QR 이 답이 아니다. **붙여 넣는 한 줄**이 답이다.
+    창.쪽지칸 = QLineEdit()
+    창.쪽지칸.setObjectName("field")
+    창.쪽지칸.setPlaceholderText("메인에서 복사한 쪽지 (VC1:…) 를 붙여 넣는다")
+
+    def _쪽지받기() -> None:
+        주소, 열쇠 = paths.붙임풀기(창.쪽지칸.text())
+        if not 주소:
+            사본말.setText("쪽지를 못 읽었다 — 메인 VC 의 "
+                        "「손님 PC 에 붙일 쪽지 복사」로 만든 한 줄을 그대로 붙여라.")
+            return
+        창.사본역할.setCurrentIndex(max(0, 창.사본역할.findData("손님")))
+        창.사본주소.setText(주소)
+        창.사본열쇠.setText(열쇠)
+        창.쪽지칸.clear()
+        _사본저장()
+        사본말.setText(f"쪽지대로 맞췄다 — {주소} 의 손님이 됐다. 「지금 주고받기」로 재 봐라.")
+
+    창.쪽지받기 = _쪽지받기
+    쪽지받기단추 = QPushButton("쪽지대로 맞추기")
+    쪽지받기단추.setToolTip("붙여 넣은 쪽지에서 주소와 열쇠를 꺼내 두 칸을 채우고 저장한다")
+    쪽지받기단추.clicked.connect(_쪽지받기)
+    줄(사본틀, "쪽지 붙여 넣기 (손님일 때)", 창.쪽지칸)
+    사본틀.addWidget(쪽지받기단추)
 
     # ── 기기끼리 신호(오너 2026-09-24). **훑지 말고 바뀐 쪽이 말하게 한다.**
     그물틀, _ = 쪽("기기끼리 신호", "저장·지움을 누르면 붙어 있는 다른 기기에 바로 알린다. "
@@ -1458,6 +1515,53 @@ def _self_check() -> None:
             열쇠창.내열쇠.setText("")
             열쇠창.내열쇠저장()
             assert paths.load_config()["pair_token"] == "my-own-key-2026", "열쇠를 비워 버렸다"
+            # ★★ **쪽지 한 줄로 손님이 붙는다 — 한쪽 끝에서 다른 쪽 끝까지 태운다.**
+            #   조각마다 도는 것과 이어 도는 것은 다르다. 여기서 재는 것은
+            #   「메인이 낸 쪽지를 손님이 그대로 먹으면 두 칸이 찬다」다.
+            paths.save_config({**paths.load_config(), "pair_token": "main-key-9876"})
+            메인창 = open_dialog(win, n)
+            메인창.테일주소 = lambda: "100.101.2.3"      # 테일스케일이 켜진 셈 친다
+            메인창.쪽지내주기()
+            from PyQt5.QtWidgets import QApplication as _앱칸
+
+            쪽지 = _앱칸.clipboard().text()
+            assert 쪽지.startswith(paths.붙임머리), 쪽지[:40]
+            assert "복사했다" in 메인창.내열쇠말.text(), 메인창.내열쇠말.text()
+            # ★ 열쇠가 비면 **쪽지를 안 낸다** — 반쪽 쪽지를 붙이고 「왜 안 되지」가 되면 안 된다
+            메인창.내열쇠.setText("")
+            메인창.쪽지내주기()
+            assert "열쇠가 비어" in 메인창.내열쇠말.text(), 메인창.내열쇠말.text()
+            # ★ 테일스케일이 꺼져 있으면 **모른다고 말한다** — 엉뚱한 주소를 넣지 않는다
+            메인창.내열쇠.setText("main-key-9876")
+            메인창.테일주소 = lambda: ""
+            메인창.쪽지내주기()
+            assert "테일스케일" in 메인창.내열쇠말.text(), 메인창.내열쇠말.text()
+            메인창.deleteLater()
+
+            # --- 손님 쪽: 그 쪽지를 그대로 붙인다 ---
+            paths.save_config({**paths.load_config(),
+                               "사본": {"역할": "메인", "main_url": "", "main_token": ""}})
+            손님창 = open_dialog(win, n)
+            손님창.쪽지칸.setText(f"  {쪽지}\n")        # 복사하면 공백이 묻는다
+            손님창.쪽지받기()
+            적힌2 = paths.load_config().get("사본") or {}
+            assert 적힌2["역할"] == "손님", 적힌2
+            assert 적힌2["main_url"] == "http://100.101.2.3:8765", 적힌2
+            assert 적힌2["main_token"] == "main-key-9876", 적힌2
+            assert 손님창.사본주소.text() == "http://100.101.2.3:8765", 손님창.사본주소.text()
+            assert not 손님창.쪽지칸.text(), "붙인 쪽지가 칸에 남아 있다"
+            # ★★ **엉뚱한 것을 붙여도 안 터지고, 쓰던 것을 안 망친다.**
+            손님창.쪽지칸.setText("이건 쪽지가 아니다")
+            손님창.쪽지받기()
+            _덮임 = paths.load_config()["사본"]
+            # ★★ **주소까지 본다.** 열쇠만 재면 이 검사는 아무것도 안 잡는다 —
+            #   `_사본저장` 이 빈 열쇠를 「쓰던 것 그대로」로 되돌려서 **우연히 맞는다.**
+            #   실제로 무너지는 것은 **주소**다(빈 글로 덮인다). 되돌려 보고 알았다.
+            assert _덮임["main_token"] == "main-key-9876", f"못 읽은 쪽지가 열쇠를 덮었다: {_덮임}"
+            assert _덮임["main_url"] == "http://100.101.2.3:8765", \
+                f"못 읽은 쪽지가 주소를 덮었다: {_덮임}"
+            손님창.deleteLater()
+
             열쇠창.deleteLater()
             사본창.deleteLater()
 
