@@ -1189,7 +1189,7 @@ class MainWindow(QWidget):
           이름 앞에 행성으로 구분」). 안 가르면 남의 것을 내 것이라 믿고 고친다.
         """
         빈것 = {"그림": {}, "갈래": {}, "흐리게": {}, "보일": {},
-              "남의것": set(), "마디들": set(), "붙은": set()}
+              "남의것": set(), "마디들": set(), "붙은": set(), "허브들": []}
         try:
             import server as _서버
             import 행성 as _행성
@@ -1203,7 +1203,7 @@ class MainWindow(QWidget):
             return 빈것
 
         모음 = dict(빈것, 그림={}, 갈래={}, 흐리게={}, 보일={},
-                  남의것=set(), 마디들=set(), 붙은=붙은)
+                  남의것=set(), 마디들=set(), 붙은=붙은, 허브들=[])
         쓴이름 = set(내것)
         for 이름 in 이름들:
             조각 = _행성.그릴것(이름, self.행성한도)
@@ -1219,6 +1219,7 @@ class MainWindow(QWidget):
                 모음["남의것"].add(마디)
             모음["마디들"].update(조각["그림"])
             모음["마디들"].update(조각["제목"])
+            모음["허브들"].append(허브)
         return 모음
 
     def refresh(self, scan: bool = True) -> None:
@@ -1250,8 +1251,10 @@ class MainWindow(QWidget):
         갈래.update(조각["갈래"])
         흐리게.update(조각["흐리게"])
         self._행성마디 = 조각["마디들"]
+        self._붙은행성 = 조각["붙은"]
         self.graph.load(그림, 갈래, 흐리게,
-                        보일=조각["보일"], 남의것=조각["남의것"])
+                        보일=조각["보일"], 남의것=조각["남의것"],
+                        바깥고리=조각["허브들"])
         self.load_proposals()
 
 
@@ -2876,6 +2879,35 @@ class MainWindow(QWidget):
         self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
                         self.notes.kin(picked))
 
+    def 행성보이기(self, 허브: str, focus: bool = True) -> None:
+        """**행성 로고를 누른 것.** 어느 기계이고 무엇이 와 있는지 말한다.
+
+        ★★ 로고는 글이 아니다 — `notes.read` 로는 영영 못 찾는다. 안 가르면
+           **눌러도 아무 일이 안 난다.** 화면에 떠 있는데 눌러도 조용한 것은
+           「고장인가」로 읽힌다(오너가 `100-83-60-77` 을 눌러 보고 걸렸다).
+        ★ 받아 둔 것이 없으면 **없다고 말한다.** 빈 로고가 말없이 서 있으면
+          붙은 건지 아닌지도 알 수 없다.
+        """
+        import 행성 as _행성
+
+        글수 = len([ㄱ for ㄱ in getattr(self, "_행성마디", ()) if ㄱ.startswith(허브 + "/")])
+        붙었나 = 허브 in (getattr(self, "_붙은행성", None) or set())
+        딸린것 = [허브] + [ㄱ for ㄱ in getattr(self, "_행성마디", ())
+                       if ㄱ.startswith(허브 + "/")][:8]
+        if focus:
+            self.graph.focus_on(딸린것, zoom=FOCUS_ZOOM)
+        어떤가 = "붙어 있어" if 붙었나 else "지금은 꺼져 있어"
+        if 글수:
+            self.report(f"{허브} 행성이야 — {어떤가}. 받아 둔 글 {글수}장. "
+                        f"글을 누르면 여기서 읽을 수 있어(고치는 건 그 기계가 켜져 있을 때).",
+                        딸린것)
+        elif 붙었나:
+            self.report(f"{허브} 행성이야 — 붙어 있는데 **아직 받아 둔 글이 없어.** "
+                        f"저쪽에서 뭔가 바뀌면 그때부터 여기로 따라온다.", [허브])
+        else:
+            self.report(f"{허브} 행성이야 — 꺼져 있고 받아 둔 글도 없어. "
+                        f"그 기계를 켜면 받아 온다.", [허브])
+
     def 행성글보이기(self, 마디: str, focus: bool = True, 말할까: bool = True) -> None:
         """남의 행성 글을 **읽기 칸에** 띄운다.
 
@@ -2918,10 +2950,14 @@ class MainWindow(QWidget):
 
     def show_note(self, title: str, focus: bool = True, trail: bool = True,
                   말할까: bool = True) -> None:
-        # 남의 행성 글(`행성/제목`)은 **여기서 갈라진다.** 안 가르면 `notes.read` 가
-        # 못 찾아 **아무 일도 안 일어난다** — 눌렀는데 조용한 것이 가장 나쁘다.
-        if "/" in title and getattr(self, "_행성마디", ()) and title in self._행성마디:
-            self.행성글보이기(title, focus=focus, 말할까=말할까)
+        # 행성 것(로고 `100-1-2-3` · 글 `100-1-2-3/제목`)은 **여기서 갈라진다.**
+        # 안 가르면 `notes.read` 가 못 찾아 **아무 일도 안 일어난다** — 눌렀는데
+        # 조용한 것이 가장 나쁘다(오너가 로고를 눌러 보고 걸렸다 · 2026-09-28).
+        if title in getattr(self, "_행성마디", ()):
+            if "/" in title:
+                self.행성글보이기(title, focus=focus, 말할까=말할까)
+            else:
+                self.행성보이기(title, focus=focus)
             return
         note = self.notes.read(title)
         if note is None:

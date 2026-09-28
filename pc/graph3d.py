@@ -200,6 +200,9 @@ class NodeItem:
         # `행성/제목` 이라 그대로 찍으면 화면이 주소로 뒤덮인다.
         self.보일 = 보일 or title
         self.남의것 = False   # 남의 행성 글 — 흐리게 깔고 손 대면 밝힌다
+        # 물리에 안 실리는 마디. 행성 로고는 **바깥 고리에 세워 둔다** —
+        # 무리에 섞여 떠다니면 「딴 기계」라는 것이 눈에 안 보인다(오너 2026-09-28).
+        self.붙박이 = False
         self.r = node_radius(title, kind)
         self._보임 = True
         self._x = self._y = 0.0
@@ -645,6 +648,9 @@ class GraphView(QGraphicsView):
         self._drag: QPointF | None = None
         self._zoom = 1.0
         self._zoom_target = 1.0
+        # 사람이 굴려서 정한 배율. **있으면 저절로 잡는 배율을 이긴다** —
+        # 손으로 멀리 뺐는데 다음 판에 도로 당겨지면 그건 고장이다.
+        self._손배율 = None
         self._center = QPointF(0, 0)
         self._center_target = QPointF(0, 0)
         # 표식을 두 번 눌러 「제자리로」를 했는가. 그동안은 가운데가 원점에 붙는다.
@@ -822,9 +828,11 @@ class GraphView(QGraphicsView):
     def load(self, graph: dict[str, list[str]], kinds: dict[str, str],
              soft: dict[str, list[str]] | None = None,
              보일: dict[str, str] | None = None,
-             남의것: set[str] | None = None) -> None:
+             남의것: set[str] | None = None,
+             바깥고리: list[str] | None = None) -> None:
         """`보일` 은 마디 이름과 **다르게 보일 이름**(남의 행성 글의 제목),
-        `남의것` 은 흐리게 깔 마디들이다. 둘 다 없으면 지금까지와 똑같이 돈다."""
+        `남의것` 은 흐리게 깔 마디들, `바깥고리` 는 **무리 바깥에 붙박아 세울**
+        마디들(행성 로고)이다. 안 주면 지금까지와 똑같이 돈다."""
         # **장면을 비우지 않는다.** `scene_.clear()` 는 항목을 C++ 에서 즉시 없애는데,
         # 화면·물리·이름표가 그 항목을 아직 향하고 있으면 프로세스가 통째로 죽는다
         # (파이썬 오류가 아니라 접근 위반이라 잡을 수도 없다).
@@ -891,6 +899,25 @@ class GraphView(QGraphicsView):
             # 장면에 안 넣는다 — 떼가 그린다
             self.nodes[title] = node
 
+        # ★★ **행성 로고는 무리 바깥 고리에 못 박는다**(오너 2026-09-28:
+        #   「줌아웃해서 작아지게 하고 옆에 행성으로도 보이게」). 힘 배치에 맡기면
+        #   글들 사이로 섞여 들어가 **어느 것이 딴 기계인지 눈으로 안 갈린다.**
+        #   ★ 고리 반지름은 무리 껍질의 1.8배 — 무리 밖이되 화면을 한 번 빼면
+        #     같이 들어오는 거리다. 자리는 이름 차례라 다시 그려도 안 튄다.
+        고리 = [ㄱ for ㄱ in sorted(바깥고리 or ()) if ㄱ in self.nodes]
+        if 고리:
+            반지름 = spread * 1.8
+            for ㄴ, 이름 in enumerate(고리):
+                각 = math.tau * ㄴ / len(고리)
+                마디 = self.nodes[이름]
+                마디.붙박이 = True
+                마디.p = [반지름 * math.cos(각), 반지름 * math.sin(각) * 0.45,
+                        반지름 * math.sin(각) * 0.35]
+                마디.v = [0.0, 0.0, 0.0]
+        for ㄱ, 마디 in self.nodes.items():
+            if ㄱ not in 고리:
+                마디.붙박이 = False
+
         seen = set()
         for src, links in graph.items():
             for dst in links:
@@ -941,7 +968,9 @@ class GraphView(QGraphicsView):
         멀리 있는 것끼리는 어차피 힘이 거리 제곱에 반비례해 거의 0이다. 공간을 칸으로
         나눠 **옆 칸까지만** 재면 결과는 눈에 같고 값은 항목 수에 비례한다.
         """
-        items = [n for n in self.nodes.values() if n.isVisible()]
+        # ★ 붙박이(행성 로고)는 **힘을 안 받는다.** 밀고 당기는 데 끼면 무리에
+        #   섞여 들어가 「딴 기계」라는 것이 눈에서 사라진다.
+        items = [n for n in self.nodes.values() if n.isVisible() and not n.붙박이]
         if not items:
             return
         began = time.perf_counter()
@@ -1076,6 +1105,7 @@ class GraphView(QGraphicsView):
         안 일어난 것처럼 보인다.**
         """
         self._원점에두기 = True
+        self._손배율 = None          # 「제자리로」는 배율도 처음으로 돌린다
         self.clear_focus()
         self._fit()
 
@@ -1192,9 +1222,14 @@ class GraphView(QGraphicsView):
             #   **검색 전후로 배율이 0.86 → 0.88 로 움직였다**(검사가 잡았다).
             #   사람 눈에는 「좁혔더니 화면이 들썩」으로 보인다. 눈에 띌 만큼
             #   달라질 때만 따라간다 — 항목이 크게 늘거나 창이 바뀌는 때다.
-            옛것 = self._zoom_target
-            if 옛것 <= 0 or abs(overview - 옛것) > max(옛것, overview) * 0.05:
-                self._zoom_target = overview
+            if self._손배율 is not None:
+                # 사람이 굴려서 정한 값이 이긴다. 저절로 잡는 배율이 이것을 덮으면
+                # **뺀 자리가 도로 당겨져** 굴려도 안 멀어지는 것처럼 보인다.
+                self._zoom_target = self._손배율
+            else:
+                옛것 = self._zoom_target
+                if 옛것 <= 0 or abs(overview - 옛것) > max(옛것, overview) * 0.05:
+                    self._zoom_target = overview
 
         self._center_target = center
 
@@ -1807,8 +1842,28 @@ class GraphView(QGraphicsView):
     def mouseReleaseEvent(self, event) -> None:
         self._drag = None
 
+    # 손으로 낼 수 있는 배율의 아래위. 너무 빼면 점만 남고, 너무 당기면 길을 잃는다.
+    손배율낮음, 손배율높음 = 0.25, 2.5
+
     def wheelEvent(self, event) -> None:
-        pass  # 확대는 원근을 헝클어뜨린다. 회전만 남긴다
+        """굴리면 **멀어지고 가까워진다**(오너 2026-09-28).
+
+        ★★ 예전에는 아무 일도 안 했다 — 「확대는 원근을 헝클어뜨린다」. 그건
+           **원근(`FOCAL`)** 을 건드릴 때 이야기다. 여기서 바꾸는 것은 `QGraphicsView`
+           의 **화면 배율**이라 3차원 계산은 그대로고 원근이 안 헝클어진다.
+        ★ 행성 로고를 바깥 고리에 세워 뒀으니, **멀리 빼야 그것이 화면에 들어온다.**
+        """
+        걸음 = event.angleDelta().y()
+        if not 걸음:
+            return
+        바탕 = self._손배율 if self._손배율 is not None else (self._zoom_target or 1.0)
+        새것 = 바탕 * (1.12 if 걸음 > 0 else 1 / 1.12)
+        self._손배율 = max(self.손배율낮음, min(self.손배율높음, 새것))
+        self._zoom_target = self._손배율
+        # ★ 초점 배율은 놓는다 — 안 놓으면 다음 판에 초점이 배율을 도로 끌어간다.
+        #   초점 자체(밝힌 것)는 그대로 둔다: 사람이 뺀 것은 거리지 초점이 아니다.
+        self._focus_zoom = None
+        event.accept()
 
     # --- 말하는 연출 ----------------------------------------------------
 

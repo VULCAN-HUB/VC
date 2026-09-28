@@ -924,7 +924,12 @@ class Handler(BaseHTTPRequestHandler):
             통째로달라 = (args.get("full") or ["0"])[0] not in ("0", "", "false")
             if not 통째로달라 and len(글) > MAX_NOTE_CHARS:
                 글, 잘랐나 = 글[:MAX_NOTE_CHARS], True
-            답 = {"title": title, "text": 글, "chars": len(글),
+            # ★★ **갈래를 같이 보낸다.** 안 보내면 사본 쪽은 갈래를 알 길이 없어
+            #   받은 글이 전부 기본 갈래로 앉는다 — 손님 PC 의 그래프가 **한 색으로**
+            #   나온다(오너가 실기에서 걸렸다 · 2026-09-28). 「같은 자료를 어디서 보든
+            #   똑같이」가 목표인데 색이 다르면 같은 것으로 안 읽힌다.
+            답 = {"title": title, "text": 글, "chars": len(글), "kind": note.kind,
+                  "pinned": bool(note.pinned),
                   "headings": [h for _, h in notes.headings(note.body)][:20]}
             if 잘랐나:
                 # **자른 것을 말한다.** 안 말하면 AI 가 글 전체를 본 줄 안다.
@@ -3108,6 +3113,16 @@ def _self_check() -> None:
     assert 상태 == 200, 바꿈
     상태, 따라감 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("가리키는 글"))
     assert "[[새 이름]]" in 따라감["text"], f"가리키던 링크를 안 따라 고쳤다: {따라감['text']}"
+    # ★★ **글을 줄 때 갈래도 같이 준다.** 안 주면 받는 쪽(사본·폰)은 갈래를 알 길이
+    #   없어 받은 글이 전부 기본 갈래로 앉는다 — 손님 PC 의 그래프가 **한 색**으로
+    #   나왔다(오너가 실기에서 걸렸다 · 2026-09-28). 색을 정하는 것이 갈래다.
+    from notes import Note as _글꼴
+
+    note_store.write(_글꼴(title="갈래 실렸나", body="몸\n", kind="결정", pinned=True))
+    note_store.reindex()
+    _, 갈래답 = call("GET", "/eb/v1/memory/note?title=" + urllib.parse.quote("갈래 실렸나"))
+    assert 갈래답.get("kind") == "결정", f"갈래를 안 실어 보낸다: {sorted(갈래답)}"
+    assert 갈래답.get("pinned") is True, f"고정을 안 실어 보낸다: {sorted(갈래답)}"
     assert call("POST", "/eb/v1/memory/rename", {"title": "새 이름", "to": "가리키는 글"})[0] == 409
 
     # ★ **하다 만 이름 바꾸기**는 링크가 반쯤 끊긴 상태다. 창만 그것을 봤다 —

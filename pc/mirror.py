@@ -139,8 +139,14 @@ def 한판(store, 부르기, where: Path, 한번에수: int = 한번에) -> 받�
         받은지문[제목] = {"raw": 지문(받은몸), "norm": 지문(_고르게(받은몸))}
         if 있던 is not None and 있던.body == 받은몸:
             continue                      # 같은 글이면 안 쓴다(파일 시각만 바뀌면 또 바뀐 것으로 보인다)
-        store.append(제목, 받은몸) if 있던 is None else store.write(
-            _같은꼴(store, 있던, 받은몸))
+        # ★ 옛 메인은 갈래를 안 보낸다 — 그때는 지금까지 하던 대로 기본 갈래로 둔다
+        받은갈래 = 몸답.get("kind")
+        받은갈래 = 받은갈래 if isinstance(받은갈래, str) and 받은갈래 else ""
+        if 있던 is None:
+            store.append(제목, 받은몸, **({"kind": 받은갈래} if 받은갈래 else {}),
+                         pinned=bool(몸답.get("pinned")))
+        else:
+            store.write(_같은꼴(store, 있던, 받은몸, 받은갈래))
         결과.새로 += 있던 is None
         결과.고침 += 있던 is not None
         결과.첨부 += _첨부받기(store, 부르기, 받은몸)
@@ -206,11 +212,15 @@ def 보내기(store, 부르기, where: Path, 한번에수: int = 50) -> 보낸�
     return 결과
 
 
-def _같은꼴(store, 있던, 새몸: str):
-    """있던 글의 갈래·고정 따위는 그대로 두고 **몸만** 갈아 끼운다."""
+def _같은꼴(store, 있던, 새몸: str, 새갈래: str = ""):
+    """있던 글의 고정 따위는 그대로 두고 **몸(과 주인이 바꾼 갈래)**을 갈아 끼운다.
+
+    ★ 갈래도 주인이 고친다 — 안 따라가면 메인에서 「메모」를 「결정」으로 바꿔도
+      사본은 영영 메모로 남아 **색이 갈린 채 굳는다.**
+    """
     from notes import Note
 
-    return Note(title=있던.title, body=새몸, kind=있던.kind, pinned=있던.pinned,
+    return Note(title=있던.title, body=새몸, kind=새갈래 or 있던.kind, pinned=있던.pinned,
                 id=있던.id, created=있던.created, aliases=list(있던.aliases or []),
                 extra=dict(있던.extra or {}))
 
@@ -229,6 +239,9 @@ def _self_check() -> None:
 
         # ★ **긴 글을 하나 섞는다.** 짧은 글만으로 재면 「말없이 잘린다」를 영영 못 잡는다.
         메인글 = {"가": "가의 몸", "나": "나의 몸", "긴글": "가" * 25000}
+        # ★★ **갈래도 건너와야 한다.** 안 오면 받은 글이 전부 기본 갈래로 앉아
+        #   손님 PC 의 그래프가 **한 색**으로 나온다(오너가 실기에서 걸렸다).
+        메인갈래: dict[str, str] = {}
         지운것: list[str] = []
         부른것: list[str] = []
 
@@ -255,9 +268,10 @@ def _self_check() -> None:
                     return None
                 몸 = 메인글[제목]
                 통째 = (인자.get("full") or ["0"])[0] not in ("0", "", "false")
+                갈래덧 = {"kind": 메인갈래[제목]} if 제목 in 메인갈래 else {}
                 if not 통째 and len(몸) > 20000:
-                    return {"text": 몸[:20000], "cut": True}
-                return {"text": 몸}
+                    return {"text": 몸[:20000], "cut": True, **갈래덧}
+                return {"text": 몸, **갈래덧}
             return None
 
         # ① 처음 받으면 둘 다 새로 생긴다
@@ -285,6 +299,34 @@ def _self_check() -> None:
         assert r3.고침 >= 1, r3
         쪽 = 손님.read("가")
         assert "고침" in 쪽.body and 쪽.kind == "결정" and 쪽.pinned, (쪽.kind, 쪽.pinned)
+
+        # ③-b **갈래가 건너온다.** 「어디서 보든 똑같이」가 목표인데 색이 다르면
+        #   같은 것으로 안 읽힌다 — 색을 정하는 것이 갈래다.
+        메인글["갈래것"] = "갈래 붙은 몸"
+        메인갈래["갈래것"] = "결정"
+        _자국쓰기(자국, {"since": 0})
+        한판(손님, 부르기, 자국)
+        받은것 = 손님.read("갈래것")
+        assert 받은것 is not None, "갈래 붙은 글이 아예 안 왔다"
+        assert 받은것.kind == "결정", f"갈래가 안 건너왔다: {받은것.kind}"
+
+        # ★ **주인이 갈래를 바꾸면 따라간다.** 안 따라가면 메인에서 「결정」으로
+        #   고쳐도 사본은 영영 옛 갈래로 남아 **색이 갈린 채 굳는다.**
+        메인갈래["갈래것"] = "오류"
+        메인글["갈래것"] = "갈래 붙은 몸 · 고침"
+        _자국쓰기(자국, {"since": 0})
+        한판(손님, 부르기, 자국)
+        assert 손님.read("갈래것").kind == "오류", 손님.read("갈래것").kind
+
+        # ★ **갈래를 안 보내는 옛 메인에서는 쓰던 갈래를 안 뭉갠다**(위 ③ 이 그 자리다)
+        메인갈래.pop("갈래것")
+        메인글["갈래것"] = "갈래 붙은 몸 · 또 고침"
+        _자국쓰기(자국, {"since": 0})
+        한판(손님, 부르기, 자국)
+        assert 손님.read("갈래것").kind == "오류", \
+            f"갈래를 안 보냈는데 기본 갈래로 뭉갰다: {손님.read('갈래것').kind}"
+        # ★ 메인에서 **안 지운다.** 지우면 사본만 가진 글이 되어, 뒤의 「보낼 것이
+        #   없다」 검사가 이 글을 **내가 쓴 것**으로 보고 메인에 보낸다(실제로 그랬다).
 
         # ④ 메인에서 지우면 사본에서도 지워진다(지난 판은 남는다)
         지운것.append("나")

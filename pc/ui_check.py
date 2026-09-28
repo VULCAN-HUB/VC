@@ -2817,7 +2817,65 @@ def run() -> None:
         app.processEvents()
         assert "안 받아 뒀" in _행성창._say_text, _행성창._say_text
 
-        # ⑥ **「보임 n/m」 은 내 기록을 세는 말이다.**
+        # ⑤-c **행성 로고를 눌러도 말한다.**
+        #    ★★ 로고는 글이 아니라 `notes.read` 로는 영영 못 찾는다 — 안 가르면
+        #      **눌러도 아무 일이 안 난다.** 화면에 떠 있는데 조용한 것은 「고장인가」로
+        #      읽힌다(오너가 실기에서 로고를 눌러 보고 걸렸다 · 2026-09-28).
+        # ★ **붙은 상태를 다시 세운다.** 뒤에서 색인이 끝나며 `refresh` 가 한 번 더
+        #   돌면 그물이 없어 「꺼짐」으로 바뀐다 — 그 틈에 재면 검사가 흔들린다.
+        _서버검.RUNNING = _가짜돌것()
+        try:
+            _행성창.refresh(scan=False)
+        finally:
+            _서버검.RUNNING = _옛RUNNING
+        _행성창._say_text = ""
+        _행성창.show_note("100-64-0-7")
+        app.processEvents()
+        assert "100-64-0-7" in _행성창._say_text, f"행성 로고를 눌렀는데 조용하다: {_행성창._say_text!r}"
+        assert "붙어 있어" in _행성창._say_text, _행성창._say_text
+        assert "2장" in _행성창._say_text, _행성창._say_text
+        # 꺼진 행성은 **꺼졌다고** 말한다 — 붙은 줄 알고 기다리면 안 된다
+        _행성창._say_text = ""
+        _행성창.show_note("100-64-0-8")
+        app.processEvents()
+        assert "꺼져 있" in _행성창._say_text, _행성창._say_text
+
+        # ⑤-d **행성 로고는 무리 바깥에 붙박여 선다.**
+        #    힘 배치에 맡기면 글들 사이로 섞여 들어가 어느 것이 딴 기계인지 안 갈린다.
+        _허브 = _행성창.graph.nodes["100-64-0-7"]
+        assert _허브.붙박이, "행성 로고가 물리에 실려 무리 속으로 떠다닌다"
+        assert not _행성창.graph.nodes["100-64-0-7/저쪽 메모"].붙박이, "행성 글까지 못 박았다"
+        _바깥 = max(abs(ㄱ) for ㄱ in _허브.p)
+        _안쪽 = max((max(abs(ㄴ) for ㄴ in ㄱ.p)
+                  for ㄷ, ㄱ in _행성창.graph.nodes.items() if ㄷ == "회의록"), default=0.0)
+        assert _바깥 > _안쪽, f"행성이 무리 밖이 아니다 (행성 {_바깥:.0f} / 내 글 {_안쪽:.0f})"
+
+        # ⑤-e **굴리면 멀어진다** — 오너 「줌아웃해서 작아지게」.
+        #    안 되면 바깥 고리에 세운 행성이 화면에 안 들어온다.
+        from PyQt5.QtCore import QPoint as _점
+        from PyQt5.QtGui import QWheelEvent as _휠
+
+        _앞배율 = _행성창.graph._zoom_target
+        for _ in range(6):
+            _행성창.graph.wheelEvent(_휠(
+                _점(10, 10), _행성창.graph.mapToGlobal(_점(10, 10)),
+                _점(0, -120), _점(0, -120),
+                Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+        assert _행성창.graph._zoom_target < _앞배율, \
+            f"굴려도 안 멀어진다 ({_앞배율} → {_행성창.graph._zoom_target})"
+        _뺀것 = _행성창.graph._zoom_target
+        # ★★ **사람이 뺀 배율을 저절로 잡는 배율이 덮으면 안 된다** — 다시 그리면
+        #   도로 당겨져 「굴려도 안 되네」가 된다.
+        _행성창.refresh(scan=False)
+        _행성창.graph.project()
+        app.processEvents()
+        assert _행성창.graph._zoom_target == _뺀것, \
+            f"다시 그리니 사람이 뺀 배율이 덮였다 ({_뺀것} → {_행성창.graph._zoom_target})"
+        # 「제자리로」는 배율도 처음으로 돌린다
+        _행성창.graph.제자리로()
+        assert _행성창.graph._손배율 is None, "제자리로 인데 손배율이 남아 있다"
+
+    # ⑥ **「보임 n/m」 은 내 기록을 세는 말이다.**
         #    ★★ 처음에 글 하나로 재려 했는데 **그 검사는 아무것도 못 잡았다** —
         #    잘릴 일이 없으니 분자가 분모를 넘고, 넘으면 코드가 「항목 n」으로
         #    떨어져 **우연히 맞게** 보인다. 되돌려 놓고 확인해서 알았다.
