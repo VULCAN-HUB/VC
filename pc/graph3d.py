@@ -116,10 +116,37 @@ class _선위층(QWidget):
         q.end()
 
 
-def node_radius(title: str, kind: str) -> float:
+# 이음선 수로 크기를 정할 때의 아래위(오너 2026-09-28: 「연결이 많을수록 커지고
+# 적으면 작아지게, 최대·최소는 한계를 두고」 — 옵시디언이 그렇게 그린다).
+# ★ 한계가 없으면 이음선 하나짜리는 점만도 못해 안 보이고, 허브 하나가 화면을 먹는다.
+크기바닥, 크기천장 = 5.0, 17.0
+
+
+def node_radius(title: str, kind: str, 이음수: int = 0) -> float:
+    """마디 크기. **이어진 수**로 정한다 — 갈래가 아니라.
+
+    ★ 제곱근이라 하나에서 넷으로 늘 때 크게 커지고, 마흔에서 여든은 조금 커진다 —
+      눈이 차이를 읽는 방식과 같다(옵시디언도 이 결이다).
+    """
     if title == ROOT:
         return RADIUS["agent"]
-    return RADIUS.get(kind, RADIUS_OTHER)
+    if kind in ("행성", "행성꺼짐"):
+        return RADIUS["행성"]
+    return min(크기천장, 크기바닥 + 3.1 * math.sqrt(max(이음수, 0)))
+
+
+def 마디바탕(kind: str):
+    """마디 바탕색. **갈래로 안 나눈다**(오너 2026-09-28).
+
+    ★★ 갈래가 열두 가지라 화면이 알록달록했다 — 오너가 「색상으로 구분하지 말라」고
+       했다. 옵시디언도 기본은 한 색이고, 크기와 이음선으로 읽게 한다.
+    ★ 행성 로고만 갈린다 — 그건 갈래가 아니라 **기계**다. 꺼진 것은 무채색.
+    """
+    if kind == "행성":
+        return theme.kind_color("행성")
+    if kind == "행성꺼짐":
+        return QColor(theme.T.MUTED)
+    return QColor(theme.T.DIM)
 
 
 _LABEL_FONT = QFont()
@@ -203,6 +230,10 @@ class NodeItem:
         # 물리에 안 실리는 마디. 행성 로고는 **바깥 고리에 세워 둔다** —
         # 무리에 섞여 떠다니면 「딴 기계」라는 것이 눈에 안 보인다(오너 2026-09-28).
         self.붙박이 = False
+        # 이 마디가 도는 **무리의 한가운데와 껍질**. 행성 글은 제 로고를 돈다 —
+        # 오너 2026-09-28: 「로고 둘이 거리를 두고 떨어져 있고 각자 둘레를 항목이 돈다」.
+        self.무리중심 = (0.0, 0.0, 0.0)
+        self.무리껍질 = 0.0
         self.r = node_radius(title, kind)
         self._보임 = True
         self._x = self._y = 0.0
@@ -309,7 +340,7 @@ class NodeItem:
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
-        base = theme.T.MUTED if self.dim else theme.kind_color(self.kind)
+        base = theme.T.MUTED if self.dim else 마디바탕(self.kind)
         r = self.r
         fog = 0.25 + 0.75 * self.depth  # 뒤로 갈수록 옅게 — 깊이가 보인다
         if self.dim:
@@ -438,7 +469,7 @@ class 마디떼(QGraphicsItem):
             열쇠 = (마디.kind, 마디.dim, int(165 * 안개) // 8)
             붓 = 붓광.get(열쇠)
             if 붓 is None:
-                바탕 = theme.T.MUTED if 마디.dim else theme.kind_color(마디.kind)
+                바탕 = theme.T.MUTED if 마디.dim else 마디바탕(마디.kind)
                 붓 = 붓광[열쇠] = QBrush(theme.rgba(바탕, max(8, 열쇠[2] * 8)))
             painter.setBrush(붓)
             반 = 마디.r * 마디.scale()
@@ -829,7 +860,8 @@ class GraphView(QGraphicsView):
              soft: dict[str, list[str]] | None = None,
              보일: dict[str, str] | None = None,
              남의것: set[str] | None = None,
-             바깥고리: list[str] | None = None) -> None:
+             바깥고리: list[str] | None = None,
+             무리: dict[str, list[str]] | None = None) -> None:
         """`보일` 은 마디 이름과 **다르게 보일 이름**(남의 행성 글의 제목),
         `남의것` 은 흐리게 깔 마디들, `바깥고리` 는 **무리 바깥에 붙박아 세울**
         마디들(행성 로고)이다. 안 주면 지금까지와 똑같이 돈다."""
@@ -905,18 +937,36 @@ class GraphView(QGraphicsView):
         #   ★ 고리 반지름은 무리 껍질의 1.8배 — 무리 밖이되 화면을 한 번 빼면
         #     같이 들어오는 거리다. 자리는 이름 차례라 다시 그려도 안 튄다.
         고리 = [ㄱ for ㄱ in sorted(바깥고리 or ()) if ㄱ in self.nodes]
+        # 무리를 갈라 놓기 전에 **모두 가운데 무리로 되돌린다** — 지난번 행성이
+        # 없어졌는데 그 글이 아직 옛 중심을 돌면 화면에 무리가 유령처럼 남는다.
+        for 마디 in self.nodes.values():
+            마디.붙박이 = False
+            마디.무리중심 = (0.0, 0.0, 0.0)
+            마디.무리껍질 = 0.0
         if 고리:
-            반지름 = spread * 1.8
+            # 로고끼리 **거리를 두고** 세운다. 무리가 커지면 그만큼 더 벌린다 —
+            # 안 벌리면 두 무리가 겹쳐 「갈렸다」가 눈에 안 보인다.
+            반지름 = spread * 2.6
             for ㄴ, 이름 in enumerate(고리):
                 각 = math.tau * ㄴ / len(고리)
                 마디 = self.nodes[이름]
                 마디.붙박이 = True
-                마디.p = [반지름 * math.cos(각), 반지름 * math.sin(각) * 0.45,
-                        반지름 * math.sin(각) * 0.35]
+                자리 = (반지름 * math.cos(각), 반지름 * math.sin(각) * 0.5,
+                      반지름 * math.sin(각) * 0.3)
+                마디.p = list(자리)
                 마디.v = [0.0, 0.0, 0.0]
-        for ㄱ, 마디 in self.nodes.items():
-            if ㄱ not in 고리:
-                마디.붙박이 = False
+                # ★★ **그 로고에 딸린 글은 로고를 돈다.** 여태는 다 원점을 돌아서
+                #   로고만 밖에 나가 앉고 글은 내 무리에 섞여 있었다 — 오너가 본
+                #   그림이 그것이다. 무리마다 제 중심과 제 껍질을 갖는다.
+                딸린 = [ㄱ for ㄱ in (무리 or {}).get(이름, ()) if ㄱ in self.nodes]
+                껍 = 껍질(max(len(딸린), 2))
+                for ㄷ in 딸린:
+                    self.nodes[ㄷ].무리중심 = 자리
+                    self.nodes[ㄷ].무리껍질 = 껍
+                    # 처음 뿌릴 때부터 제 로고 둘레로 — 원점에서 끌려오면 오래 걸린다
+                    if max(abs(ㄹ) for ㄹ in self.nodes[ㄷ].p) < 1.0:
+                        self.nodes[ㄷ].p = [자리[ㅁ] + self.rng.uniform(-껍, 껍)
+                                          for ㅁ in range(3)]
 
         seen = set()
         for src, links in graph.items():
@@ -939,6 +989,28 @@ class GraphView(QGraphicsView):
                 seen.add(key)
                 self.edges.append((src, dst))
                 self.soft.add(key)
+
+        # ★★ **로고끼리 잇는다**(오너 2026-09-28: 「로고와 로고가 연결된 거야」).
+        #   이 선은 사람이 그은 것이 아니라 **기계가 붙어 있다**는 표시다.
+        #   `soft` 에 안 넣는다 — 점선으로 흐리게 그리면 그 뜻이 안 읽힌다.
+        for 이름 in 고리:
+            열쇠 = tuple(sorted((ROOT, 이름)))
+            if 열쇠 not in seen and ROOT in self.nodes:
+                seen.add(열쇠)
+                self.edges.append((ROOT, 이름))
+
+        # ★★ **크기는 이어진 수로 정한다**(오너 2026-09-28). 선을 다 세운 **뒤**라야
+        #   셀 수 있다. 크기가 바뀌면 이름표 자리도 다시 잡아야 한다 — 안 그러면
+        #   이름이 마디에 겹치거나 떠 있는다.
+        이음수: dict[str, int] = {}
+        for ㄱ, ㄴ in self.edges:
+            이음수[ㄱ] = 이음수.get(ㄱ, 0) + 1
+            이음수[ㄴ] = 이음수.get(ㄴ, 0) + 1
+        for 이름, 마디 in self.nodes.items():
+            새크기 = node_radius(이름, 마디.kind, 이음수.get(이름, 0))
+            if abs(새크기 - 마디.r) > 0.01:
+                마디.r = 새크기
+                마디.이름표놓기()
 
         self.physics.start(30)
         # 자리가 잡히면 멈춘다. 시간으로만 끊으면 큰 그래프는 덜 자리 잡은 채로 멈추고,
@@ -1022,10 +1094,13 @@ class GraphView(QGraphicsView):
                 node.v = [0.0, 0.0, 0.0]
                 continue
             # 구 껍질 쪽으로 당긴다. 쌓일수록 공 모양이 되는 힘이 이것이다.
-            dist = math.sqrt(sum(x * x for x in node.p)) or 1.0
-            gap = (target - dist) * shell_k
+            # ★ **제 무리의 한가운데**를 돈다 — 행성 글은 제 로고를, 내 글은 원점을.
+            중심 = node.무리중심
+            상대 = [node.p[i] - 중심[i] for i in range(3)]
+            dist = math.sqrt(sum(x * x for x in 상대)) or 1.0
+            gap = ((node.무리껍질 or target) - dist) * shell_k
             for i in range(3):
-                node.v[i] += node.p[i] / dist * gap
+                node.v[i] += 상대[i] / dist * gap
                 node.v[i] *= damp
                 node.p[i] += node.v[i]
             moved = max(moved, abs(node.v[0]) + abs(node.v[1]) + abs(node.v[2]))
@@ -1036,7 +1111,9 @@ class GraphView(QGraphicsView):
         #   재 보니 무게중심이 (182, -114, -55) 에서 **치우친 채로 안정**됐다 —
         #   그래서 표식이 늘 무리 한쪽에 붙어 보였다. 걸음마다 평균을 빼면
         #   모양은 그대로 두고 자리만 가운데로 온다.
-        흐른것 = [n for n in items if n.title != ROOT]
+        # ★ **가운데 무리만** 되돌린다. 행성 무리까지 원점으로 끌어오면 갈라 놓은
+        #   것이 도로 합쳐진다.
+        흐른것 = [n for n in items if n.title != ROOT and not any(n.무리중심)]
         if 흐른것:
             가운데 = [sum(n.p[i] for n in 흐른것) / len(흐른것) for i in range(3)]
             if abs(가운데[0]) + abs(가운데[1]) + abs(가운데[2]) > 0.5:

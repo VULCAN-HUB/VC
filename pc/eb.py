@@ -1076,10 +1076,18 @@ def _self_check() -> None:
     #   자체점검은 `eb.main()` 을 안 지나 못 잡았다. 고칠 때마다 사람이 기억할 일이
     #   아니라서 여기서 잡는다. `lambda: 함수()` 로 감싸면 이름을 안 넘긴다.
     #
-    #   ★ **본 것만 막는다.** `connect` 도 같은 병인지는 **안 겪었다** — 오히려
-    #     한글 이름을 물린 `settings` 가 윈도우에서 통과한다. 그래서 `connect` 는
-    #     글로 막지 않고 **아래에서 실제로 재 본다**. 겪지도 않은 것을 막으면
-    #     멀쩡한 코드를 뜯어고치게 되고, 진짜 위험이 어느 것인지 흐려진다.
+    #   ★★ **2026-09-28 에 이 자리를 고쳐 적는다.** 앞서는 「`connect` 도 같은 병인지는
+    #     안 겪었다」고 적어 두었는데 **겪었다**(`ui.py` 에서 창이 안 떴다). 그래서
+    #     넷으로 갈라 재 봤다 — 갈린 것은 **신호가 아니라 물리는 쪽의 꼴**이었다:
+    #
+    #       한글 **함수**를 물린다(인자 있든 없든)   → 된다
+    #       한글 **메서드**(`self.한글`)를 물린다     → **터진다**
+    #       한글 `pyqtSignal` 이름                   → **클래스를 만드는 순간 터진다**
+    #       `QObject` 하위 클래스 이름이 한글        → 된다
+    #
+    #     그래서 **메서드와 신호 이름만** 막는다. 함수까지 막으면 멀쩡한 열다섯 군데를
+    #     뜯어고치게 되고, 진짜 위험이 어느 것인지 흐려진다. 아래 「실제로 재 본다」가
+    #     한글 **함수**를 쓰는 까닭도 이것이다 — 그쪽은 되는 쪽이다.
     #   ★ 글이 아니라 **문법 나무**로 본다 — 주석·문자열에 든 같은 글자를 잘못 잡지
     #     않고, 줄바꿈으로 흩어 놓은 것도 놓치지 않는다. `sqlite3.connect` 같은
     #     남의 `connect` 와도 안 헷갈린다(PyQt 를 부르는 파일만 본다).
@@ -1106,6 +1114,51 @@ def _self_check() -> None:
     assert not _한글걸린것, (
         "한글 이름을 singleShot 에 그대로 물렸다 — 윈도우에서 UnicodeEncodeError 로 죽는다. "
         "`lambda: 함수()` 로 감싼다: " + " · ".join(_한글걸린것))
+
+    # ★★ **신호 이름과 그 신호에 물리는 슬롯 이름은 영문이어야 한다**(위 표 참고).
+    _신호이름 = set()
+    _나무들 = {}
+    for _파일 in sorted(_자리스펙.glob("*.py")):
+        _글판 = _파일.read_text(encoding="utf-8", errors="replace")
+        if "PyQt5" not in _글판:
+            continue
+        try:
+            _나무들[_파일] = _나무.parse(_글판)
+        except SyntaxError:
+            continue
+    _한글신호, _한글슬롯 = [], []
+    for _파일, _뿌리 in _나무들.items():
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Assign) and isinstance(_마디.value, _나무.Call)):
+                continue
+            _부름 = _마디.value.func
+            _이름 = (_부름.id if isinstance(_부름, _나무.Name) else
+                   _부름.attr if isinstance(_부름, _나무.Attribute) else "")
+            if _이름 != "pyqtSignal":
+                continue
+            for _왼 in _마디.targets:
+                _쓴이름 = _왼.id if isinstance(_왼, _나무.Name) else ""
+                _신호이름.add(_쓴이름)
+                if any("가" <= _자 <= "힣" for _자 in _쓴이름):
+                    _한글신호.append(f"{_파일.name}:{_마디.lineno} → {_쓴이름}")
+    for _파일, _뿌리 in _나무들.items():
+        for _마디 in _나무.walk(_뿌리):
+            if not (isinstance(_마디, _나무.Call) and isinstance(_마디.func, _나무.Attribute)
+                    and _마디.func.attr == "connect"):
+                continue
+            for _인자 in _마디.args:
+                # ★ **메서드만 막는다.** 그냥 함수는 재 보니 된다 — 여기 열다섯 군데가
+                #   그렇게 돌고 있고, 그것까지 막으면 멀쩡한 코드를 뜯게 된다.
+                if not isinstance(_인자, _나무.Attribute):
+                    continue
+                if any("가" <= _자 <= "힣" for _자 in _인자.attr):
+                    _한글슬롯.append(f"{_파일.name}:{_마디.lineno} → connect({_인자.attr})")
+    assert not _한글신호, (
+        "`pyqtSignal` 이름에 한글을 썼다 — **클래스를 만드는 순간** UnicodeEncodeError 로 "
+        "터진다. 영문으로 짓는다: " + " · ".join(_한글신호))
+    assert not _한글슬롯, (
+        "한글 이름 **메서드**를 connect 에 그대로 물렸다 — UnicodeEncodeError 로 창이 "
+        "안 뜬다(그냥 함수는 된다). `lambda ㄱ: 함수(ㄱ)` 로 감싼다: " + " · ".join(_한글슬롯))
 
     # ★★ **자식을 부를 때마다 윈도우는 검은 창을 띄운다.** 구운 판을 처음 깔아 켜 보니
     #   화면 한가운데서 창이 계속 깜빡였다(실기 · 2026-09-25) — 훑기·`tailscale status`·

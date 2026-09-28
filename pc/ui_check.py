@@ -686,14 +686,17 @@ def run() -> None:
         assert notes.read(ROOT).extra.get("지은이") == "씨앗", notes.read(ROOT).extra
         assert "항목 01" in win.stats.text()
 
-        # 크기가 층위를 나타낸다: VC > 모듈 > 그 외.
+        # ★★ **크기는 이어진 수로 정한다**(오너 2026-09-28: 「연결이 많을수록 커지고
+        #   적으면 작아지게」). 앞서는 **갈래**로 정했다(VC > 모듈 > 그 외) — 그 검사는
+        #   여기 있었고, 규칙이 바뀌었으니 재는 것도 바꾼다. 갈래는 이제 크기에도
+        #   색에도 안 쓴다.
         notes.write(Note(title="카페 단골", body="아이스만. [[VC]]", kind="preference"))
-        notes.write(Note(title="제품 검색", body="물건 식별. [[VC]]", kind="skill"))
+        notes.write(Note(title="제품 검색", body="물건 식별. [[VC]] [[카페 단골]]", kind="skill"))
         win.refresh()
-        r_eb = win.graph.nodes[ROOT].r
-        r_mod = win.graph.nodes["제품 검색"].r
-        r_etc = win.graph.nodes["카페 단골"].r
-        assert r_eb > r_mod > r_etc, (r_eb, r_mod, r_etc)
+        assert win.graph.nodes[ROOT].r > win.graph.nodes["제품 검색"].r, "VC 가 제일 커야 한다"
+        # 「제품 검색」은 둘과 이어졌고 「카페 단골」은 둘과(VC·제품 검색) — 같은 수면 같은 크기
+        assert win.graph.nodes["제품 검색"].r == win.graph.nodes["카페 단골"].r, \
+            "이어진 수가 같은데 크기가 다르다 — 아직 갈래로 크기를 정한다"
         assert "모듈 01" in win.stats.text()
 
         # 3차원으로 놓인다 — 한 평면에 눌려 있으면 안 된다.
@@ -2886,6 +2889,38 @@ def run() -> None:
         assert ("100-9-9-9", "손님이 올린 글") in _행성창.graph.soft, \
             "올라온 글이 그 기계 행성에 안 매달렸다"
         assert _마디3["손님이 올린 글"].남의것, "올라온 글이 내 글과 똑같이 그려진다"
+
+        # ⑤-b4 **로고는 거리를 두고 서고, 딸린 글은 제 로고를 돈다**(오너 2026-09-28:
+        #      「로고가 두 개 거리를 두고 떨어져 있고 로고와 로고가 연결된 거야,
+        #      로고 주변에 항목들이 돌아다니고」).
+        #      ★★ 앞서는 로고만 바깥에 내보내고 **글은 내 무리에 그대로** 뒀다 —
+        #        오너가 본 그림이 그것이다. 무리마다 제 중심을 갖게 했다.
+        _글마디2 = _행성창.graph.nodes["100-64-0-7/저쪽 메모"]
+        _허브2 = _행성창.graph.nodes["100-64-0-7"]
+        assert any(_글마디2.무리중심), "행성 글이 아직 원점을 돈다 — 무리가 안 갈렸다"
+        assert tuple(_글마디2.무리중심) == tuple(_허브2.p), \
+            f"행성 글이 제 로고를 안 돈다: {_글마디2.무리중심} / {_허브2.p}"
+        assert not any(_행성창.graph.nodes["회의록"].무리중심), "내 글까지 딴 데로 보냈다"
+        # ★ **로고와 로고가 이어져 있다** — 흐린 점선이 아니라 제대로 된 선으로
+        _선2 = {tuple(sorted(ㄱ)) for ㄱ in _행성창.graph.edges}
+        assert tuple(sorted((ROOT, "100-64-0-7"))) in _선2, "로고끼리 안 이어졌다"
+        assert tuple(sorted((ROOT, "100-64-0-7"))) not in _행성창.graph.soft, \
+            "로고끼리 잇는 선을 짐작 선처럼 흐리게 그린다"
+
+        # ⑤-b5 **크기는 이어진 수로 정한다**(오너: 「연결이 많을수록 커지고 적으면
+        #      작아지게, 최대·최소는 한계를 두고」). 갈래로 색을 나누지 않는다.
+        import graph3d as _그림검
+
+        _많음 = _그림검.node_radius("가", "메모", 30)
+        _적음 = _그림검.node_radius("나", "메모", 1)
+        assert _많음 > _적음, (_많음, _적음)
+        assert _적음 >= _그림검.크기바닥, _적음
+        assert _그림검.node_radius("다", "메모", 9999) <= _그림검.크기천장, "천장이 없다"
+        # ★ **갈래가 달라도 색이 같다** — 색으로 구분하지 않는다
+        assert _그림검.마디바탕("결정").name() == _그림검.마디바탕("오류").name(), \
+            "아직 갈래로 색을 나눈다"
+        # 행성 로고만 갈린다 — 그건 갈래가 아니라 기계다
+        assert _그림검.마디바탕("행성").name() != _그림검.마디바탕("메모").name()
 
         # ⑤-c **행성 로고를 눌러도 말한다.**
         #    ★★ 로고는 글이 아니라 `notes.read` 로는 영영 못 찾는다 — 안 가르면

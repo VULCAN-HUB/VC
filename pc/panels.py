@@ -69,49 +69,50 @@ class HudPanel(QFrame):
 
 
 class Legend(QWidget):
-    """종류별 색 범례. 색이 정보인데 해독표가 없으면 그냥 알록달록한 점일 뿐이다."""
+    """갈래 줄. **색 해독표가 아니다** — 눌러서 그 갈래를 모아 보는 자리다.
 
-    # **차례는 한 곳에서만 정한다.** 여기 따로 적어 두었더니 콤보와 순서가 어긋났다
-    # (콤보는 …선호·장소·물건…, 표시줄은 …장소·물건·선호…). 사소하지만 같은 것을
-    # 두 군데 적으면 언젠가 갈린다.
+    ★★ 앞서는 갈래마다 색 점을 찍은 **해독표**였다. 그런데 오너가 「색상으로
+       구분하지 말고, 그냥 항목들만 두고, 눌러서 목록으로 볼 수 있게」라고 했다
+       (2026-09-28). 갈래가 열둘이라 화면이 알록달록했고, 색을 외워 읽는 것보다
+       **눌러서 모아 보는 것**이 실제로 쓰는 길이다.
+    ★ 색 점을 뺐으니 마디 색과 여기가 어긋날 일도 없어졌다 — 마디는 이제
+      이어진 수로 크기만 다르고 색은 한 가지다(`graph3d.마디바탕`).
+    """
+
+    # ★★ **신호 이름은 영문이어야 한다.** `pyqtSignal` 은 Qt 메타오브젝트에 이름을
+    #   등록하는데 그쪽이 ASCII 만 받는다 — 한글로 적었더니 **클래스를 만드는
+    #   순간** `UnicodeEncodeError` 로 터졌다(2026-09-28). 「한글이 남의 도구를
+    #   죽인다」의 또 한 자리다. `eb` 의 검사가 이제 이것을 막는다.
+    kind_clicked = pyqtSignal(str)
+
+    # **차례는 한 곳에서만 정한다.** 여기 따로 적어 두었더니 콤보와 순서가 어긋났다.
     ORDER = tuple(theme.KIND_LABEL)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setFixedHeight(14)
-        # 기본 sizeHint는 0에 가까워 옆에 stretch를 두면 폭이 안 잡히고 아무것도 안 그려진다.
-        # ★★ **폭을 숫자로 박으면 갈래가 늘 때 잘린다.** 430px 은 갈래가 여섯이던 때
-        #   값이라, 열둘이 된 뒤 화면에서 **`일지`·`메모` 가 통째로 안 보였다**
-        #   (창을 찍어 보고 알았다 · 2026-09-21). 이제 **재서** 정한다.
-        self.setMinimumWidth(self._잰폭())
+        줄 = QHBoxLayout(self)
+        줄.setContentsMargins(0, 0, 0, 0)
+        줄.setSpacing(4)
+        self._단추 = {}
+        for 갈래 in self.ORDER:
+            ㄷ = QPushButton(theme.KIND_LABEL[갈래])
+            ㄷ.setObjectName("quiet")
+            ㄷ.setCursor(Qt.PointingHandCursor)
+            ㄷ.setToolTip(f"「{theme.KIND_LABEL[갈래]}」 글을 모아 본다")
+            ㄷ.setFlat(True)
+            ㄷ.setStyleSheet(theme.small(theme.T.DIM, 0.75, 8))
+            ㄷ.clicked.connect(lambda _=False, ㄱ=갈래: self.kind_clicked.emit(ㄱ))
+            줄.addWidget(ㄷ)
+            self._단추[갈래] = ㄷ
+        줄.addStretch(1)
 
-    def _잰폭(self) -> int:
-        """지금 갈래를 다 그리는 데 드는 폭. 글꼴이 바뀌어도 따라간다."""
-        font = QFont()
-        font.setPointSize(7)
-        재개 = QFontMetrics(font)
-        return int(sum(14 + 재개.width(theme.KIND_LABEL[k]) + 10 for k in self.ORDER)) + 4
-
-    def sizeHint(self):
-        from PyQt5.QtCore import QSize
-        return QSize(self._잰폭(), 14)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        font = QFont()
-        font.setPointSize(7)
-        painter.setFont(font)
-
-        x = 0.0
-        for kind in self.ORDER:
-            painter.setPen(QPen(Qt.NoPen))
-            painter.setBrush(QBrush(theme.rgba(theme.kind_color(kind), 200)))
-            painter.drawEllipse(QPointF(x + 3, self.height() / 2), 3.0, 3.0)
-            painter.setPen(QPen(theme.rgba(theme.T.DIM, 110)))
-            text = theme.KIND_LABEL[kind]
-            painter.drawText(QPointF(x + 10, self.height() / 2 + 3), text)
-            x += 14 + painter.fontMetrics().width(text) + 10
+    def 세어보이기(self, 셈: dict) -> None:
+        """갈래마다 몇 장인지 뒤에 붙인다. **없는 갈래는 감춘다** — 안 쓰는 갈래가
+        줄을 차지하면 정작 쓰는 것이 밀려난다."""
+        for 갈래, ㄷ in self._단추.items():
+            수 = int(셈.get(갈래) or 0)
+            ㄷ.setVisible(수 > 0)
+            ㄷ.setText(f"{theme.KIND_LABEL[갈래]} {수}")
 
 
 class ActivityFeed(QWidget):
@@ -1596,9 +1597,19 @@ def _self_check() -> None:
     import wiki as _위키범례
 
     assert set(Legend.ORDER) == set(_위키범례.갈래들), "범례가 갈래 표와 다르다"
-    필요 = legend._잰폭()
-    assert legend.minimumWidth() >= 필요, f"범례가 잘린다: {legend.minimumWidth()} < {필요}"
-    assert legend.sizeHint().width() >= 필요
+    # ★★ **갈래가 늘어도 다 보여야 한다.** 앞서는 폭을 숫자로 박아 둬서 갈래가
+    #   열둘이 된 뒤 뒤쪽 둘이 통째로 안 보였다. 이제 단추를 줄에 얹으므로 Qt 가
+    #   폭을 잡는다 — **모든 갈래가 단추로 있는지**를 대신 잰다.
+    assert set(legend._단추) == set(Legend.ORDER), sorted(legend._단추)
+    # 눌러서 모아 보는 자리다 — 눌리면 그 갈래를 알린다
+    받은: list = []
+    legend.kind_clicked.connect(받은.append)
+    legend._단추["결정"].click()
+    assert 받은 == ["결정"], 받은
+    # ★ 한 장도 없는 갈래는 감춘다 — 안 쓰는 갈래가 줄을 차지하면 쓰는 것이 밀린다
+    legend.세어보이기({"결정": 3})
+    assert "3" in legend._단추["결정"].text(), legend._단추["결정"].text()
+    assert not legend._단추["오류"].isVisibleTo(legend), "없는 갈래가 그대로 있다"
 
     import tempfile
     from pathlib import Path as _Path

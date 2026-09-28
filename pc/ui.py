@@ -471,6 +471,11 @@ class MainWindow(QWidget):
         legend_row = QHBoxLayout(범례칸)
         legend_row.setContentsMargins(0, 0, 0, 0)
         self.legend = Legend()
+        # ★ 눌러서 **그 갈래를 모아 보는** 창을 연다(오너 2026-09-28).
+        # ★★ **람다로 감싼다.** `connect` 에 한글 이름 메서드를 그대로 주면 PyQt 가
+        #   그 이름을 Qt 슬롯으로 등록하다 `UnicodeEncodeError` 로 **창이 안 뜬다.**
+        #   `singleShot` 에서 네 번 물린 그 덫이다 — 여기서 다섯 번째로 물렸다.
+        self.legend.kind_clicked.connect(lambda ㄱ: self.갈래목록보기(ㄱ))
         legend_row.addWidget(self.legend)
         legend_row.addStretch(1)
 
@@ -1312,7 +1317,7 @@ class MainWindow(QWidget):
         self._행성딸린것 = 조각["딸린것"]
         self.graph.load(그림, 갈래, 흐리게,
                         보일=조각["보일"], 남의것=조각["남의것"],
-                        바깥고리=조각["허브들"])
+                        바깥고리=조각["허브들"], 무리=조각["딸린것"])
         self.load_proposals()
 
 
@@ -1323,6 +1328,8 @@ class MainWindow(QWidget):
             f"항목 {self._total_notes:02d}   ·   모듈 {modules:02d}   ·   "
             f"제안 {len(self.proposal_cards):02d}"
         )
+        self.legend.세어보이기({ㄱ: ㄴ for ㄱ, ㄴ in self.notes.conn.execute(
+            "SELECT kind, count(*) FROM notes GROUP BY kind")})
         self.years.show_years(self.notes.by_year())
         self._최근채우기()
         self.앞머리그리기()      # 창고가 무엇을 적어 왔는지도 같이 새로 센다
@@ -2936,6 +2943,41 @@ class MainWindow(QWidget):
         picked = self.notes.working_set(GRAPH_LIMIT, keep=keep)
         self.graph.load(self.notes.subgraph(picked), self.notes.kinds_of(picked),
                         self.notes.kin(picked))
+
+    def 갈래목록보기(self, 갈래: str) -> None:
+        """그 갈래 글을 **창으로 모아 보인다**(오너 2026-09-28).
+
+        ★★ 앞서는 아래 줄이 **색 해독표**였다 — 색을 외워 마디를 읽으라는 것이다.
+           갈래가 열둘이라 외울 수도 없고 화면만 알록달록했다. 눌러서 **목록으로
+           보는 것**이 실제로 쓰는 길이다.
+        ★ 목록에서 누르면 **그 글을 연다** — 보여만 주고 끝나면 한 걸음이 는다.
+        """
+        from PyQt5.QtWidgets import QDialog, QListWidget, QVBoxLayout
+
+        제목들 = [r["title"] for r in self.notes.conn.execute(
+            "SELECT DISTINCT title FROM notes WHERE kind = ? ORDER BY mtime DESC",
+            (갈래,))]
+        창 = QDialog(self)
+        창.setWindowTitle(f"{갈래} — {len(제목들)}장")
+        줄 = QVBoxLayout(창)
+        머리 = QLabel(f"「{갈래}」 {len(제목들)}장 · 누르면 연다"
+                    if 제목들 else f"「{갈래}」는 아직 한 장도 없어")
+        머리.setObjectName("ask_label")
+        줄.addWidget(머리)
+        목 = QListWidget()
+        목.setObjectName("pick")
+        for ㄱ in 제목들:
+            목.addItem(ㄱ)
+
+        def 열기(것) -> None:
+            창.accept()
+            self.show_note(것.text())
+
+        목.itemClicked.connect(열기)
+        줄.addWidget(목)
+        창.resize(420, 480)
+        self._갈래창 = 창          # 붙들어 둔다 — 안 붙들면 곧바로 거둬 간다
+        창.show()
 
     def 행성보이기(self, 허브: str, focus: bool = True) -> None:
         """**행성 로고를 누른 것.** 어느 기계이고 무엇이 와 있는지 말한다.
