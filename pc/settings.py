@@ -802,6 +802,109 @@ def open_dialog(win, notes: Notes):
     창.사본주소.setPlaceholderText("메인 주소 — 100.x.x.x:8765 (테일스케일 주소. http:// 는 알아서 붙인다)")
     줄(사본틀, "메인 주소 (손님일 때)", 창.사본주소)
 
+    # ★★ **이 VC 의 열쇠를 보여 주고, 사람이 정하게 한다**(오너 2026-09-28).
+    #   여태 열쇠(`pair_token`)는 켤 때 저절로 32바이트로 만들어졌고 **볼 길이
+    #   없었다** — 폰은 QR 로 넘어가지만 **손님 PC 만 사람이 파일을 뒤져 옮겨야
+    #   했다.** 「열쇠를 프로그램에서 찾게 하거나, 내가 정한 것이 열쇠가 되게」.
+    내열쇠줄 = QHBoxLayout()
+    창.내열쇠 = QLineEdit()
+    창.내열쇠.setObjectName("field")
+    창.내열쇠.setEchoMode(QLineEdit.Password)
+    창.내열쇠.setPlaceholderText("이 VC 의 열쇠 — 손님 PC 에 이 값을 적는다")
+
+    def _내열쇠읽기() -> str:
+        try:
+            return str(paths.load_config().get("pair_token") or "")
+        except Exception:
+            return ""
+
+    창.내열쇠.setText(_내열쇠읽기())
+    보임단추 = QPushButton("보기")
+    보임단추.setObjectName("quiet")
+    보임단추.setCheckable(True)
+    보임단추.toggled.connect(
+        lambda 켬: 창.내열쇠.setEchoMode(QLineEdit.Normal if 켬 else QLineEdit.Password))
+    창.내열쇠보임 = 보임단추
+    베끼기 = QPushButton("복사")
+    베끼기.setObjectName("quiet")
+    내열쇠줄.addWidget(창.내열쇠, 1)
+    내열쇠줄.addWidget(보임단추)
+    내열쇠줄.addWidget(베끼기)
+    말 = QLabel("이 VC 의 열쇠 (손님 PC 의 「메인 열쇠」에 이 값을 적는다)")
+    말.setObjectName("ask_label")
+    사본틀.addWidget(말)
+    사본틀.addLayout(내열쇠줄)
+    창.내열쇠말 = QLabel("")
+    창.내열쇠말.setObjectName("note")
+    창.내열쇠말.setWordWrap(True)
+    사본틀.addWidget(창.내열쇠말)
+
+    def _베끼기() -> None:
+        from PyQt5.QtWidgets import QApplication as _앱
+
+        판 = _앱.clipboard()
+        if 판 is None:
+            창.내열쇠말.setText("이 기계에서는 복사판을 못 쓴다 — 「보기」로 보고 옮겨라.")
+            return
+        판.setText(창.내열쇠.text())
+        창.내열쇠말.setText("복사했다. 손님 PC 의 「메인 열쇠」에 붙여 넣어라.")
+
+    베끼기.clicked.connect(_베끼기)
+
+    # 열쇠 길이의 바닥. **문은 테일넷(과 켜 두면 같은 공유기)에 열려 있다** —
+    # 네 자리 숫자는 몇 초면 다 두들긴다. 서버가 틀린 횟수를 세어 늦추긴 하지만,
+    # 그건 브레이크지 자물쇠가 아니다.
+    열쇠바닥 = 8
+
+    def _내열쇠저장() -> None:
+        값 = 창.내열쇠.text().strip()
+        옛것 = _내열쇠읽기()
+        if 값 == 옛것:
+            창.내열쇠말.setText("그대로다 — 바뀐 게 없다.")
+            return
+        if not 값:
+            창.내열쇠말.setText("비울 수는 없다 — 열쇠가 없으면 문이 아예 안 잠긴다.")
+            창.내열쇠.setText(옛것)
+            return
+        # ★ HTTP 머리말은 latin-1 이라 한글이 섞이면 붙을 때 통째로 깨진다
+        if not 값.isascii():
+            창.내열쇠말.setText("영문·숫자만 된다 — 한글이 섞이면 붙는 길에서 깨진다.")
+            창.내열쇠.setText(옛것)
+            return
+        if len(값) < 열쇠바닥:
+            창.내열쇠말.setText(
+                f"{열쇠바닥}자 이상으로 해라 — 이 문은 테일스케일에 열려 있어서 "
+                f"짧은 숫자는 두들겨 맞힐 수 있다.")
+            창.내열쇠.setText(옛것)
+            return
+        cfg = paths.load_config()
+        paths.save_config({**cfg, "pair_token": 값})
+        try:
+            import server as _서버
+
+            if _서버.RUNNING is not None:
+                _서버.RUNNING.cfg["pair_token"] = 값
+        except Exception:
+            pass
+        # ★★ **바꾸면 옛 열쇠로 붙던 것들이 다 떨어진다.** 조용히 두면 폰이 안 붙는
+        #   까닭을 한참 뒤진다 — 바꾼 그 자리에서 말한다.
+        창.내열쇠말.setText("바꿨다. **폰과 손님 PC 를 다시 붙여야 한다** — "
+                        "폰은 QR 을 다시 찍고, 손님 PC 에는 이 값을 다시 적어라.")
+
+    창.내열쇠저장 = _내열쇠저장
+    열쇠단추줄 = QHBoxLayout()
+    창.내열쇠단추 = QPushButton("이 열쇠로 하기")
+    창.내열쇠단추.clicked.connect(_내열쇠저장)
+    새열쇠 = QPushButton("아무거나 만들기")
+    새열쇠.setObjectName("quiet")
+    새열쇠.setToolTip("사람이 안 외워도 되는 긴 열쇠. 「복사」로 옮긴다")
+    새열쇠.clicked.connect(
+        lambda: 창.내열쇠.setText(__import__("secrets").token_urlsafe(24)))
+    열쇠단추줄.addWidget(창.내열쇠단추)
+    열쇠단추줄.addWidget(새열쇠)
+    열쇠단추줄.addStretch(1)
+    사본틀.addLayout(열쇠단추줄)
+
     창.사본열쇠 = QLineEdit()
     창.사본열쇠.setObjectName("field")
     창.사본열쇠.setEchoMode(QLineEdit.Password)
@@ -1302,6 +1405,60 @@ def _self_check() -> None:
             사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("메인"))
             사본창.사본저장()
             assert (paths.load_config()["사본"])["역할"] == "메인"
+
+            # ★★ **메인 주소에 `http://` 를 안 적어도 붙는다**(오너 2026-09-28).
+            #   테일스케일이 보여 주는 것은 `100.x.x.x` 뿐이다 — 포트만 붙여 적는 것이
+            #   자연스럽다. 고쳐 준 값을 **칸에 되돌려 보여** 무엇이 달라졌는지 알린다.
+            사본창.사본역할.setCurrentIndex(사본창.사본역할.findData("손님"))
+            사본창.사본주소.setText("100.1.2.3:8765")
+            사본창.사본저장()
+            assert (paths.load_config()["사본"])["main_url"] == "http://100.1.2.3:8765", \
+                paths.load_config()["사본"]
+            assert 사본창.사본주소.text() == "http://100.1.2.3:8765", 사본창.사본주소.text()
+
+            # ★★ **이 VC 의 열쇠를 보여 주고 사람이 정한다**(오너 2026-09-28:
+            #   「열쇠를 프로그램에서 찾게 하거나, 내가 정한 것이 열쇠가 되게」).
+            #   여태 폰은 QR 로 넘어가는데 **손님 PC 만 사람이 파일을 뒤져야 했다.**
+            paths.save_config({**paths.load_config(), "pair_token": "원래-열쇠-1234"})
+            열쇠창 = open_dialog(win, n)
+            assert 열쇠창.내열쇠.text() == "원래-열쇠-1234", "지금 열쇠를 안 보여 준다"
+            # 평소엔 가려 두고, 「보기」를 눌러야 드러난다
+            from PyQt5.QtWidgets import QLineEdit as _칸
+
+            assert 열쇠창.내열쇠.echoMode() == _칸.Password, "열쇠가 그냥 드러나 있다"
+            열쇠창.내열쇠보임.setChecked(True)
+            assert 열쇠창.내열쇠.echoMode() == _칸.Normal, "「보기」를 눌러도 안 보인다"
+            # ★ 사람이 정한 값이 **그대로 열쇠가 된다**
+            열쇠창.내열쇠.setText("my-own-key-2026")
+            열쇠창.내열쇠저장()
+            assert paths.load_config()["pair_token"] == "my-own-key-2026", paths.load_config()
+            # ★ 바꾸면 **다시 붙여야 한다고 말한다** — 조용히 두면 폰이 왜 안 붙는지 한참 뒤진다
+            assert "다시 붙여야" in 열쇠창.내열쇠말.text(), 열쇠창.내열쇠말.text()
+            # ★★ **짧은 숫자는 안 받는다.** 이 문은 테일스케일에 열려 있다 —
+            #   네 자리는 몇 초면 다 두들긴다(서버의 브레이크는 자물쇠가 아니다).
+            열쇠창.내열쇠.setText("1234")
+            열쇠창.내열쇠저장()
+            assert paths.load_config()["pair_token"] == "my-own-key-2026", "짧은 열쇠를 받았다"
+            assert "8자" in 열쇠창.내열쇠말.text(), 열쇠창.내열쇠말.text()
+            assert 열쇠창.내열쇠.text() == "my-own-key-2026", "안 받았으면서 칸은 바꿔 놨다"
+            # ★ **오너가 말한 「번호」도 된다** — 길기만 하면 숫자여도 받는다
+            열쇠창.내열쇠.setText("20260928")
+            열쇠창.내열쇠저장()
+            assert paths.load_config()["pair_token"] == "20260928", paths.load_config()
+            열쇠창.내열쇠.setText("my-own-key-2026")
+            열쇠창.내열쇠저장()
+            # ★ 한글은 안 받는다 — HTTP 머리말은 latin-1 이라 붙는 길에서 깨진다.
+            #   ★★ **길이도 넉넉히 준다.** 처음엔 「한글열쇠입니다」(7자)로 쟀는데,
+            #     그건 길이에서 먼저 걸려서 **한글 막는 줄을 아예 안 밟았다** —
+            #     그 줄을 지워도 검사가 통과했다. 되돌려 보고 알았다.
+            열쇠창.내열쇠.setText("한글로된열쇠입니다열두자")
+            열쇠창.내열쇠저장()
+            assert paths.load_config()["pair_token"] == "my-own-key-2026", "한글 열쇠를 받았다"
+            # ★ 비울 수 없다 — 열쇠가 없으면 문이 아예 안 잠긴다
+            열쇠창.내열쇠.setText("")
+            열쇠창.내열쇠저장()
+            assert paths.load_config()["pair_token"] == "my-own-key-2026", "열쇠를 비워 버렸다"
+            열쇠창.deleteLater()
             사본창.deleteLater()
 
             # ★ 첫 연결(결정 18·21): QR 을 띄우면 **붙을 주소와 남은 시간**을 같이 보인다 —

@@ -222,14 +222,53 @@ class Handler(BaseHTTPRequestHandler):
         return ("같은 공유기에서 온 요청은 기본으로 막는다 — "
                 "설정 → 외부 연결 에서 「같은 공유기도 열기」를 켜거나 테일스케일로 붙어라")
 
+    # --- 틀린 열쇠 세기(오너 2026-09-28: 사람이 정한 열쇠를 쓰게 되면서) ----------
+    #
+    # ★★ **열쇠를 사람이 정하면 짧아진다.** 저절로 만든 열쇠는 32바이트라 두들겨
+    #   맞힐 수가 없지만, 사람이 적는 것은 짧고 뻔하다. 세는 데가 하나도 없으면
+    #   테일넷 안의 누구든(또는 「같은 공유기」를 켜 두면 카페 와이파이의 누구든)
+    #   **초당 수백 번** 두들길 수 있다. 그래서 **틀리면 센다.**
+    # ★ 막는 것은 **그 주소만**이다. 통째로 잠그면 한 대가 틀리는 것으로 나머지
+    #   기계가 다 막힌다 — 그게 더 나쁜 고장이다.
+    틀린한도 = 8          # 이만큼 틀리면 쉬게 한다
+    틀린쉼초 = 60.0       # 그동안은 맞는 열쇠도 안 받는다
+
+    def _틀린것들(self) -> dict:
+        것 = getattr(self.server, "_틀린열쇠", None)
+        if 것 is None:
+            것 = self.server._틀린열쇠 = {}
+        return 것
+
+    def 너무틀렸나(self) -> float:
+        """이 주소가 쉬어야 하면 **남은 초**, 아니면 0."""
+        수, 언제 = self._틀린것들().get(self._client_ip(), (0, 0.0))
+        if 수 < self.틀린한도:
+            return 0.0
+        남 = self.틀린쉼초 - (time.time() - 언제)
+        if 남 <= 0:
+            self._틀린것들().pop(self._client_ip(), None)
+            return 0.0
+        return 남
+
+    def _열쇠틀렸다(self) -> None:
+        곳 = self._client_ip()
+        수, _ = self._틀린것들().get(곳, (0, 0.0))
+        self._틀린것들()[곳] = (수 + 1, time.time())
+
+    def _열쇠맞았다(self) -> None:
+        self._틀린것들().pop(self._client_ip(), None)
+
     def _authorized(self, path: str = "") -> bool:
         """폰·내 PC는 페어링 토큰으로, 외부 PC는 폰이 승인한 원격 토큰으로 들어온다.
 
         원격 토큰은 허용된 경로에서만 통한다 — 검사는 remote.RemoteGate가 한다.
         """
+        if self.너무틀렸나():
+            return False
         token = self._bearer()
         if token and self._같은열쇠(token, self.server.cfg["pair_token"]):
             self.session = None
+            self._열쇠맞았다()
             return True
 
         # ★★ **그물 열쇠는 신호 문 하나만 연다.** 기기끼리 「바뀌었다」를 주고받으려면
@@ -245,6 +284,10 @@ class Handler(BaseHTTPRequestHandler):
         token = token or (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
         self.session = self.server.gate.check(token, path or urlparse(self.path).path,
                                               self._client_ip())
+        if self.session is None:
+            self._열쇠틀렸다()
+        else:
+            self._열쇠맞았다()
         return self.session is not None
 
     def _client_ip(self) -> str:
@@ -2533,6 +2576,25 @@ def _self_check() -> None:
     assert all(not any(x.startswith(("_", ".")) for x in f["path"].split("/")) for f in _폴), "기계 자리가 폴더로 나온다"
     assert sum(f["notes"] for f in _폴) >= 1
     assert call("GET", "/eb/v1/folders", token="wrong-token")[0] == 401
+
+    # ★★ **틀린 열쇠를 센다**(오너 2026-09-28: 열쇠를 사람이 정하게 되면서).
+    #   저절로 만든 32바이트 열쇠는 두들겨 맞힐 수가 없지만 **사람이 적는 것은
+    #   짧고 뻔하다.** 세는 데가 하나도 없으면 테일넷 안의 누구든 초당 수백 번
+    #   두들길 수 있다. 브레이크는 자물쇠가 아니지만, 없으면 짧은 열쇠는 못 쓴다.
+    for _ in range(Handler.틀린한도 + 2):
+        call("GET", "/eb/v1/folders", token="wrong-token")
+    # ★ 여기서부터는 **맞는 열쇠도 잠깐 안 받는다** — 두들기는 쪽과 가릴 길이 없다
+    assert call("GET", "/eb/v1/folders")[0] == 401, "많이 틀렸는데도 그냥 열어 준다"
+    # ★ 막는 것은 **그 주소만**이다. 통째로 잠그면 한 대가 틀리는 것으로 나머지가 다 막힌다
+    _센것 = getattr(server, "_틀린열쇠", {})
+    assert len(_센것) == 1, f"주소별로 안 세고 통째로 센다: {list(_센것)}"
+    _센것.clear()
+    assert call("GET", "/eb/v1/folders")[0] == 200, "쉬는 시간이 지나도 안 열어 준다"
+    # ★ 맞는 열쇠로 들어오면 **센 것을 지운다** — 평소 쓰다 한두 번 틀린 것이 쌓이면 안 된다
+    for _ in range(Handler.틀린한도 - 1):
+        call("GET", "/eb/v1/folders", token="wrong-token")
+    assert call("GET", "/eb/v1/folders")[0] == 200
+    assert not getattr(server, "_틀린열쇠", {}), "맞았는데 틀린 셈이 남아 있다"
 
     # --- 손님 모드로 메인과 주고받기(결정 30) ---
     # 메인 자리에서는 아무 일도 안 한다 — 제 창고를 제가 베끼면 안 된다
