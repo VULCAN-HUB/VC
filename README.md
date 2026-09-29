@@ -38,3 +38,7 @@
 ## 제작
 
 - **Unknown** · 2026 · YouTube [@unknown8563](https://www.youtube.com/@unknown8563)
+
+## 라이선스
+
+GPL-3.0 — [LICENSE](LICENSE) 참고. 이 프로그램은 PyQt5(GPL)를 씁니다.
